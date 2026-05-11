@@ -170,6 +170,108 @@ Decision requested from Claude:
 
 ---
 
+## DEMO-READY ROUTE (2026-05-11 user-locked)
+
+用户决策：先把 Demo-Ready 路线跑通（gateway 真转发到方舟 + 计费落库 + admin 真查 DB + 前端 fetch 真实数据 + 最小种子），**再** push 到 GitHub。T-005a/T-005b/T-005c 完整版、T-009 限流、T-100 L2 套件**全部推后**到 Phase 1 完整验收阶段。
+
+Demo-Ready 任务顺序：**T-006-nit → T-006a → T-007 → T-008 → T-006b → T-006c → T-006d**。本轮先正式拆 T-006-nit 与 T-006a 两条；T-007 等 T-006a approve 后再拆，避免一次性塞过多任务造成并发会话状态打架（参考 2026-05-11 17:00 异常状态根因）。
+
+---
+
+## T-006-nit `cmd/migrate force` sentinel 修复 [phase:1] [owner:codex] [status:review]
+
+**目标**: 修 R-003 M-9。`runForce` 当前用 `-version -2` 作为 sentinel 判断"未传"，用户合法传 `-2` 会被误识别。
+
+**接受标准**:
+- [ ] 改用 `flag.Visit` 或显式 `valueSet bool` 检测；保留"force 必须显式传 -version 否则拒绝"语义。
+- [ ] 增 unit test：`force -version -2 -database-url ...` 应当走到正常 force 路径（执行 `m.Force(-2)`，stderr 输出可来自 golang-migrate；不应在 CLI 层报 "force requires -version"）。
+- [ ] `force` 不带 `-version` 仍然报错 + exit 2。
+
+**不在范围**: 其他 CLI 改动。
+
+**预计**: 15-30 分钟。
+
+**Codex propose 前置**: 不需要，按上述标准直接做。
+
+**Result**: `88fc18d` — replaced the `-version -2` sentinel with `flag.Visit` detection and added a unit test proving explicit `force -version -2` calls `Force(-2)`. Self-test: `go test ./cmd/migrate`.
+
+---
+
+## T-006a 最小虚拟 Key Gateway 鉴权（Demo-Ready 版） [phase:1] [owner:codex] [status:todo]
+
+**目标**: 让 gateway 数据面有"最低限度的身份概念" —— 数据库里查到 active 的虚拟 Key 才让请求继续。**这是 Demo-Ready 版**，不做完整 RBAC、不做模型白名单、不做配额、不做 timing-attack 防护以上的复杂度。完整版留 T-005c。
+
+**接受标准**:
+- [ ] gateway `/v1/chat/completions` 与 `/v1/models` 强制带 `Authorization: Bearer <virtual_key>`；缺失或非法返回 401 统一 envelope（不区分"key 不存在"和"key 存在但 disabled"）。
+- [ ] Key 校验流程：取 `Authorization` → 解析 `Bearer xxxxxxxx_<secret>` → 通过 `key_prefix` 查 `api_keys` → 比较 `sha256(secret)` 是否等于 `key_hash`，状态 == 'active'。
+- [ ] 一次"创建虚拟 Key"的内部辅助路径：`cmd/seed` 或 `cmd/admin` 加一个 dev-only 命令/HTTP endpoint（**不**接入 RBAC，admin token 暂用 env var `OMNITOKEN_ADMIN_BOOTSTRAP_TOKEN` 简单匹配），生成 Key，返回明文一次。Demo-Ready 阶段允许这种简化。
+- [ ] Subject 写入 `r.Context()`：`Subject{UserID uuid.UUID, OrgID uuid.UUID, APIKeyID uuid.UUID}`，供 T-007/T-008 消费。**不**含 Role 字段（留 T-005a）。
+- [ ] 单元测试覆盖率 `internal/auth` ≥ 85%；含 invalid token / disabled key / valid key 三条 case。
+- [ ] **不**接入 timing-equal 字符串比较（标准库 `subtle.ConstantTimeCompare` 留 T-005c）。Demo-Ready 阶段接受 timing attack 风险，需在代码注释明确标注。
+- [ ] **不**接入 Redis cache、in-process LRU（留 T-005c）。每次请求查 DB。Demo-Ready 阶段不在乎 1ms 级延迟。
+
+**不在范围**:
+- 完整 RBAC（T-005a/b）。
+- 模型白名单检查（T-005c）。
+- 配额预扣 / 限流（T-009）。
+- 实际转发到上游（T-007）。
+- timing-attack 防护、缓存（T-005c 完整版）。
+
+**Codex propose 前置 (必须)**:
+在本条目下追加 `## PROPOSAL` 区块，覆盖：
+1. Virtual Key 字符串格式 —— `key_prefix` 长度与字符集、随机段长度与字符集、明文展示形式（如 `omt_<prefix>_<secret>`）。注意 Phase 0 已落 `api_keys.key_prefix varchar(16)`、`key_hash bytea`，propose 要兼容。
+2. Key 创建路径选哪种：cmd/seed 一次性命令 vs cmd/admin 加 dev HTTP endpoint。给出取舍。
+3. `internal/auth` 包目录结构与暴露的 API（接口签名）。
+4. 401 envelope 的统一格式（与 gateway `/v1/chat/completions` 现有占位 envelope 对齐：`{"error":{"message":..., "type":..., "code":...}}`）。
+5. Admin bootstrap token 的注入路径：`OMNITOKEN_ADMIN_BOOTSTRAP_TOKEN` env var 是否足够、是否需要在 config 包接入。
+
+**依赖**: T-003 approved（已通过）。
+
+**Demo-Ready 衔接**: T-007 接 T-006a 后能拿到 Subject 进入实际转发；后续 T-005a/b/c 完整版会把"模型白名单 / RBAC / cache / timing-equal"加上去，T-006a 不需要返工。
+
+## PROPOSAL
+
+1. Virtual Key 字符串格式
+
+采用 `omt_<prefix>_<secret>`，其中 `prefix` 为 12 位 lowercase base32 字符（`a-z2-7`），写入现有 `api_keys.key_prefix varchar(16)`；`secret` 为 32 bytes CSPRNG 后的 base64url no-padding 字符串（约 43 字符）。`Authorization` 只接受 `Bearer omt_<prefix>_<secret>`，解析失败、prefix 查不到、key disabled、hash 不匹配都返回同一个 401。
+
+存储策略：只存 `key_prefix` 与 `sha256(secret)` 的 `key_hash`，明文 Key 只在创建时返回一次。Demo-Ready 简化版暂用普通 byte/string 比较，不做 `subtle.ConstantTimeCompare`，实现处加注释明确标注"Demo-Ready 简化版；timing-equal 留 T-005c"。
+
+2. Key 创建路径
+
+选择 `cmd/admin` 加 dev-only HTTP endpoint，而不是 `cmd/seed` 一次性命令。路径建议 `POST /api/admin/dev/virtual-keys`，仅当 `OMNITOKEN_ADMIN_BOOTSTRAP_TOKEN` 非空时注册；请求必须带 `Authorization: Bearer <bootstrap token>`。这样 Demo 调试时无需重跑 seed，就能为现有 demo users 创建 key，也能让前端/脚本拿到一次性明文。
+
+接口只覆盖 Demo-Ready 最小字段：`organization_id`、`user_id`、可选 `project_id`、可选 `expires_at`；不接 RBAC、不接模型白名单、不接额度。写入 `api_keys.status='active'`、`key_prefix`、`key_hash`、`organization_id`、`project_id`。是否存在 user/project 的校验只做数据库外键级失败处理，复杂业务校验留后续。
+
+3. `internal/auth` 包目录与 API
+
+建议新增：
+
+- `internal/auth/subject.go`: `Subject{UserID uuid.UUID, OrgID uuid.UUID, APIKeyID uuid.UUID}`、`WithSubject(ctx, Subject)`、`SubjectFromContext(ctx) (Subject, bool)`。
+- `internal/auth/virtual_key.go`: `ParseVirtualKey(raw string) (prefix string, secret string, ok bool)`、`HashSecret(secret string) []byte`、`AuthenticateVirtualKey(ctx context.Context, store VirtualKeyStore, raw string) (Subject, bool, error)`。
+- `internal/auth/postgres_store.go`: Demo-Ready 简化版 `database/sql` 查询实现，接口为 `LookupVirtualKey(ctx, prefix string) (VirtualKeyRecord, error)`。
+- `internal/auth/middleware.go`: `RequireVirtualKey(store VirtualKeyStore, unauthorized func(http.ResponseWriter)) func(http.Handler) http.Handler`。
+
+UUID 类型使用 `github.com/google/uuid`（BSD-3-Clause，permissive，新增时同步 `THIRD_PARTY_LICENSES.md`）。查询层暂不用 sqlc/pgx，继续用标准库 `database/sql` + `github.com/lib/pq`，避免把完整数据访问层提前带进来。
+
+4. 401 envelope
+
+统一返回 HTTP 401：
+
+```json
+{"error":{"message":"unauthorized","type":"authentication_error","code":"invalid_api_key"}}
+```
+
+缺失 header、非 Bearer、格式错误、不存在、disabled、hash mismatch 全部相同 envelope，不暴露探测信息。结构沿用 gateway 现有 `/v1/chat/completions` 占位 `errorEnvelope/errorDetail`，T-006a 可以先在 gateway 内复用或迁出小 helper；不改 502 upstream 占位语义，T-007 再替换转发逻辑。
+
+5. `OMNITOKEN_ADMIN_BOOTSTRAP_TOKEN` 注入路径
+
+在 `internal/config.AdminConfig` 增加 `BootstrapToken string`，由 `OMNITOKEN_ADMIN_BOOTSTRAP_TOKEN` 注入；`.env.example` 只放占位值，不放真实 token。`cmd/admin` 启动时如果 token 为空，不注册 dev endpoint，并记录一条不含 token 的结构化日志；如果非空，注册 dev endpoint 并用常规字符串比较验证 `Authorization: Bearer <token>`。这是 Demo-Ready 简化版，完整 admin token/RBAC 留 T-005b。
+
+边界确认：T-006a 不做完整 RBAC、不做模型白名单、不做配额预扣/限流、不做 timing-equal、不做 Redis/in-process cache、不做真实上游转发。代码注释会明确标注"Demo-Ready 简化版"及后续归属任务。
+
+---
+
 ## T-005a RBAC 权限模型与策略点 [phase:1] [owner:codex] [status:todo]
 
 **目标**: 把 T-003 写入的 `roles` / `role_assignments` 升级为运行时可用的权限模型；不接入具体 API（留 T-005b/c）。
