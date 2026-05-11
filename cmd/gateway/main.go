@@ -13,6 +13,7 @@ import (
 	"github.com/omnitoken/omnitoken/internal/auth"
 	"github.com/omnitoken/omnitoken/internal/config"
 	"github.com/omnitoken/omnitoken/internal/httpx"
+	"github.com/omnitoken/omnitoken/internal/proxy"
 )
 
 type healthResponse struct {
@@ -68,7 +69,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              cfg.Gateway.Addr,
-		Handler:           newMux(logger, auth.NewPostgresStore(db)),
+		Handler:           newMux(logger, auth.NewPostgresStore(db), newArkChatProxy(cfg, logger)),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -79,13 +80,22 @@ func main() {
 	}
 }
 
-func newMux(logger *slog.Logger, store auth.VirtualKeyStore) http.Handler {
+func newMux(logger *slog.Logger, store auth.VirtualKeyStore, chatHandler http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
 	mux.Handle("GET /v1/models", protectGatewayRoute(store, http.HandlerFunc(handleModels)))
-	mux.Handle("POST /v1/chat/completions", protectGatewayRoute(store, http.HandlerFunc(handleChatCompletions)))
+	mux.Handle("POST /v1/chat/completions", protectGatewayRoute(store, chatHandler))
 
 	return httpx.RequestID(httpx.RequestLogger(logger)(mux))
+}
+
+func newArkChatProxy(cfg config.Config, logger *slog.Logger) http.Handler {
+	return proxy.NewArkChatProxy(proxy.ArkChatConfig{
+		BaseURL:         cfg.Ark.OpenAIBaseURL,
+		APIKey:          cfg.Ark.APIKey,
+		DefaultModel:    cfg.Ark.DefaultModel,
+		DisableThinking: cfg.Ark.DisableThinking,
+	}, logger, nil)
 }
 
 func protectGatewayRoute(store auth.VirtualKeyStore, next http.Handler) http.Handler {
@@ -109,16 +119,6 @@ func handleModels(w http.ResponseWriter, _ *http.Request) {
 			{ID: "claude-3-5-sonnet", Object: "model", Created: 1718841600, OwnedBy: "anthropic"},
 			{ID: "gemini-1.5-pro", Object: "model", Created: 1714435200, OwnedBy: "google"},
 			{ID: "ark-code-latest", Object: "model", Created: 1746921600, OwnedBy: "ark"},
-		},
-	})
-}
-
-func handleChatCompletions(w http.ResponseWriter, _ *http.Request) {
-	httpx.WriteJSON(w, http.StatusBadGateway, errorEnvelope{
-		Error: errorDetail{
-			Message: "chat completions proxy is not implemented yet",
-			Type:    "gateway_error",
-			Code:    "upstream_not_configured",
 		},
 	})
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/omnitoken/omnitoken/internal/auth"
+	"github.com/omnitoken/omnitoken/internal/proxy"
 )
 
 func TestHealthz(t *testing.T) {
@@ -20,7 +21,7 @@ func TestHealthz(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()
 
-	newMux(testLogger(), fakeGatewayStore{}).ServeHTTP(rec, req)
+	newMux(testLogger(), fakeGatewayStore{}, unavailableChatHandler()).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
@@ -43,7 +44,7 @@ func TestModels(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+key.Token)
 	rec := httptest.NewRecorder()
 
-	newMux(testLogger(), store).ServeHTTP(rec, req)
+	newMux(testLogger(), store, unavailableChatHandler()).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
@@ -61,7 +62,7 @@ func TestModels(t *testing.T) {
 	}
 }
 
-func TestChatCompletionsPlaceholder(t *testing.T) {
+func TestChatCompletionsRequiresConfiguredArk(t *testing.T) {
 	t.Parallel()
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
@@ -70,10 +71,10 @@ func TestChatCompletionsPlaceholder(t *testing.T) {
 	req.Header.Set("X-Request-Id", "req-chat")
 	rec := httptest.NewRecorder()
 
-	newMux(testLogger(), store).ServeHTTP(rec, req)
+	newMux(testLogger(), store, unavailableChatHandler()).ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadGateway {
-		t.Fatalf("expected status %d, got %d", http.StatusBadGateway, rec.Code)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status %d, got %d", http.StatusServiceUnavailable, rec.Code)
 	}
 	if rec.Header().Get("X-Request-Id") == "" {
 		t.Fatal("expected generated request id header")
@@ -100,7 +101,7 @@ func TestModelsRequiresVirtualKey(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	rec := httptest.NewRecorder()
 
-	newMux(testLogger(), validGatewayStore(t)).ServeHTTP(rec, req)
+	newMux(testLogger(), validGatewayStore(t), unavailableChatHandler()).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
@@ -117,6 +118,14 @@ func TestModelsRequiresVirtualKey(t *testing.T) {
 
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func unavailableChatHandler() http.Handler {
+	return proxy.NewArkChatProxy(proxy.ArkChatConfig{
+		BaseURL:      "http://127.0.0.1:1",
+		APIKey:       "",
+		DefaultModel: "ark-code-latest",
+	}, testLogger(), nil)
 }
 
 func validGatewayStore(t *testing.T) fakeGatewayStore {

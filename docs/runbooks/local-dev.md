@@ -115,3 +115,31 @@ $env:OMNITOKEN_ARK_DISABLE_THINKING="true"
 The fastest observed demo recipe is the OpenAI-compatible endpoint with
 `thinking: {"type": "disabled"}` and `stream_options: {"include_usage": true}`.
 Do not commit real Ark keys or captured request headers.
+
+## Send A Demo Chat Completion To Ark
+
+After creating a demo virtual key, use it against the gateway data-plane port.
+The gateway replaces the client model with `OMNITOKEN_ARK_DEFAULT_MODEL`,
+injects the Ark API key upstream, and keeps the virtual key local to OmniToken.
+
+Non-streaming request:
+
+```powershell
+curl -X POST http://localhost:8080/v1/chat/completions `
+  -H "Authorization: Bearer <demo-virtual-key>" `
+  -H "Content-Type: application/json" `
+  -d '{"model":"client-model","messages":[{"role":"user","content":"Output exactly: pong"}],"max_tokens":32}'
+```
+
+Streaming request:
+
+```powershell
+curl --no-buffer -X POST http://localhost:8080/v1/chat/completions `
+  -H "Authorization: Bearer <demo-virtual-key>" `
+  -H "Content-Type: application/json" `
+  -d '{"model":"client-model","messages":[{"role":"user","content":"Output exactly: pong"}],"stream":true,"max_tokens":32}'
+```
+
+For streaming calls, the gateway forces `stream_options.include_usage=true` so
+the final SSE usage chunk reaches the client. Do not paste real Ark keys into
+curl commands; load them through environment variables only.
