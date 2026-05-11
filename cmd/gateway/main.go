@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
 	"net/http"
 	"os"
 	"time"
 
+	_ "github.com/lib/pq"
+	"github.com/omnitoken/omnitoken/internal/auth"
 	"github.com/omnitoken/omnitoken/internal/config"
 	"github.com/omnitoken/omnitoken/internal/httpx"
 )
@@ -48,10 +51,24 @@ func main() {
 	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	if cfg.DatabaseURL == "" {
+		logger.Error("gateway requires OMNITOKEN_DATABASE_URL for Demo-Ready virtual key auth")
+		os.Exit(1)
+	}
+	db, err := sql.Open("postgres", cfg.DatabaseURL)
+	if err != nil {
+		logger.Error("open postgres", "error", err)
+		os.Exit(1)
+	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			logger.Error("close postgres", "error", err)
+		}
+	}()
 
 	server := &http.Server{
 		Addr:              cfg.Gateway.Addr,
-		Handler:           newMux(logger),
+		Handler:           newMux(logger, auth.NewPostgresStore(db)),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -62,13 +79,17 @@ func main() {
 	}
 }
 
-func newMux(logger *slog.Logger) http.Handler {
+func newMux(logger *slog.Logger, store auth.VirtualKeyStore) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
-	mux.HandleFunc("GET /v1/models", handleModels)
-	mux.HandleFunc("POST /v1/chat/completions", handleChatCompletions)
+	mux.Handle("GET /v1/models", protectGatewayRoute(store, http.HandlerFunc(handleModels)))
+	mux.Handle("POST /v1/chat/completions", protectGatewayRoute(store, http.HandlerFunc(handleChatCompletions)))
 
 	return httpx.RequestID(httpx.RequestLogger(logger)(mux))
+}
+
+func protectGatewayRoute(store auth.VirtualKeyStore, next http.Handler) http.Handler {
+	return auth.RequireVirtualKey(store, writeGatewayUnauthorized)(next)
 }
 
 func handleHealthz(w http.ResponseWriter, _ *http.Request) {
@@ -98,6 +119,16 @@ func handleChatCompletions(w http.ResponseWriter, _ *http.Request) {
 			Message: "chat completions proxy is not implemented yet",
 			Type:    "gateway_error",
 			Code:    "upstream_not_configured",
+		},
+	})
+}
+
+func writeGatewayUnauthorized(w http.ResponseWriter) {
+	httpx.WriteJSON(w, http.StatusUnauthorized, errorEnvelope{
+		Error: errorDetail{
+			Message: "unauthorized",
+			Type:    "authentication_error",
+			Code:    "invalid_api_key",
 		},
 	})
 }

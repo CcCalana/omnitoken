@@ -87,6 +87,7 @@ services:
       dockerfile: deploy/Dockerfile.gateway
     environment:
       OMNITOKEN_GATEWAY_ADDR: ":8080"
+      OMNITOKEN_DATABASE_URL: "postgres://omnitoken:omnitoken@postgres:5432/omnitoken?sslmode=disable"
     ports:
       - "8080:8080"
     depends_on:
@@ -104,6 +105,8 @@ services:
       dockerfile: deploy/Dockerfile.admin
     environment:
       OMNITOKEN_ADMIN_ADDR: ":8081"
+      OMNITOKEN_DATABASE_URL: "postgres://omnitoken:omnitoken@postgres:5432/omnitoken?sslmode=disable"
+      OMNITOKEN_ADMIN_BOOTSTRAP_TOKEN: "${OMNITOKEN_ADMIN_BOOTSTRAP_TOKEN:-}"
     ports:
       - "8081:8081"
     depends_on:

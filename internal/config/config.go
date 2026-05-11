@@ -29,9 +29,10 @@ type GatewayConfig struct {
 }
 
 type AdminConfig struct {
-	Addr        string
-	CORSOrigins []string
-	CORSMethods []string
+	Addr           string
+	CORSOrigins    []string
+	CORSMethods    []string
+	BootstrapToken string
 }
 
 type ArkConfig struct {
@@ -57,9 +58,10 @@ func Load() (Config, error) {
 			Addr: Env("OMNITOKEN_GATEWAY_ADDR", ":8080"),
 		},
 		Admin: AdminConfig{
-			Addr:        Env("OMNITOKEN_ADMIN_ADDR", ":8081"),
-			CORSOrigins: envCSV("OMNITOKEN_ADMIN_CORS_ORIGINS", []string{"http://localhost:3000"}),
-			CORSMethods: envCSV("OMNITOKEN_ADMIN_CORS_METHODS", []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"}),
+			Addr:           Env("OMNITOKEN_ADMIN_ADDR", ":8081"),
+			CORSOrigins:    envCSV("OMNITOKEN_ADMIN_CORS_ORIGINS", []string{"http://localhost:3000"}),
+			CORSMethods:    envCSV("OMNITOKEN_ADMIN_CORS_METHODS", []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"}),
+			BootstrapToken: Env("OMNITOKEN_ADMIN_BOOTSTRAP_TOKEN", ""),
 		},
 		DatabaseURL: Env("OMNITOKEN_DATABASE_URL", ""),
 		RedisAddr:   Env("OMNITOKEN_REDIS_ADDR", ""),

@@ -26,6 +26,7 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("OMNITOKEN_ADMIN_ADDR", "")
 	t.Setenv("OMNITOKEN_ADMIN_CORS_ORIGINS", "")
 	t.Setenv("OMNITOKEN_ADMIN_CORS_METHODS", "")
+	t.Setenv("OMNITOKEN_ADMIN_BOOTSTRAP_TOKEN", "")
 	t.Setenv("OMNITOKEN_ARK_API_KEY", "")
 	t.Setenv("OMNITOKEN_ARK_OPENAI_BASE_URL", "")
 	t.Setenv("OMNITOKEN_ARK_ANTHROPIC_BASE_URL", "")
@@ -45,6 +46,9 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if len(cfg.Admin.CORSOrigins) != 0 {
 		t.Fatalf("expected env-provided empty CORS list, got %#v", cfg.Admin.CORSOrigins)
+	}
+	if cfg.Admin.BootstrapToken != "" {
+		t.Fatalf("expected empty bootstrap token, got %q", cfg.Admin.BootstrapToken)
 	}
 	if cfg.Ark.Enabled() {
 		t.Fatal("expected Ark to be disabled without API key")
@@ -112,6 +116,7 @@ func TestLoadParsesAdminAndArkConfig(t *testing.T) {
 	t.Setenv("OMNITOKEN_ADMIN_ADDR", ":18081")
 	t.Setenv("OMNITOKEN_ADMIN_CORS_ORIGINS", "http://localhost:3000, https://admin.example.com ")
 	t.Setenv("OMNITOKEN_ADMIN_CORS_METHODS", "GET, POST")
+	t.Setenv("OMNITOKEN_ADMIN_BOOTSTRAP_TOKEN", "dev-bootstrap")
 	t.Setenv("OMNITOKEN_ARK_API_KEY", "secret")
 	t.Setenv("OMNITOKEN_ARK_OPENAI_BASE_URL", "https://ark.example.com/v3")
 	t.Setenv("OMNITOKEN_ARK_ANTHROPIC_BASE_URL", "https://ark.example.com")
@@ -131,6 +136,9 @@ func TestLoadParsesAdminAndArkConfig(t *testing.T) {
 	}
 	if got := cfg.Admin.CORSMethods; len(got) != 2 || got[1] != "POST" {
 		t.Fatalf("unexpected CORS methods: %#v", got)
+	}
+	if cfg.Admin.BootstrapToken != "dev-bootstrap" {
+		t.Fatalf("unexpected bootstrap token: %q", cfg.Admin.BootstrapToken)
 	}
 	if !cfg.Ark.Enabled() {
 		t.Fatal("expected Ark to be enabled")

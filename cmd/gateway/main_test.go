@@ -1,12 +1,17 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/google/uuid"
+	"github.com/omnitoken/omnitoken/internal/auth"
 )
 
 func TestHealthz(t *testing.T) {
@@ -15,7 +20,7 @@ func TestHealthz(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()
 
-	newMux(testLogger()).ServeHTTP(rec, req)
+	newMux(testLogger(), fakeGatewayStore{}).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
@@ -33,10 +38,12 @@ func TestHealthz(t *testing.T) {
 func TestModels(t *testing.T) {
 	t.Parallel()
 
+	key, store := validGatewayKey(t)
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer "+key.Token)
 	rec := httptest.NewRecorder()
 
-	newMux(testLogger()).ServeHTTP(rec, req)
+	newMux(testLogger(), store).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
@@ -58,11 +65,12 @@ func TestChatCompletionsPlaceholder(t *testing.T) {
 	t.Parallel()
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-	req.Header.Set("Authorization", "Bearer SECRET_value")
+	key, store := validGatewayKey(t)
+	req.Header.Set("Authorization", "Bearer "+key.Token)
 	req.Header.Set("X-Request-Id", "req-chat")
 	rec := httptest.NewRecorder()
 
-	newMux(testLogger()).ServeHTTP(rec, req)
+	newMux(testLogger(), store).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("expected status %d, got %d", http.StatusBadGateway, rec.Code)
@@ -86,6 +94,64 @@ func TestChatCompletionsPlaceholder(t *testing.T) {
 	}
 }
 
+func TestModelsRequiresVirtualKey(t *testing.T) {
+	t.Parallel()
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	rec := httptest.NewRecorder()
+
+	newMux(testLogger(), validGatewayStore(t)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
+	}
+
+	var body errorEnvelope
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if body.Error.Type != "authentication_error" || body.Error.Code != "invalid_api_key" {
+		t.Fatalf("unexpected error envelope: %#v", body)
+	}
+}
+
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func validGatewayStore(t *testing.T) fakeGatewayStore {
+	t.Helper()
+
+	_, store := validGatewayKey(t)
+	return store
+}
+
+func validGatewayKey(t *testing.T) (auth.PlaintextVirtualKey, fakeGatewayStore) {
+	t.Helper()
+
+	key, err := auth.GenerateVirtualKeyFromReader(bytes.NewReader(bytes.Repeat([]byte{0x68}, 39)))
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	return key, fakeGatewayStore{
+		record: auth.VirtualKeyRecord{
+			APIKeyID: uuid.New(),
+			OrgID:    uuid.New(),
+			UserID:   uuid.New(),
+			KeyHash:  key.Hash,
+			Status:   "active",
+		},
+	}
+}
+
+type fakeGatewayStore struct {
+	record auth.VirtualKeyRecord
+	err    error
+}
+
+func (s fakeGatewayStore) LookupVirtualKey(context.Context, string) (auth.VirtualKeyRecord, error) {
+	if s.err != nil {
+		return auth.VirtualKeyRecord{}, s.err
+	}
+	return s.record, nil
 }
