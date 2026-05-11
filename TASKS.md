@@ -32,7 +32,7 @@
 
 **Started**: 2026-05-11 Asia/Shanghai.
 
-**Result**: Phase 0 scaffold ready for Claude review. Verification:
+**Result**: Implementation commit `8f8f3a7`. Phase 0 scaffold ready for Claude review. Verification:
 `go fmt ./...`, `go vet ./...`, `go test ./...`, `go build ./cmd/gateway ./cmd/admin`,
 gateway/admin `docker build`, `docker compose -f deploy/docker-compose.yml config`,
 `docker compose -f deploy/docker-compose.yml up -d --no-build`, and HTTP smoke checks for
