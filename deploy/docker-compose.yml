@@ -1,0 +1,86 @@
+name: omnitoken
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: omnitoken
+      POSTGRES_PASSWORD: omnitoken
+      POSTGRES_DB: omnitoken
+    ports:
+      - "${OMNITOKEN_POSTGRES_PORT:-15432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../migrations/000001_init.up.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+      - ./postgres/002_seed.sql:/docker-entrypoint-initdb.d/002_seed.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U omnitoken -d omnitoken"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${OMNITOKEN_REDIS_PORT:-16379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  nats:
+    image: nats:2.10-alpine
+    command: ["-js", "-m", "8222"]
+    ports:
+      - "${OMNITOKEN_NATS_PORT:-14222}:4222"
+      - "${OMNITOKEN_NATS_MONITOR_PORT:-18222}:8222"
+    volumes:
+      - nats_data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  gateway:
+    image: omnitoken-gateway:local
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.gateway
+    environment:
+      OMNITOKEN_GATEWAY_ADDR: ":8080"
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+
+  admin:
+    image: omnitoken-admin:local
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.admin
+    environment:
+      OMNITOKEN_ADMIN_ADDR: ":8081"
+    ports:
+      - "8081:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
+  nats_data:

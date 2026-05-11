@@ -1,0 +1,10 @@
+DROP TABLE IF EXISTS audit_logs;
+DROP TABLE IF EXISTS cost_ledger;
+DROP TABLE IF EXISTS usage_token_breakdown;
+DROP TABLE IF EXISTS usage_events;
+DROP TABLE IF EXISTS model_pricing;
+DROP TABLE IF EXISTS model_catalog;
+DROP TABLE IF EXISTS upstream_credentials;
+DROP TABLE IF EXISTS api_keys;
+DROP TABLE IF EXISTS projects;
+DROP TABLE IF EXISTS organizations;

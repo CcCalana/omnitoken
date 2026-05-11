@@ -1,0 +1,22 @@
+# Build outputs
+bin/
+dist/
+coverage.out
+
+# Local env
+.env
+.env.*
+!.env.example
+
+# IDE/editor
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Runtime data
+tmp/
+data/

@@ -1,0 +1,94 @@
+openapi: 3.1.0
+info:
+  title: OmniToken Phase 0 API
+  version: 0.1.0
+servers:
+  - url: http://localhost:8080
+    description: Gateway API
+  - url: http://localhost:8081
+    description: Admin API
+paths:
+  /healthz:
+    get:
+      summary: Service health check
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+  /v1/models:
+    get:
+      summary: List statically configured model IDs
+      responses:
+        "200":
+          description: OpenAI-compatible model list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelList"
+  /api/admin/overview:
+    get:
+      summary: Return mock admin overview metrics
+      responses:
+        "200":
+          description: Mock dashboard overview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminOverview"
+components:
+  schemas:
+    Health:
+      type: object
+      required: [status, service, time]
+      properties:
+        status:
+          type: string
+        service:
+          type: string
+        time:
+          type: string
+          format: date-time
+    ModelList:
+      type: object
+      required: [object, data]
+      properties:
+        object:
+          type: string
+          const: list
+        data:
+          type: array
+          items:
+            type: object
+            required: [id, object, created, owned_by]
+            properties:
+              id:
+                type: string
+              object:
+                type: string
+                const: model
+              created:
+                type: integer
+              owned_by:
+                type: string
+    AdminOverview:
+      type: object
+      required:
+        - period
+        - total_tokens
+        - estimated_cost_usd
+        - active_users
+        - quota_warning_users
+      properties:
+        period:
+          type: string
+        total_tokens:
+          type: integer
+        estimated_cost_usd:
+          type: number
+        active_users:
+          type: integer
+        quota_warning_users:
+          type: integer
