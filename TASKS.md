@@ -100,6 +100,50 @@ and gateway/admin `docker build`. No real Ark upstream calls were made.
 **Codex propose 前置 (必须)**:
 在本条目下追加 `## PROPOSAL` 区块，至少包含：(1) `roles` 与 `role_assignments` 的表结构与外键设计选项及取舍；(2) `model_pricing_current` 用 VIEW 还是 materialized view 的依据；(3) `cmd/migrate` 的 CLI flag 集合；(4) 是否需要拆分多个 migration 文件以及顺序。Claude 在 `REVIEW.md` 给出 `[+] approved` 后再开工。
 
+## PROPOSAL
+
+1. RBAC schema 设计
+
+建议新增 `users`、`roles`、`role_assignments` 三张表，而不是只新增 `roles` / `role_assignments`。原因是当前 `api_keys` 和未来 admin token 都需要稳定的 user 归属；如果 `role_assignments` 直接存裸 `user_id uuid` 而无外键，T-005b/c 会留下孤儿权限风险。
+
+拟定结构：
+
+- `users(id uuid pk default gen_random_uuid(), organization_id uuid not null references organizations(id) on delete cascade, email text, display_name text, status text check active/disabled, created_at timestamptz default now(), unique(organization_id, email))`。`email` 允许后续接 SSO；Phase 1 seed 一个 admin + 10 users。
+- `roles(id uuid pk default gen_random_uuid(), canonical_name text not null unique, description text not null, created_at timestamptz default now())`。系统级三角色用 `canonical_name in ('admin','member','viewer')`，不按组织复制，避免多租户下角色语义漂移。
+- `role_assignments(id uuid pk default gen_random_uuid(), organization_id uuid not null references organizations(id) on delete cascade, user_id uuid not null references users(id) on delete cascade, role_id uuid not null references roles(id) on delete restrict, created_at timestamptz default now(), unique(organization_id,user_id,role_id))`。
+
+取舍：`role_assignments.organization_id` 与 `users.organization_id` 存在可推导关系，但显式保留，便于后续跨组织成员与 tenant-scoped 查询。为避免错配，增加复合外键 `(organization_id,user_id)` → `users(organization_id,id)`，并给 `users` 加 `unique(organization_id,id)`。
+
+2. `model_pricing_current` 视图形态
+
+建议使用普通 `VIEW`，不使用 materialized view。价格表规模小、写入低频，普通 view 每次查询用 `row_number() over (partition by model_id order by effective_from desc, created_at desc)` 过滤最新行即可。materialized view 需要刷新策略，Phase 1 没有调度器接入真实价格同步，容易产生"价格已写入但 current 视图未刷新"的隐性错误。
+
+拟定语义：只返回 `effective_from <= now()` 且 `(effective_to is null or effective_to > now())` 的每个 `model_id` 最新一行。这样历史价格不删除，审计可追溯。
+
+3. `cmd/migrate` CLI flags
+
+建议首版保持薄包装：
+
+- `omnitoken-migrate up`
+- `omnitoken-migrate down [-steps N]`，默认 `N=1`，避免误把全部 schema 回滚。
+- `omnitoken-migrate version`
+- `omnitoken-migrate force -version N`
+- 全局 flag: `-database-url`，默认读取 `OMNITOKEN_DATABASE_URL`；`-path` 默认 `file://migrations`。
+
+错误策略：缺少 database URL 直接返回非零；`down` 不提供 `-steps` 时只回滚一步；`force` 必须显式传 `-version`，避免误操作。
+
+依赖选择：使用 `github.com/golang-migrate/migrate/v4`，建议锁到当前稳定 minor（实施时用 `go get github.com/golang-migrate/migrate/v4@v4.x.y` 解析实际 patch）。Why not goose: goose 支持 Go migration，项目已要求 SQL 文件迁移。Why not atlas: atlas 更偏 schema diff/声明式，当前任务只需要可逆版本迁移。Why not dbmate: dbmate CLI 很轻，但 Go 内嵌薄包装和库级测试能力弱于 golang-migrate。
+
+4. Migration 文件拆分与顺序
+
+建议拆分为 3 个 migration，便于 review 和失败定位：
+
+- `000002_indexes.up/down.sql`: 只补索引，覆盖 usage/admin 查询路径。
+- `000003_pricing_window.up/down.sql`: `model_pricing.effective_to`、约束/索引、`model_pricing_current` view。
+- `000004_rbac_schema.up/down.sql`: `users`、`roles`、`role_assignments`、基础三角色 seed。seed roles 放在 migration 内，因为系统角色属于 schema invariant；demo users 仍留 `deploy/postgres/002_seed.sql` 或后续测试 fixture，不放 invariant migration。
+
+`docker-compose.yml` 调整顺序：Postgres 只负责建空库；新增一次性 `migrate` service 依赖 Postgres healthy，执行 `cmd/migrate up`；`seed` 可在 migrate 之后执行，或暂保留为手动/后续 T-004 profile 配置。T-003 只移除 DDL 的 `docker-entrypoint-initdb.d` 挂载，保留 seed.sql。
+
 ---
 
 ## T-005a RBAC 权限模型与策略点 [phase:1] [owner:codex] [status:todo]
