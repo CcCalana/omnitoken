@@ -77,3 +77,11 @@
 | T-004 | NIT | docker-compose depends_on / Makefile / OpenAPI 等小项（M-2/N-1/N-2） |
 
 请 Codex 先做 T-002，完成后在本条目下追加 `**Resolved**:` 与逐条回应；其余按 ID 顺序推进。
+
+**Resolved**: `706a3a7`
+
+- H-1: fixed. Admin CORS now reads `OMNITOKEN_ADMIN_CORS_ORIGINS`; unlisted origins get no ACAO or Authorization allow-header.
+- H-2: fixed. Gateway/admin use `errors.Is(err, http.ErrServerClosed)` through `httpx.Run`.
+- H-3: fixed. `internal/httpx.Run(ctx, srv)` handles SIGINT/SIGTERM and graceful shutdown with a 15s timeout.
+- H-4: fixed. `httpx.RequestID` generates/reuses `X-Request-Id`; request logs include `request_id` and `duration_us`.
+- M-4: fixed. Shared JSON response, status recorder, request logger, request ID, CORS, and server run helpers live in `internal/httpx`.

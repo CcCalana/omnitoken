@@ -7,7 +7,7 @@
 
 ---
 
-## T-002 收尾 Phase 0 HIGH 项 + 引入 internal/httpx + Ark provider 占位 [phase:0->1] [owner:codex] [status:in-progress]
+## T-002 收尾 Phase 0 HIGH 项 + 引入 internal/httpx + Ark provider 占位 [phase:0->1] [owner:codex] [status:review]
 
 **目标**: 落地 R-001 中的 4 个 HIGH 与 1 个 MEDIUM (M-4)，为 Phase 1 代理实现搭好基础设施；同时把火山方舟 provider 写入配置结构（先占位、不真正转发）。
 
@@ -38,6 +38,19 @@
 
 **依赖**:
 - 仍不引入新的第三方库。所有变更可用标准库完成（`os/signal`、`errors`、`crypto/rand` 即可生成 request_id）。
+
+**Result**: Implementation commit `706a3a7`. Verification passed:
+`go test -count=1 ./...`, `go vet ./...`, `gofmt -l .`, `go test -count=1 -cover ./internal/httpx`
+(87.9%), gateway/admin `docker build`, compose restart with `--no-build`, and smoke checks for
+`/healthz`, `/v1/chat/completions`, and admin CORS allow/deny.
+
+Log sample:
+
+```json
+{"msg":"http request","request_id":"req-smoke-gateway","method":"GET","path":"/healthz","status":200,"duration_us":44}
+{"msg":"http request","request_id":"req-smoke-chat","method":"POST","path":"/v1/chat/completions","status":502,"duration_us":51}
+{"msg":"http request","request_id":"req-smoke-cors-deny","method":"GET","path":"/api/admin/overview","status":200,"duration_us":112}
+```
 
 ---
 
