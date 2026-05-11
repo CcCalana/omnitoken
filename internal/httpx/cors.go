@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-func CORS(origins []string) func(http.Handler) http.Handler {
+func CORS(origins []string, methods []string) func(http.Handler) http.Handler {
 	allowed := make(map[string]struct{}, len(origins))
 	for _, origin := range origins {
 		origin = strings.TrimSpace(origin)
@@ -13,13 +13,16 @@ func CORS(origins []string) func(http.Handler) http.Handler {
 			allowed[origin] = struct{}{}
 		}
 	}
+	allowedMethods := strings.Join(cleanList(methods), ", ")
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			origin := strings.TrimSpace(r.Header.Get("Origin"))
 			if _, ok := allowed[origin]; ok && origin != "" {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
-				w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+				if allowedMethods != "" {
+					w.Header().Set("Access-Control-Allow-Methods", allowedMethods)
+				}
 				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 				w.Header().Add("Vary", "Origin")
 			}
@@ -32,4 +35,15 @@ func CORS(origins []string) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func cleanList(values []string) []string {
+	cleaned := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			cleaned = append(cleaned, value)
+		}
+	}
+	return cleaned
 }

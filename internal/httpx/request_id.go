@@ -9,25 +9,37 @@ import (
 	"time"
 )
 
-const RequestIDHeader = "X-Request-Id"
+const (
+	RequestIDHeader         = "X-Request-Id"
+	UpstreamRequestIDHeader = "X-Upstream-Request-Id"
+)
 
 type requestIDContextKey struct{}
+type upstreamRequestIDContextKey struct{}
 
 func RequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestID := strings.TrimSpace(r.Header.Get(RequestIDHeader))
-		if requestID == "" {
-			requestID = newRequestID()
-		}
+		requestID := newRequestID()
+		upstreamRequestID := strings.TrimSpace(r.Header.Get(RequestIDHeader))
 
 		w.Header().Set(RequestIDHeader, requestID)
+		if upstreamRequestID != "" {
+			w.Header().Set(UpstreamRequestIDHeader, upstreamRequestID)
+		}
+
 		ctx := context.WithValue(r.Context(), requestIDContextKey{}, requestID)
+		ctx = context.WithValue(ctx, upstreamRequestIDContextKey{}, upstreamRequestID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
 func RequestIDFromContext(ctx context.Context) string {
 	requestID, _ := ctx.Value(requestIDContextKey{}).(string)
+	return requestID
+}
+
+func UpstreamRequestIDFromContext(ctx context.Context) string {
+	requestID, _ := ctx.Value(upstreamRequestIDContextKey{}).(string)
 	return requestID
 }
 

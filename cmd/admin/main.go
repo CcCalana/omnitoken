@@ -68,7 +68,7 @@ func newMux(logger *slog.Logger, cfg config.AdminConfig) http.Handler {
 	mux.HandleFunc("GET /healthz", handleHealthz)
 	mux.HandleFunc("GET /api/admin/overview", handleOverview)
 
-	return httpx.RequestID(httpx.RequestLogger(logger)(httpx.CORS(cfg.CORSOrigins)(mux)))
+	return httpx.RequestID(httpx.RequestLogger(logger)(httpx.CORS(cfg.CORSOrigins, cfg.CORSMethods)(mux)))
 }
 
 func handleHealthz(w http.ResponseWriter, _ *http.Request) {

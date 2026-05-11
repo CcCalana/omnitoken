@@ -67,8 +67,14 @@ func TestChatCompletionsPlaceholder(t *testing.T) {
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("expected status %d, got %d", http.StatusBadGateway, rec.Code)
 	}
-	if rec.Header().Get("X-Request-Id") != "req-chat" {
-		t.Fatalf("request id header = %q", rec.Header().Get("X-Request-Id"))
+	if rec.Header().Get("X-Request-Id") == "" {
+		t.Fatal("expected generated request id header")
+	}
+	if rec.Header().Get("X-Request-Id") == "req-chat" {
+		t.Fatal("client request id should not overwrite internal request id")
+	}
+	if rec.Header().Get("X-Upstream-Request-Id") != "req-chat" {
+		t.Fatalf("upstream request id header = %q", rec.Header().Get("X-Upstream-Request-Id"))
 	}
 
 	var body errorEnvelope

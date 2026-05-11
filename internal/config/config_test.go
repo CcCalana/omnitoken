@@ -25,6 +25,7 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("OMNITOKEN_GATEWAY_ADDR", "")
 	t.Setenv("OMNITOKEN_ADMIN_ADDR", "")
 	t.Setenv("OMNITOKEN_ADMIN_CORS_ORIGINS", "")
+	t.Setenv("OMNITOKEN_ADMIN_CORS_METHODS", "")
 	t.Setenv("OMNITOKEN_ARK_API_KEY", "")
 	t.Setenv("OMNITOKEN_ARK_OPENAI_BASE_URL", "")
 	t.Setenv("OMNITOKEN_ARK_ANTHROPIC_BASE_URL", "")
@@ -48,13 +49,20 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Ark.Enabled() {
 		t.Fatal("expected Ark to be disabled without API key")
 	}
-	if cfg.Ark.OpenAIBaseURL != "" || cfg.Ark.DefaultModel != "" {
-		t.Fatalf("expected zero Ark config, got %#v", cfg.Ark)
+	if cfg.Ark.OpenAIBaseURL != DefaultArkOpenAIBaseURL {
+		t.Fatalf("unexpected default Ark OpenAI URL: %q", cfg.Ark.OpenAIBaseURL)
+	}
+	if cfg.Ark.AnthropicBaseURL != DefaultArkAnthropicBaseURL {
+		t.Fatalf("unexpected default Ark Anthropic URL: %q", cfg.Ark.AnthropicBaseURL)
+	}
+	if cfg.Ark.DefaultModel != DefaultArkModel {
+		t.Fatalf("unexpected default Ark model: %q", cfg.Ark.DefaultModel)
 	}
 }
 
 func TestLoadDefaultCORSWhenUnset(t *testing.T) {
 	unsetEnv(t, "OMNITOKEN_ADMIN_CORS_ORIGINS")
+	unsetEnv(t, "OMNITOKEN_ADMIN_CORS_METHODS")
 
 	cfg, err := Load()
 	if err != nil {
@@ -63,12 +71,47 @@ func TestLoadDefaultCORSWhenUnset(t *testing.T) {
 	if len(cfg.Admin.CORSOrigins) != 1 || cfg.Admin.CORSOrigins[0] != "http://localhost:3000" {
 		t.Fatalf("unexpected default CORS origins: %#v", cfg.Admin.CORSOrigins)
 	}
+	wantMethods := []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"}
+	if len(cfg.Admin.CORSMethods) != len(wantMethods) {
+		t.Fatalf("unexpected default CORS methods: %#v", cfg.Admin.CORSMethods)
+	}
+	for i, want := range wantMethods {
+		if cfg.Admin.CORSMethods[i] != want {
+			t.Fatalf("unexpected default CORS methods: %#v", cfg.Admin.CORSMethods)
+		}
+	}
+}
+
+func TestLoadArkDefaultsWithAPIKey(t *testing.T) {
+	t.Setenv("OMNITOKEN_ARK_API_KEY", "secret")
+	unsetEnv(t, "OMNITOKEN_ARK_OPENAI_BASE_URL")
+	unsetEnv(t, "OMNITOKEN_ARK_ANTHROPIC_BASE_URL")
+	unsetEnv(t, "OMNITOKEN_ARK_DEFAULT_MODEL")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if !cfg.Ark.Enabled() {
+		t.Fatal("expected Ark to be enabled")
+	}
+	if cfg.Ark.OpenAIBaseURL != DefaultArkOpenAIBaseURL {
+		t.Fatalf("unexpected Ark OpenAI URL: %q", cfg.Ark.OpenAIBaseURL)
+	}
+	if cfg.Ark.AnthropicBaseURL != DefaultArkAnthropicBaseURL {
+		t.Fatalf("unexpected Ark Anthropic URL: %q", cfg.Ark.AnthropicBaseURL)
+	}
+	if cfg.Ark.DefaultModel != DefaultArkModel {
+		t.Fatalf("unexpected Ark model: %q", cfg.Ark.DefaultModel)
+	}
 }
 
 func TestLoadParsesAdminAndArkConfig(t *testing.T) {
 	t.Setenv("OMNITOKEN_GATEWAY_ADDR", ":18080")
 	t.Setenv("OMNITOKEN_ADMIN_ADDR", ":18081")
 	t.Setenv("OMNITOKEN_ADMIN_CORS_ORIGINS", "http://localhost:3000, https://admin.example.com ")
+	t.Setenv("OMNITOKEN_ADMIN_CORS_METHODS", "GET, POST")
 	t.Setenv("OMNITOKEN_ARK_API_KEY", "secret")
 	t.Setenv("OMNITOKEN_ARK_OPENAI_BASE_URL", "https://ark.example.com/v3")
 	t.Setenv("OMNITOKEN_ARK_ANTHROPIC_BASE_URL", "https://ark.example.com")
@@ -85,6 +128,9 @@ func TestLoadParsesAdminAndArkConfig(t *testing.T) {
 	}
 	if got := cfg.Admin.CORSOrigins; len(got) != 2 || got[1] != "https://admin.example.com" {
 		t.Fatalf("unexpected CORS origins: %#v", got)
+	}
+	if got := cfg.Admin.CORSMethods; len(got) != 2 || got[1] != "POST" {
+		t.Fatalf("unexpected CORS methods: %#v", got)
 	}
 	if !cfg.Ark.Enabled() {
 		t.Fatal("expected Ark to be enabled")

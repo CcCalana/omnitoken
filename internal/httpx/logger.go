@@ -14,14 +14,18 @@ func RequestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 
 			next.ServeHTTP(rec, r)
 
-			logger.Info(
-				"http request",
+			attrs := []any{
 				"request_id", RequestIDFromContext(r.Context()),
 				"method", r.Method,
 				"path", r.URL.Path,
 				"status", rec.Status(),
 				"duration_us", time.Since(start).Microseconds(),
-			)
+			}
+			if upstreamRequestID := UpstreamRequestIDFromContext(r.Context()); upstreamRequestID != "" {
+				attrs = append(attrs, "upstream_request_id", upstreamRequestID)
+			}
+
+			logger.Info("http request", attrs...)
 		})
 	}
 }

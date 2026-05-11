@@ -7,6 +7,12 @@ import (
 	"strings"
 )
 
+const (
+	DefaultArkOpenAIBaseURL    = "https://ark.cn-beijing.volces.com/api/coding/v3"
+	DefaultArkAnthropicBaseURL = "https://ark.cn-beijing.volces.com/api/coding"
+	DefaultArkModel            = "ark-code-latest"
+)
+
 type Config struct {
 	Gateway     GatewayConfig
 	Admin       AdminConfig
@@ -25,6 +31,7 @@ type GatewayConfig struct {
 type AdminConfig struct {
 	Addr        string
 	CORSOrigins []string
+	CORSMethods []string
 }
 
 type ArkConfig struct {
@@ -52,6 +59,7 @@ func Load() (Config, error) {
 		Admin: AdminConfig{
 			Addr:        Env("OMNITOKEN_ADMIN_ADDR", ":8081"),
 			CORSOrigins: envCSV("OMNITOKEN_ADMIN_CORS_ORIGINS", []string{"http://localhost:3000"}),
+			CORSMethods: envCSV("OMNITOKEN_ADMIN_CORS_METHODS", []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"}),
 		},
 		DatabaseURL: Env("OMNITOKEN_DATABASE_URL", ""),
 		RedisAddr:   Env("OMNITOKEN_REDIS_ADDR", ""),
@@ -60,9 +68,9 @@ func Load() (Config, error) {
 		MasterKey:   Env("OMNITOKEN_MASTER_KEY", ""),
 		Ark: ArkConfig{
 			APIKey:           Env("OMNITOKEN_ARK_API_KEY", ""),
-			OpenAIBaseURL:    Env("OMNITOKEN_ARK_OPENAI_BASE_URL", ""),
-			AnthropicBaseURL: Env("OMNITOKEN_ARK_ANTHROPIC_BASE_URL", ""),
-			DefaultModel:     Env("OMNITOKEN_ARK_DEFAULT_MODEL", ""),
+			OpenAIBaseURL:    Env("OMNITOKEN_ARK_OPENAI_BASE_URL", DefaultArkOpenAIBaseURL),
+			AnthropicBaseURL: Env("OMNITOKEN_ARK_ANTHROPIC_BASE_URL", DefaultArkAnthropicBaseURL),
+			DefaultModel:     Env("OMNITOKEN_ARK_DEFAULT_MODEL", DefaultArkModel),
 			DisableThinking:  disableThinking,
 		},
 	}, nil

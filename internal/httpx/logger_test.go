@@ -26,8 +26,14 @@ func TestRequestLoggerIncludesRequestIDAndDuration(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	logLine := buf.String()
-	if !strings.Contains(logLine, `"request_id":"req-log"`) {
+	if !strings.Contains(logLine, `"request_id":"`) {
 		t.Fatalf("missing request_id in log: %s", logLine)
+	}
+	if strings.Contains(logLine, `"request_id":"req-log"`) {
+		t.Fatalf("client request id overwrote internal request id: %s", logLine)
+	}
+	if !strings.Contains(logLine, `"upstream_request_id":"req-log"`) {
+		t.Fatalf("missing upstream_request_id in log: %s", logLine)
 	}
 	if !strings.Contains(logLine, `"duration_us":`) {
 		t.Fatalf("missing duration_us in log: %s", logLine)

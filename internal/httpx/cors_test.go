@@ -9,7 +9,7 @@ import (
 func TestCORSAllowsListedOrigin(t *testing.T) {
 	t.Parallel()
 
-	handler := CORS([]string{"https://admin.example.com"})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := CORS([]string{"https://admin.example.com"}, []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -22,6 +22,9 @@ func TestCORSAllowsListedOrigin(t *testing.T) {
 	if rec.Header().Get("Access-Control-Allow-Origin") != "https://admin.example.com" {
 		t.Fatalf("ACAO = %q", rec.Header().Get("Access-Control-Allow-Origin"))
 	}
+	if got := rec.Header().Get("Access-Control-Allow-Methods"); got != "GET, POST, PATCH, DELETE, OPTIONS" {
+		t.Fatalf("methods = %q", got)
+	}
 	if rec.Header().Get("Access-Control-Allow-Headers") != "Content-Type, Authorization" {
 		t.Fatalf("headers = %q", rec.Header().Get("Access-Control-Allow-Headers"))
 	}
@@ -30,7 +33,7 @@ func TestCORSAllowsListedOrigin(t *testing.T) {
 func TestCORSDeniesUnlistedOrigin(t *testing.T) {
 	t.Parallel()
 
-	handler := CORS([]string{"https://admin.example.com"})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := CORS([]string{"https://admin.example.com"}, []string{"GET", "OPTIONS"})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -51,7 +54,7 @@ func TestCORSDeniesUnlistedOrigin(t *testing.T) {
 func TestCORSPreflight(t *testing.T) {
 	t.Parallel()
 
-	handler := CORS([]string{"https://admin.example.com"})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := CORS([]string{"https://admin.example.com"}, []string{"GET", "OPTIONS"})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Fatal("next handler should not be called for preflight")
 	}))
 

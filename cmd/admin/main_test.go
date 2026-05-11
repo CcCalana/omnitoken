@@ -74,6 +74,9 @@ func TestOverviewCORSPreflight(t *testing.T) {
 	if rec.Header().Get("Access-Control-Allow-Origin") != "http://localhost:3000" {
 		t.Fatal("expected CORS header")
 	}
+	if got := rec.Header().Get("Access-Control-Allow-Methods"); got != "GET, POST, PATCH, DELETE, OPTIONS" {
+		t.Fatalf("unexpected CORS methods: %q", got)
+	}
 }
 
 func TestOverviewCORSDeniesUnlistedOrigin(t *testing.T) {
@@ -104,5 +107,6 @@ func testAdminConfig() config.AdminConfig {
 	return config.AdminConfig{
 		Addr:        ":8081",
 		CORSOrigins: []string{"http://localhost:3000"},
+		CORSMethods: []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"},
 	}
 }
