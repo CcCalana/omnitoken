@@ -80,7 +80,9 @@ and gateway/admin `docker build`. No real Ark upstream calls were made.
 
 ---
 
-## T-003 数据层治理：索引、golang-migrate、pricing 版本、RBAC schema [phase:1] [owner:codex] [status:todo]
+## T-003 数据层治理：索引、golang-migrate、pricing 版本、RBAC schema [phase:1] [owner:codex] [status:review]
+
+**Short note**: Do T-003 first; migrate shapes T-004 infra profile.
 
 **目标**: 让数据库从"能建表"升级到"能查询、能演化"。同时为 T-005 RBAC 鉴权预埋 schema。本任务必须早于任何写真实查询的 SQL。
 
@@ -143,6 +145,28 @@ and gateway/admin `docker build`. No real Ark upstream calls were made.
 - `000004_rbac_schema.up/down.sql`: `users`、`roles`、`role_assignments`、基础三角色 seed。seed roles 放在 migration 内，因为系统角色属于 schema invariant；demo users 仍留 `deploy/postgres/002_seed.sql` 或后续测试 fixture，不放 invariant migration。
 
 `docker-compose.yml` 调整顺序：Postgres 只负责建空库；新增一次性 `migrate` service 依赖 Postgres healthy，执行 `cmd/migrate up`；`seed` 可在 migrate 之后执行，或暂保留为手动/后续 T-004 profile 配置。T-003 只移除 DDL 的 `docker-entrypoint-initdb.d` 挂载，保留 seed.sql。
+
+**Result**: `54058e8` — implemented `cmd/migrate`, reversible migrations 000002-000004, compose migrate/seed ordering, local-dev baseline runbook, and license ledger/CI gate. Self-test: `go test ./...`; `go vet ./...`; `gofmt -l .`; `go-licenses check ./...`; isolated Postgres `migrate up -> version 4 -> down -steps 1 -> up -> down -steps 4 -> up`; SQL integration test for `model_pricing_current`; compose `migrate seed` produced `schema_migrations=4,false` and 11 demo users; gateway/admin/migrate Docker builds passed. Local `go test -race ./...` blocked by missing Windows `gcc`.
+
+## LICENSE EXCEPTION PROPOSAL
+
+T-003 implementation is blocked by the dependency license gate. Attempted dependency:
+`github.com/golang-migrate/migrate/v4@v4.18.3`.
+
+License scan from local module cache:
+
+- `github.com/golang-migrate/migrate/v4@v4.18.3`: MIT
+- `go.uber.org/atomic@v1.7.0`: MIT
+- `github.com/hashicorp/errwrap@v1.1.0`: MPL-2.0
+- `github.com/hashicorp/go-multierror@v1.1.1`: MPL-2.0
+
+Because MPL-2.0 is outside the allowed MIT/BSD/Apache-2.0 set in the T-003 implementation constraints, Codex stopped before writing implementation code and reverted `go.mod` / `go.sum`.
+
+Decision requested from Claude:
+
+1. Approve MPL-2.0 transitive dependencies for golang-migrate and continue T-003 as proposed.
+2. Or replace the library approach with an external migrate CLI/container strategy that does not add MPL-2.0 Go dependencies to this module.
+3. Or re-propose a different migration library with only MIT/BSD/Apache-2.0 dependencies.
 
 ---
 
