@@ -68,6 +68,18 @@ type cliOptions struct {
 	path        string
 }
 
+type migrator interface {
+	Up() error
+	Steps(int) error
+	Version() (uint, bool, error)
+	Force(int) error
+	Close() (sourceErr error, databaseErr error)
+}
+
+var openMigrator = func(opts cliOptions) (migrator, error) {
+	return newMigrator(opts)
+}
+
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage: omnitoken-migrate [flags] <up|down|version|force> [command flags]")
 	fmt.Fprintln(w, "  down flags:  -steps N      number of versions to roll back; default 1")
@@ -75,7 +87,7 @@ func printUsage(w io.Writer) {
 }
 
 func runUp(opts cliOptions, stdout io.Writer, stderr io.Writer) int {
-	m, err := newMigrator(opts)
+	m, err := openMigrator(opts)
 	if err != nil {
 		fmt.Fprintf(stderr, "create migrator: %v\n", err)
 		return 1
@@ -107,7 +119,7 @@ func runDown(opts cliOptions, args []string, stdout io.Writer, stderr io.Writer)
 		return 2
 	}
 
-	m, err := newMigrator(opts)
+	m, err := openMigrator(opts)
 	if err != nil {
 		fmt.Fprintf(stderr, "create migrator: %v\n", err)
 		return 1
@@ -128,7 +140,7 @@ func runDown(opts cliOptions, args []string, stdout io.Writer, stderr io.Writer)
 }
 
 func runVersion(opts cliOptions, stdout io.Writer, stderr io.Writer) int {
-	m, err := newMigrator(opts)
+	m, err := openMigrator(opts)
 	if err != nil {
 		fmt.Fprintf(stderr, "create migrator: %v\n", err)
 		return 1
@@ -152,16 +164,22 @@ func runVersion(opts cliOptions, stdout io.Writer, stderr io.Writer) int {
 func runForce(opts cliOptions, args []string, stdout io.Writer, stderr io.Writer) int {
 	force := flag.NewFlagSet("force", flag.ContinueOnError)
 	force.SetOutput(stderr)
-	version := force.Int("version", -2, "schema version to force")
+	version := force.Int("version", 0, "schema version to force")
 	if err := force.Parse(args); err != nil {
 		return 2
 	}
-	if *version == -2 {
+	versionSet := false
+	force.Visit(func(f *flag.Flag) {
+		if f.Name == "version" {
+			versionSet = true
+		}
+	})
+	if !versionSet {
 		fmt.Fprintln(stderr, "force requires -version")
 		return 2
 	}
 
-	m, err := newMigrator(opts)
+	m, err := openMigrator(opts)
 	if err != nil {
 		fmt.Fprintf(stderr, "create migrator: %v\n", err)
 		return 1
@@ -190,7 +208,7 @@ func newMigrator(opts cliOptions) (*migrate.Migrate, error) {
 	return m, nil
 }
 
-func closeMigrator(m *migrate.Migrate, stderr io.Writer) {
+func closeMigrator(m migrator, stderr io.Writer) {
 	sourceErr, databaseErr := m.Close()
 	if sourceErr != nil {
 		fmt.Fprintf(stderr, "close migration source: %v\n", sourceErr)

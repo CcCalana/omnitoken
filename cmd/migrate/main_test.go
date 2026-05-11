@@ -90,3 +90,66 @@ func TestRunCLIForceRequiresVersion(t *testing.T) {
 		t.Fatalf("stderr should explain missing version, got %q", stderr.String())
 	}
 }
+
+func TestRunCLIForceAllowsExplicitNegativeTwoVersion(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	fake := &fakeMigrator{}
+
+	previousOpenMigrator := openMigrator
+	openMigrator = func(cliOptions) (migrator, error) {
+		return fake, nil
+	}
+	t.Cleanup(func() {
+		openMigrator = previousOpenMigrator
+	})
+
+	code := runCLI(
+		[]string{"-database-url", "postgres://user:pass@localhost/db?sslmode=disable", "force", "-version", "-2"},
+		func(string) string { return "" },
+		&stdout,
+		&stderr,
+	)
+	if code != 0 {
+		t.Fatalf("exit code mismatch: got %d stderr=%q", code, stderr.String())
+	}
+	if !fake.forceCalled {
+		t.Fatal("expected force to be called")
+	}
+	if fake.forceVersion != -2 {
+		t.Fatalf("force version mismatch: got %d", fake.forceVersion)
+	}
+	if strings.Contains(stderr.String(), "force requires -version") {
+		t.Fatalf("explicit -version -2 should not be treated as missing, stderr=%q", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "forced version: -2") {
+		t.Fatalf("stdout should report forced version, got %q", stdout.String())
+	}
+}
+
+type fakeMigrator struct {
+	forceCalled  bool
+	forceVersion int
+}
+
+func (f *fakeMigrator) Up() error {
+	return nil
+}
+
+func (f *fakeMigrator) Steps(int) error {
+	return nil
+}
+
+func (f *fakeMigrator) Version() (uint, bool, error) {
+	return 0, false, nil
+}
+
+func (f *fakeMigrator) Force(version int) error {
+	f.forceCalled = true
+	f.forceVersion = version
+	return nil
+}
+
+func (f *fakeMigrator) Close() (error, error) {
+	return nil, nil
+}
