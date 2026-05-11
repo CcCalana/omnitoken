@@ -1,0 +1,24 @@
+{
+  "_meta": {
+    "captured_at": "2026-05-11T01:48:34Z",
+    "endpoint": "POST https://ark.cn-beijing.volces.com/api/coding/v1/messages",
+    "auth_headers": ["x-api-key: <redacted>", "anthropic-version: 2023-06-01"],
+    "request": {
+      "model": "ark-code-latest",
+      "max_tokens": 64,
+      "messages": [{"role": "user", "content": "Reply with exactly: pong"}]
+    },
+    "elapsed_ms": 4767,
+    "note": "Default thinking ON. content array contains a thinking block; final text is empty because all 64 max_tokens were spent on thinking and stop_reason is max_tokens."
+  },
+  "id": "02177846408419140360720e551986eb8f548dd35d9b34e731ff7",
+  "type": "message",
+  "role": "assistant",
+  "model": "glm-5.1",
+  "content": [
+    {"type": "thinking", "thinking": "1.  **Analyze the Request:** The user wants me to reply with *exactly* the word \"pong\".\n2.  **Formulate the Response:** The response must be precisely \"pong\" without any additional text, punctuation, or formatting.\n3.  **Verify:** Does the response match the constraint"},
+    {"type": "text", "text": ""}
+  ],
+  "stop_reason": "max_tokens",
+  "usage": {"input_tokens": 10, "output_tokens": 64, "cache_read_input_tokens": 0}
+}

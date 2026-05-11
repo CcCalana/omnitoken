@@ -1,0 +1,38 @@
+{
+  "_meta": {
+    "captured_at": "2026-05-11T01:47:49Z",
+    "endpoint": "POST https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions",
+    "request": {
+      "model": "ark-code-latest",
+      "messages": [{"role": "user", "content": "ping. Reply with literally the word: pong"}],
+      "stream": false,
+      "max_tokens": 16
+    },
+    "elapsed_ms": 2844,
+    "note": "Default behavior is reasoning ON. reasoning_tokens consumed all 16 max_tokens so content is empty and finish_reason is length."
+  },
+  "id": "0217784640672223dba4463efaee3235a05765424283b9b27052b",
+  "object": "chat.completion",
+  "created": 1778464069,
+  "model": "glm-5.1",
+  "service_tier": "default",
+  "choices": [
+    {
+      "index": 0,
+      "finish_reason": "length",
+      "logprobs": null,
+      "message": {
+        "role": "assistant",
+        "content": "",
+        "reasoning_content": "1.  **Analyze the Request:**\n    *   Input:"
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 14,
+    "completion_tokens": 16,
+    "total_tokens": 30,
+    "prompt_tokens_details": {"cached_tokens": 0},
+    "completion_tokens_details": {"reasoning_tokens": 16}
+  }
+}

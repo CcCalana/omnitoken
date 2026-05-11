@@ -54,6 +54,32 @@ func TestModels(t *testing.T) {
 	}
 }
 
+func TestChatCompletionsPlaceholder(t *testing.T) {
+	t.Parallel()
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	req.Header.Set("Authorization", "Bearer SECRET_value")
+	req.Header.Set("X-Request-Id", "req-chat")
+	rec := httptest.NewRecorder()
+
+	newMux(testLogger()).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("expected status %d, got %d", http.StatusBadGateway, rec.Code)
+	}
+	if rec.Header().Get("X-Request-Id") != "req-chat" {
+		t.Fatalf("request id header = %q", rec.Header().Get("X-Request-Id"))
+	}
+
+	var body errorEnvelope
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if body.Error.Code != "upstream_not_configured" {
+		t.Fatalf("unexpected error envelope: %#v", body)
+	}
+}
+
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }

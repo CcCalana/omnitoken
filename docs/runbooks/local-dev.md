@@ -36,3 +36,20 @@ Windows fallback:
 ```powershell
 .\scripts\dev.ps1 down
 ```
+
+## Configure Volcano Ark For Local Integration
+
+T-002 only loads Ark provider configuration; it does not forward requests yet.
+For local experiments, set the variables below in your shell or `.env` file:
+
+```powershell
+$env:OMNITOKEN_ARK_API_KEY="<dev key>"
+$env:OMNITOKEN_ARK_OPENAI_BASE_URL="https://ark.cn-beijing.volces.com/api/coding/v3"
+$env:OMNITOKEN_ARK_ANTHROPIC_BASE_URL="https://ark.cn-beijing.volces.com/api/coding"
+$env:OMNITOKEN_ARK_DEFAULT_MODEL="ark-code-latest"
+$env:OMNITOKEN_ARK_DISABLE_THINKING="true"
+```
+
+The fastest observed demo recipe is the OpenAI-compatible endpoint with
+`thinking: {"type": "disabled"}` and `stream_options: {"include_usage": true}`.
+Do not commit real Ark keys or captured request headers.
