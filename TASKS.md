@@ -417,6 +417,154 @@ fixture 设计：
 
 ---
 
+## T-008 usage parser + cost_ledger 入账（Demo-Ready 版） [phase:1] [owner:codex] [status:todo]
+
+**目标**: T-007 已经把 usage 字段透传给客户端；T-008 在 gateway **同步把 usage 解析并入 cost_ledger / usage_events 两张表**。这是 Demo-Ready 路线让"账本闭环"真正成立的核心。
+
+**接受标准**:
+- [ ] **解析点**：非流式从 response body 末尾 JSON 的 `usage` 字段取；流式从最后一个 `choices:[]` chunk 取（T-007 已强制 `include_usage:true`）。
+- [ ] **入账字段（usage_events）**：`request_id`、`organization_id`、`user_id`、`api_key_id`、`model_requested`（客户端原始传值）、`model_actual`（上游 response.model）、`provider`（固定 `"ark"`）、`status_code`、`latency_ms`、`streaming`(bool)、`created_at`。
+- [ ] **入账字段（usage_token_breakdown）**：`prompt_tokens` / `completion_tokens` / `reasoning_tokens` / `cached_tokens` / `total_tokens`。**reasoning 与 cached 必须独立成列**，不能合并入 prompt 或 completion 总数。
+- [ ] **cost_ledger 计算**：从 `model_pricing_current` 视图取当前生效价格 → 算 `cost_usd = input_rate*prompt + output_rate*completion + reasoning_rate*reasoning + cached_input_rate*cached`。如果 `model_pricing_current` 找不到该 model_actual 的行，`cost_usd=0` 且 `settlement_status='failed'` 入账（**不**让请求失败）。
+- [ ] **同步 vs 异步**：Demo-Ready 简化版**同步**入账（在 response 已发给客户端**之后**写 DB，不阻塞客户端响应）。NATS 异步推迟到 Phase 1 完整版（T-009 之后）。
+- [ ] **失败不影响客户端**：DB 写失败只 log error，**不**改变客户端已经收到的 200/SSE 响应。
+- [ ] **流式入账时机**：SSE 最后一个 chunk 发给客户端**之后**做 usage parse → 写库。要小心保留 `Subject` / `request_id` / `start_time` 等 ctx 字段到这个 deferred goroutine 中。
+- [ ] **测试**：
+  - 单元测试 `internal/usage` 覆盖率 ≥ 85%；含 5 个 case：OpenAI nonstream usage / OpenAI stream 最后 chunk usage / 缺失 usage 字段 / 模型不在 pricing 表 (cost=0+failed) / DB 写失败不影响响应。
+  - 集成测试 `//go:build e2e`：复用 T-007 e2e 流程，断言一次 chat 完成后 `cost_ledger` 与 `usage_events` 各多 1 行。
+- [ ] **seed 数据**：`deploy/postgres/002_seed.sql` 补 `model_pricing` 一行：`ark-code-latest` 的 input/output/reasoning/cached 价格各占位（实测方舟价格未公开，Demo-Ready 用 `0.50/1.50/0.00/0.00 USD per 1M tokens` 占位，注释标"placeholder"）。
+- [ ] **admin overview 不在本任务范围**：本任务只**写入** ledger / events，admin 查询接 ledger 走 T-006b。
+
+**不在范围**:
+- NATS 异步队列（Phase 1 完整版）。
+- 退款 / 补扣 / 配额扣减（T-009）。
+- 多 provider usage 字段差异（Anthropic 等留后续）。
+- admin overview 真实查 DB（T-006b）。
+- 价格表自动同步（Phase 2）。
+
+**Codex propose 前置 (必须)**: 至少覆盖：
+1. **入账触发点**：T-007 现有代码哪里钩入？Decorator pattern 包 `proxy.ArkChatProxy.ServeHTTP` vs 单独 `cmd/gateway` 一层中间件 vs `proxy.go` 内部直接调。给出取舍。
+2. **`internal/usage` 包结构**：哪几个文件，对外接口签名。
+3. **流式 deferred 入账的 goroutine 生命周期**：在 ServeHTTP 已经 return 后异步入账，怎么避免 ctx 被 cancel 导致 DB 写失败？建议用独立 `context.Background()` 替代 `r.Context()`。但要明示决策。
+4. **价格计算精度**：`numeric(18,10)` 在 Go 端用 `math/big.Rat` 还是 float64？或直接发原始 token 数到 DB 端用 SQL 算？Demo-Ready 阶段建议哪种。
+5. **缺 usage 字段的容错策略**：上游回了 200 但 usage 字段缺失或部分缺失（如方舟某种边角错误）—— ledger 是否写空行？还是 skip 不入账？
+6. **seed 价格占位**：明确"非真实价格、不可用于商务报价" 的注释方式。
+
+**依赖**: T-007 approved（已通过）+ T-003 approved（已通过，pricing view 已就绪）。
+
+**预计**: 4-6 小时（含 propose）。
+
+## PROPOSAL
+
+1. 入账触发点
+
+选择 `cmd/gateway` 一层 usage middleware/decorator 包住现有 `proxy.ArkChatProxy.ServeHTTP`，不在 `proxy.go` 内部直接调 DB，也不把 `internal/proxy` 改成依赖 `internal/usage`。
+
+取舍：
+- `cmd/gateway` middleware 可以在鉴权之后、代理之前拿到 `Subject` / `request_id` / 原始请求体中的 `model` 与 `stream`，通过 tee/ring writer 捕获已经写给客户端的响应尾部，然后在 `next.ServeHTTP` 返回后再解析和入账，符合"只在 T-007 emit 给客户端之后做 parse + DB 写"。
+- `proxy.go` 内部直接调最容易拿到上游响应，但会把代理、价格、ledger 写入耦在一起，后续多 provider 会更难拆。
+- 在 `internal/proxy` 包里做 ArkChatProxy 专用 decorator 也可行，但仍会让 proxy 暴露 usage 概念；T-008 只需要消费 OpenAI-compatible 响应，不需要重写 T-007 的转发逻辑。
+
+实现形态：`newMux` 里对 `/v1/chat/completions` 组合为 `auth.RequireVirtualKey(...)(usage.Middleware(...)(chatHandler))` 或等价顺序；middleware 会读取并恢复 request body，仅解析客户端原始 `model` / `stream`，不改变传给 T-007 的 body。响应 capture 写穿到真实 `ResponseWriter`，非流式保存有限 body，流式保存最后 N bytes（默认 256 KiB）用于找最终 usage chunk。
+
+2. `internal/usage` 包结构与接口
+
+新增 `internal/usage`，不引入 NATS，不引入 sqlc/pgx。
+
+- `types.go`：`RecordInput`、`ParsedUsage`、`TokenBreakdown`、`RecordResult` 等纯类型。`RecordInput` 包含 `RequestID`、`Subject` 中的 `OrganizationID/UserID/APIKeyID`、`ModelRequested`、`ModelActual`、`Provider`、`StatusCode`、`LatencyMS`、`Streaming`、captured response tail/body。
+- `middleware.go`：HTTP decorator。
+  ```go
+  type Recorder interface {
+      Record(ctx context.Context, input RecordInput) error
+  }
+
+  type MiddlewareConfig struct {
+      Provider      string
+      CaptureLimit  int64
+      RecordTimeout time.Duration
+      Logger        *slog.Logger
+      Now           func() time.Time
+  }
+
+  func Middleware(recorder Recorder, cfg MiddlewareConfig) func(http.Handler) http.Handler
+  ```
+- `parser.go`：OpenAI-compatible 解析器。
+  ```go
+  func ParseNonStream(body []byte) (ParsedUsage, bool, error)
+  func ParseStream(tail []byte) (ParsedUsage, bool, error)
+  ```
+  `bool=false` 表示没有 usage；parser 识别 `usage.prompt_tokens`、`completion_tokens`、`total_tokens`、`prompt_tokens_details.cached_tokens`、`completion_tokens_details.reasoning_tokens`，并从 response/chunk 的 `model` 填 `model_actual`。
+- `capture.go`：status recorder、有限 body buffer、SSE tail ring buffer。capture 只旁路观察，不能改变 flush 行为。
+- `store_postgres.go`：`database/sql` 写库实现。
+  ```go
+  type PostgresStore struct { db *sql.DB }
+  func NewPostgresStore(db *sql.DB) *PostgresStore
+  func (s *PostgresStore) Record(ctx context.Context, input RecordInput) error
+  ```
+- `cost.go`：封装 pricing lookup SQL 与 ledger insert SQL；Go 端不做 float 价格计算。
+
+Schema 兼容备注：当前 `usage_events` 还没有 `user_id`，但验收要求入账 `user_id`。T-008 实施时新增一条小 migration（v6）给 `usage_events` 加 nullable `user_id uuid REFERENCES users(id) ON DELETE SET NULL`，并补常用查询索引；不引入 admin overview 查询逻辑。
+
+3. 流式 deferred 入账 goroutine 生命周期
+
+middleware 在调用 `next.ServeHTTP` 前记录 `start_time`，从 request context 快照出 `Subject`、`request_id`、请求 body 里的 `model_requested` / `streaming`。`next.ServeHTTP` 返回时，响应已经写给客户端；此时构造不可变 `RecordInput`，再启动本进程内的 post-response goroutine 写库。
+
+关键决策：deferred goroutine **不能使用 `r.Context()`**。原因是 Go HTTP server 会在客户端断开、请求结束或 handler return 后 cancel request context；如果继续用它写 DB，SSE 正常结束后也可能被取消。T-008 使用：
+
+```go
+go func(input usage.RecordInput) {
+    ctx, cancel := context.WithTimeout(context.Background(), cfg.RecordTimeout)
+    defer cancel()
+    if err := recorder.Record(ctx, input); err != nil {
+        logger.Error("usage record failed", "request_id", input.RequestID, "err", err)
+    }
+}(snapshot)
+```
+
+默认 `RecordTimeout` 取 3s。这里的"同步入账"定义为同一进程内、无队列、无 NATS；但对客户端响应不阻塞，DB 失败只 log error，不修改已返回的 200/SSE。
+
+4. 价格计算精度
+
+选择 DB 端 SQL numeric 计算，不在 Go 端用 `float64` 或 `math/big.Rat`。Go 只传 int token 数；Postgres 用 `numeric(18,10)` 与当前价格行做计算并直接 insert `cost_ledger`。
+
+计算公式按 seed 注释的 USD per 1M tokens 执行：
+
+```sql
+cost_usd =
+  (prompt_tokens::numeric / 1000000) * input_rate_usd
+  + (completion_tokens::numeric / 1000000) * output_rate_usd
+  + (reasoning_tokens::numeric / 1000000) * reasoning_rate_usd
+  + (cached_tokens::numeric / 1000000) * cached_input_rate_usd
+```
+
+pricing lookup 从 `model_pricing_current` join `model_catalog`，优先用 `provider='ark' AND provider_model = model_actual`，找不到时 fallback 到 `canonical_model = model_requested`。若仍找不到当前价格，照常写 `usage_events` 与 `usage_token_breakdown`，`cost_ledger.cost_usd=0`、`settlement_status='failed'`、`billing_policy_version='demo-ready-v1'`，请求不失败。`request_id` 唯一冲突按幂等处理：记录 debug/warn 后不重复入账。
+
+5. 缺 usage 字段的容错策略
+
+对 `2xx` 响应执行 usage 解析；非 `2xx` 默认跳过 ledger 写入，只保留代理现有错误语义。
+
+对 `2xx` 但 usage 完全缺失：不 skip。写一条 `usage_events`，`error_code='usage_missing'`，`model_actual` 能从 response 取则取，取不到用 `model_requested`；写零值 `usage_token_breakdown`；写 `cost_ledger.cost_usd=0`、`settlement_status='failed'`。这样 demo 账本不会静默丢请求，后续 admin/排障可以看到入账失败原因。
+
+对 usage 存在但细分字段缺失：缺失的 `reasoning_tokens` / `cached_tokens` 按 0 处理，`total_tokens` 优先使用上游值，缺失时用 `prompt + completion + reasoning` 回填。`reasoning_tokens` 与 `cached_tokens` 始终独立入列，不合并进 prompt/completion。
+
+6. seed 价格占位
+
+在 `deploy/postgres/002_seed.sql` 为 `ark-code-latest` 补一条幂等 `model_pricing` seed，值为 `0.50/1.50/0.00/0.00 USD per 1M tokens`，仅服务 Demo-Ready 闭环。
+
+注释必须明确写在 seed 附近：
+
+```sql
+-- Demo-Ready placeholder pricing only.
+-- These Ark rates are NOT real provider pricing and MUST NOT be used for commercial quotes.
+-- Rates are USD per 1M tokens.
+```
+
+`source_url` 使用 `demo-placeholder:not-real-ark-pricing`，并用 `WHERE NOT EXISTS` 避免重复插入。真实价格同步与商务报价留 Phase 2。
+
+测试计划：`internal/usage` 单测覆盖 parser、middleware post-response 行为、pricing SQL 分支与 DB failure no-op，覆盖率目标 ≥ 85%；`//go:build e2e` 复用 T-007 e2e 流程，断言一次 chat 后 `usage_events` 与 `cost_ledger` 各新增一行。T-008 不做 NATS、退款/补扣/限流、多 provider usage 差异、admin overview，也不重新 capture 真方舟 fixture。
+
+---
+
 ## T-005a RBAC 权限模型与策略点 [phase:1] [owner:codex] [status:todo]
 
 **目标**: 把 T-003 写入的 `roles` / `role_assignments` 升级为运行时可用的权限模型；不接入具体 API（留 T-005b/c）。
