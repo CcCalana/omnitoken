@@ -1,0 +1,13 @@
+# AGENTS.md section 3.1 item 5.a plus 5.b; R-003-license approved MPL-2.0 as transitive only.
+MIT
+BSD-2-Clause
+BSD-3-Clause
+ISC
+Apache-2.0
+0BSD
+Unlicense
+BSL-1.0
+MPL-2.0
+EPL-2.0
+CDDL-1.0
+CDDL-1.1

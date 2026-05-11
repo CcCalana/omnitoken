@@ -11,13 +11,47 @@ services:
       - "${OMNITOKEN_POSTGRES_PORT:-15432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ../migrations/000001_init.up.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
-      - ./postgres/002_seed.sql:/docker-entrypoint-initdb.d/002_seed.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U omnitoken -d omnitoken"]
       interval: 5s
       timeout: 3s
       retries: 20
+
+  migrate:
+    image: omnitoken-migrate:local
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.migrate
+    environment:
+      OMNITOKEN_DATABASE_URL: "postgres://omnitoken:omnitoken@postgres:5432/omnitoken?sslmode=disable"
+    command: ["up"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  seed:
+    image: postgres:16-alpine
+    environment:
+      PGPASSWORD: omnitoken
+    volumes:
+      - ./postgres/002_seed.sql:/seed/002_seed.sql:ro
+    command:
+      [
+        "psql",
+        "-h",
+        "postgres",
+        "-U",
+        "omnitoken",
+        "-d",
+        "omnitoken",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-f",
+        "/seed/002_seed.sql"
+      ]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
 
   redis:
     image: redis:7-alpine
@@ -56,8 +90,8 @@ services:
     ports:
       - "8080:8080"
     depends_on:
-      postgres:
-        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       nats:
@@ -73,8 +107,8 @@ services:
     ports:
       - "8081:8081"
     depends_on:
-      postgres:
-        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       nats:

@@ -37,6 +37,38 @@ Windows fallback:
 .\scripts\dev.ps1 down
 ```
 
+## Move From initdb To golang-migrate
+
+New local databases start from an empty Postgres database. The compose
+`migrate` service runs all SQL files in `migrations/`, creates
+`schema_migrations`, and then the `seed` service applies
+`deploy/postgres/002_seed.sql`.
+
+Existing dev volumes that already ran `docker-entrypoint-initdb.d` have schema
+version 1 in the database but no `schema_migrations` row. Baseline those
+volumes once before running new migrations:
+
+```powershell
+$env:OMNITOKEN_DATABASE_URL="postgres://omnitoken:omnitoken@localhost:15432/omnitoken?sslmode=disable"
+go run ./cmd/migrate force -version 1
+go run ./cmd/migrate up
+```
+
+If a local migration is left dirty after an interrupted experiment, inspect the
+database first, then repair the version explicitly:
+
+```powershell
+go run ./cmd/migrate version
+go run ./cmd/migrate force -version 1
+go run ./cmd/migrate up
+```
+
+For a disposable dev database, run
+`docker compose -f deploy/docker-compose.yml down -v` to remove the old volume
+and let compose migrate from scratch on the next `make up`. Production
+databases are not baselined from initdb in this project; they should run the
+migrate service from an empty database.
+
 ## Configure Volcano Ark For Local Integration
 
 T-002 only loads Ark provider configuration; it does not forward requests yet.

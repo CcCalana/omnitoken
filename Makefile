@@ -8,11 +8,12 @@ help:
 	@echo "  make test          Run Go tests with race detector"
 	@echo "  make lint          Run Go vet"
 	@echo "  make format        Format Go code"
-	@echo "  make docker-build  Build gateway and admin container images"
+	@echo "  make docker-build  Build gateway, admin, and migrate container images"
 
 up:
 	docker build -f deploy/Dockerfile.gateway -t omnitoken-gateway:local .
 	docker build -f deploy/Dockerfile.admin -t omnitoken-admin:local .
+	docker build -f deploy/Dockerfile.migrate -t omnitoken-migrate:local .
 	docker compose -f deploy/docker-compose.yml up -d --no-build
 
 down:
@@ -33,6 +34,7 @@ format:
 docker-build:
 	docker build -f deploy/Dockerfile.gateway -t omnitoken-gateway:local .
 	docker build -f deploy/Dockerfile.admin -t omnitoken-admin:local .
+	docker build -f deploy/Dockerfile.migrate -t omnitoken-migrate:local .
 
 clean:
 	go clean ./...

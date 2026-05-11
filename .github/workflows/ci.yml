@@ -19,6 +19,11 @@ jobs:
         run: go vet ./...
       - name: Test
         run: go test -race ./...
+      - name: License check
+        run: |
+          allowed="$(grep -vE '^\s*(#|$)' .licenses/allowed.txt | paste -sd, -)"
+          go run github.com/google/go-licenses@v1.6.0 check ./... --ignore github.com/omnitoken/omnitoken --allowed_licenses="${allowed}"
+          go run github.com/google/go-licenses@v1.6.0 report ./... --ignore github.com/omnitoken/omnitoken
 
   docker:
     runs-on: ubuntu-latest
@@ -28,3 +33,5 @@ jobs:
         run: docker build -f deploy/Dockerfile.gateway -t omnitoken-gateway:ci .
       - name: Build admin image
         run: docker build -f deploy/Dockerfile.admin -t omnitoken-admin:ci .
+      - name: Build migrate image
+        run: docker build -f deploy/Dockerfile.migrate -t omnitoken-migrate:ci .
