@@ -4,10 +4,15 @@
 
 - Claude completed R-001 (see `REVIEW.md`). T-001 通过验收，但产生 4 个 HIGH + 5 个 MEDIUM 跟进项。
 - 新增 T-002 / T-003 / T-004，请按 ID 顺序由 Codex 接手。Ark provider 实测纪录与 golden 语料已落到 `testdata/golden/ark/`，`.env.example` 与 seed 已经把 `ark-code-latest` 写入，可被前端联调与 T-007 SSE 代理引用。
+- **2026-05-11 14:30** — Claude completed R-002. T-002 approve → status:approved。新增 3 个 MEDIUM (M-6 request_id 信任、M-7 CORS Allow-Methods、M-8 Ark URL 默认值) 不阻塞 T-003，但**必须在 T-005 虚拟 Key 鉴权动工前清掉**；建议 Codex 在做 T-003 前花 30 分钟扫掉这三项（小改）。
+- **2026-05-11 14:35** — 用户提出引入"1 admin + 10 user"为基准测试场景。Claude 起草并发测试矩阵草案，等用户确认 L1-L4 哪些进入 Phase 1 验收。等用户回复后再写正式任务条目（暂记为 T-CONC 占位）。
+- **2026-05-11 15:00** — 用户决策三件事: (a) 测试侧重 L2 正确性优先并作为 Phase 1 验收门; (b) L2/L3 上游使用**真火山方舟**; (c) admin 鉴权采用**完整 RBAC** (admin / member / viewer)。同步落地：`规划.md` 第十节增补 10.1 并发测试矩阵；本文件新增 T-002.1 / T-003 范围扩展 / T-005 拆 a/b/c / T-100 L2 套件。
+- **2026-05-11 15:00** — 用户授权方舟 dev key `4dc1b1a3-…`（详见 `.env`，已 git-ignored）。`AGENTS.md §9` 给出调用规则与成本边界，**严禁** 把真 key 写入源文件 / fixture / commit / 日志。
+- **2026-05-11 15:05** — User feedback: Claude 在此项目里要严格守边界，**不预先做 Codex 范围内的工作**（API 探测、golden 语料、seed 数据、配置文件、过度细化的任务断言）。已存入 Claude 长期记忆。本轮起所有任务条目仅写"目标 + 接受标准 + 不在范围"，实施细节均要求 Codex 在条目下 `## PROPOSAL` 区块给出，再由 Claude review。
 
 ---
 
-## T-002 收尾 Phase 0 HIGH 项 + 引入 internal/httpx + Ark provider 占位 [phase:0->1] [owner:codex] [status:review]
+## T-002 收尾 Phase 0 HIGH 项 + 引入 internal/httpx + Ark provider 占位 [phase:0->1] [owner:codex] [status:approved]
 
 **目标**: 落地 R-001 中的 4 个 HIGH 与 1 个 MEDIUM (M-4)，为 Phase 1 代理实现搭好基础设施；同时把火山方舟 provider 写入配置结构（先占位、不真正转发）。
 
@@ -54,24 +59,143 @@ Log sample:
 
 ---
 
-## T-003 数据层治理：索引、golang-migrate、pricing 版本 [phase:1] [owner:codex] [status:todo]
+## T-002.1 R-002 三个 MEDIUM 收尾 [phase:0->1] [owner:codex] [status:review]
 
-**目标**: 让数据库从"能建表"升级到"能查询、能演化"。本任务必须早于任何写真实查询的 SQL。
-
-**涉及**:
-- 新增 `migrations/000002_indexes.up.sql` / `.down.sql`：补齐 R-001 M-1 列出的索引集合。
-- 新增 `migrations/000003_pricing_window.up.sql` / `.down.sql`：`model_pricing` 增加 `effective_to timestamptz`，并创建视图 `model_pricing_current`（取每个 model_id 最新生效行）。
-- 引入 `github.com/golang-migrate/migrate/v4`（首个第三方 Go 依赖，需要在 PR 描述中显式备案版本与替代品比较）。
-- 新增 `cmd/migrate/main.go`：薄包装，支持 `up` / `down` / `version` / `force`，环境变量 `OMNITOKEN_DATABASE_URL`。
-- 修改 `deploy/docker-compose.yml`：去掉 `docker-entrypoint-initdb.d` 挂载 `000001_init.up.sql` 的方式，改为单独的 `migrate` service（一次性 job），seed.sql 保留。
-- `docs/runbooks/local-dev.md` 增补"如何手动执行迁移"段落。
+**目标**: 把 R-002 中 M-6 / M-7 / M-8 三个 MEDIUM 在进入 T-005 之前一次清掉。预计 30–60 分钟。
 
 **接受标准**:
+- [x] M-6 解决：`internal/httpx.RequestID` 始终生成内部权威 `request_id`；如客户端传 `X-Request-Id`，作为 `upstream_request_id` 字段同时落日志与上下文，但**不**覆盖内部 ID。`request_id` 字段不可由客户端伪造。
+- [x] M-7 解决：`internal/httpx.CORS` 签名扩展为 `CORS(origins []string, methods []string)`；admin 默认 `[]string{"GET","POST","PATCH","DELETE","OPTIONS"}`，gateway 仍按需配置。
+- [x] M-8 解决：`internal/config.Load()` 中 `Ark.OpenAIBaseURL` / `AnthropicBaseURL` / `DefaultModel` 三个字段在环境变量未设置时回退到方舟已知公开地址与 `ark-code-latest`，使得仅设置 `OMNITOKEN_ARK_API_KEY` 即可让 `Ark.Enabled()=true`。
+- [x] 三项均补单测；不引入新依赖；覆盖率不下降。
+
+**不在范围**: 任何真实上游转发或 RBAC 逻辑。
+
+**Codex propose 前置**: 不需要 propose，按上述标准直接做。
+
+**Result**: Implementation commit `68b85a7`. Verification passed:
+`go test -count=1 ./...`, `go vet ./...`, `gofmt -l .`,
+`go test -count=1 -cover ./internal/httpx ./internal/config` (`internal/httpx` 90.1%, `internal/config` 100.0%),
+and gateway/admin `docker build`. No real Ark upstream calls were made.
+
+---
+
+## T-003 数据层治理：索引、golang-migrate、pricing 版本、RBAC schema [phase:1] [owner:codex] [status:todo]
+
+**目标**: 让数据库从"能建表"升级到"能查询、能演化"。同时为 T-005 RBAC 鉴权预埋 schema。本任务必须早于任何写真实查询的 SQL。
+
+**接受标准**:
+- [ ] golang-migrate 引入并锁版，PR 描述列出 "Why not goose / atlas / dbmate"。
 - [ ] `migrate up && migrate down && migrate up` 在干净 Postgres 上 idempotent。
-- [ ] 启动 docker-compose 后 `schema_migrations` 表存在且记录最新版本。
-- [ ] 视图 `model_pricing_current` 在多版本价格数据中仅返回最新行（含一条 SQL 集成测试）。
-- [ ] `model_pricing` 历史行不会被删除，便于审计。
-- [ ] 任何新增 Go 依赖锁定到具体 minor 版本，并在 PR 描述列出 "Why not <alternative>"。
+- [ ] 启动 docker-compose 后 `schema_migrations` 表存在且记录最新版本；DDL 不再依赖 `docker-entrypoint-initdb.d`，seed.sql 保留。
+- [ ] 索引补齐至少覆盖：`usage_events(created_at)`、`usage_events(organization_id, created_at)`、`usage_events(api_key_id, created_at)`、`audit_logs(created_at)`、`cost_ledger(usage_event_id)`。
+- [ ] `model_pricing` 增加 `effective_to timestamptz` + 视图 `model_pricing_current`（每个 model_id 最新一行），含至少 1 个 SQL 集成测试。
+- [ ] RBAC schema 预埋：新增 `roles`(系统级三角色 `admin` / `member` / `viewer`，by canonical name) 与 `role_assignments`(user × organization × role)；DDL 已经入库但**不**包含鉴权 hook（hook 留 T-005a/b/c）。
+- [ ] migrations 全部双向，down 不留孤儿。
+
+**不在范围**:
+- 鉴权 / 权限检查逻辑（T-005a/b/c）。
+- 真正的查询代码（sqlc 引入留待后续任务）。
+
+**Codex propose 前置 (必须)**:
+在本条目下追加 `## PROPOSAL` 区块，至少包含：(1) `roles` 与 `role_assignments` 的表结构与外键设计选项及取舍；(2) `model_pricing_current` 用 VIEW 还是 materialized view 的依据；(3) `cmd/migrate` 的 CLI flag 集合；(4) 是否需要拆分多个 migration 文件以及顺序。Claude 在 `REVIEW.md` 给出 `[+] approved` 后再开工。
+
+---
+
+## T-005a RBAC 权限模型与策略点 [phase:1] [owner:codex] [status:todo]
+
+**目标**: 把 T-003 写入的 `roles` / `role_assignments` 升级为运行时可用的权限模型；不接入具体 API（留 T-005b/c）。
+
+**接受标准**:
+- [ ] 三角色含义明确并写入 ADR：
+  - `admin`: 全量写权限（CRUD API Keys / Quotas / Routes / Providers），可查所有 user 用量。
+  - `member`: 调用数据面 + 查自己的用量；不可改组织级配置。
+  - `viewer`: 只读管理台（overview / 自己的 logs），不可调用数据面。
+- [ ] `internal/auth` 暴露 `Subject{UserID, OrgID, Role}` 与 `Can(subject, action, resource) bool`；action/resource 用枚举常量，不传字符串。
+- [ ] 单元测试覆盖率 ≥ 90%，含 RBAC 越权矩阵（3 角色 × 至少 6 个 action × 至少 3 个 resource scope）。
+- [ ] 越权时不返回敏感错误信息（统一 403 envelope），错误码与 gateway envelope 风格一致。
+- [ ] 写新 ADR `0003-rbac-model.md`。
+
+**不在范围**:
+- HTTP 中间件接线（T-005b）。
+- 虚拟 Key gateway 鉴权（T-005c）。
+
+**Codex propose 前置 (必须)**:
+列出 (1) action / resource 枚举完整清单 (2) role-action 矩阵 (3) 与未来 organization-scoped tenant 的兼容路径 (4) 是否引入 Casbin / open-policy-agent 等第三方库以及取舍。
+
+---
+
+## T-005b Admin API 鉴权与中间件 [phase:1] [owner:codex] [status:todo]
+
+**目标**: 把 T-005a 的 RBAC 接到 admin 现有 / 待加的所有路由上。
+
+**接受标准**:
+- [ ] admin 所有路由强制带 `Authorization: Bearer <admin_token>`，未带或非法 token 返回 401（不是 403）。
+- [ ] admin token 与虚拟 Key 完全隔离：admin token 不能用于 gateway 数据面；虚拟 Key 不能用于 admin。
+- [ ] 中间件查询 user → role 链路，写入 `r.Context()`；handler 仅消费 `auth.SubjectFromContext(ctx)`，禁止 handler 内部再去查 DB 角色。
+- [ ] 每条写操作产生 `audit_logs` 一条，含 actor / before / after。
+- [ ] 越权返回 `403` + 统一 envelope，不区分"资源不存在"与"无权限"（防探测）。
+- [ ] 集成测试：admin / member / viewer 三种 token 对所有 admin 路由的越权矩阵全绿。
+
+**不在范围**:
+- 虚拟 Key 鉴权（T-005c）。
+- 实际新增 admin 写接口（创建 Key / 调整额度等）—— 这部分由 T-006 起的后续任务推进，但 T-005b 必须把已存在的 `/api/admin/overview` 接到 RBAC 上。
+
+**Codex propose 前置 (必须)**:
+(1) admin token 怎么存（数据库表设计 / 是否复用 api_keys 表加 owner_type） (2) token 哈希策略 (3) 与 viewer "只读" 的精确接口列表。
+
+---
+
+## T-005c 虚拟 Key Gateway 鉴权 [phase:1] [owner:codex] [status:todo]
+
+**目标**: gateway 数据面校验内部虚拟 Key，绑定 user / organization，执行模型白名单。
+
+**接受标准**:
+- [ ] gateway `/v1/*` 强制带 `Authorization: Bearer <virtual_key>`。
+- [ ] Key 哈希存储（`api_keys.key_hash`）；明文 Key 仅在创建时返回一次（由 T-005b 后续接口承接）。
+- [ ] `models_allowlist` 命中检查：请求的模型不在白名单 → 403 + envelope。
+- [ ] 校验失败统一 401 envelope；不暴露"key 存在但被禁用"与"key 不存在"的差异（防探测）。
+- [ ] 校验通过后将 `Subject` 写入 `r.Context()` 供后续 quota / proxy 阶段使用。
+- [ ] 测试覆盖率 ≥ 85%；含 timing-equal 的字符串比较（防 timing attack）。
+
+**不在范围**:
+- 实际转发到上游（T-007）。
+- 配额预扣（T-009）。
+
+**Codex propose 前置 (必须)**:
+(1) Key 格式（前缀 + 随机段长度 + 字符集）(2) `key_prefix` 索引策略 (3) cache 加速方案（Redis or in-process LRU）以及失效边界。
+
+---
+
+## T-100 L2 端到端正确性套件（1 admin + 10 user 真方舟） [phase:1] [owner:codex] [status:blocked-by-T-005c-T-007-T-008-T-009]
+
+**目标**: 作为 Phase 1 的验收门，证明 OmniToken 在企业最小可信场景下账务闭环、RBAC 隔离、限流正确、成本可控。
+
+**接受标准** (实施细节由 Codex propose，但下列任何一项失败即 Phase 1 不通过):
+- [ ] **0 panic / 0 data race / 0 goroutine leak** 全程。
+- [ ] **账本闭环**: `Σ 每个 user 的实际消耗 == admin.overview.total_tokens`，且 `Σ cost_ledger.cost_usd` 与方舟厂商账单误差 ≤ 1%（在测试结束时打印两边数字做断言）。
+- [ ] **RBAC 隔离矩阵全过**: member token 不能调 admin 写接口；viewer token 不能调 gateway 数据面；user A 用自己虚拟 Key 不能查 user B 的 usage。
+- [ ] **限流正确性**: 触发 RPM 超额时返回 429 且**未扣减**配额（未消费的 token 不入账）。
+- [ ] **成本上限保护**: 单次跑必须实现 `MAX_REQUESTS` 硬上限（环境变量），超过即测试主动失败而非继续烧 token。建议默认 600。
+- [ ] **跑完时长** ≤ 10min，预计单次成本 ≤ 5 RMB。
+- [ ] **CI**: 用 GitHub Actions `workflow_dispatch` + `schedule: nightly`，**禁止** 在 PR / push 上跑。Secret 通过 `secrets.OMNITOKEN_ARK_API_KEY` 注入。
+- [ ] Phase 1 验收门: 至少 **3 次连续 nightly 通过** 才宣告 Phase 1 完成。
+
+**不在范围**:
+- 吞吐压测（L3，留 Phase 2）。
+- 公平性测试（L4，留 Phase 2）。
+- mock 上游（L2 必须真方舟）。
+
+**Codex propose 前置 (必须)**: 在本条目下追加 `## PROPOSAL` 区块，覆盖至少：
+1. fixture 加载方式（docker-compose 直接起 vs testcontainers）以及对调试体验的取舍。
+2. 11 goroutine 的编排骨架（go routine + ctx 取消 / errgroup / worker pool）。
+3. 账本断言的精确公式（如何处理 in-flight 请求与最终一致性窗口）。
+4. RBAC 越权矩阵的最小测试集（不要枚举 N×M，给出代表性子集）。
+5. `MAX_REQUESTS` 与 `MAX_DURATION` 双闸的实现位置与失败行为。
+6. 方舟厂商账单对账数据怎么取（API 还是手动导出）；如不可自动取，给一个"半自动"对账步骤。
+7. nightly workflow 的 yaml 草案 + secret 注入路径。
+
+**依赖**: T-005c（虚拟 Key 鉴权）、T-007（SSE 代理）、T-008（usage parser）、T-009（限流与预扣）必须先完成。本条目暂处于 `blocked-by` 状态；上述四项都进入 `approved` 后 Claude 解锁此任务。
 
 ---
 
