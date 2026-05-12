@@ -417,7 +417,7 @@ fixture 设计：
 
 ---
 
-## T-008 usage parser + cost_ledger 入账（Demo-Ready 版） [phase:1] [owner:codex] [status:todo]
+## T-008 usage parser + cost_ledger 入账（Demo-Ready 版） [phase:1] [owner:codex] [status:review]
 
 **目标**: T-007 已经把 usage 字段透传给客户端；T-008 在 gateway **同步把 usage 解析并入 cost_ledger / usage_events 两张表**。这是 Demo-Ready 路线让"账本闭环"真正成立的核心。
 
@@ -562,6 +562,8 @@ pricing lookup 从 `model_pricing_current` join `model_catalog`，优先用 `pro
 `source_url` 使用 `demo-placeholder:not-real-ark-pricing`，并用 `WHERE NOT EXISTS` 避免重复插入。真实价格同步与商务报价留 Phase 2。
 
 测试计划：`internal/usage` 单测覆盖 parser、middleware post-response 行为、pricing SQL 分支与 DB failure no-op，覆盖率目标 ≥ 85%；`//go:build e2e` 复用 T-007 e2e 流程，断言一次 chat 后 `usage_events` 与 `cost_ledger` 各新增一行。T-008 不做 NATS、退款/补扣/限流、多 provider usage 差异、admin overview，也不重新 capture 真方舟 fixture。
+
+**Result**: `4761671` — implemented Demo-Ready usage recording with a post-response gateway middleware, OpenAI-compatible non-stream/SSE usage parsing, DB-side numeric cost calculation, `usage_events.user_id` migration, placeholder Ark pricing seed, and `//go:build e2e` coverage for ledger rows. Self-test: `go test ./...`; `go vet ./...`; `go test -cover ./internal/usage` (93.7%); `go test -tags=e2e ./internal/proxy ./internal/usage` with required env absent so true upstream tests compiled and skipped; `go build ./cmd/gateway ./cmd/admin ./cmd/migrate`; local Postgres `migrate up -> version 6 dirty false`; seed SQL verified `model_pricing_current` has 1 Ark placeholder row. No real Ark upstream call was made in this implementation pass.
 
 ---
 
