@@ -132,4 +132,26 @@ PASS: 12  |  FAIL: 0  |  SKIP: 0
 - **§3 安全基线 4/4**: 日志无泄露 / 401 不区分 / 不透传上游错误 / 不透传敏感头
 - **§4 代码质量 7/7**: 所有核心包覆盖率达标 (auth 96.1%, proxy 88.4%, usage 93.7%)
 
-**🎉 Demo-Ready 路线 100% 完成 (8/8)。可以 push 到 GitHub。**
+~~Demo-Ready 路线 100% 完成~~ — 修正：前端假数据/admin 无鉴权/未并发测试。新增 PRE-PUSH GATE。
+
+---
+
+## R-009a (T-009a, commits `ce204b5` + `d3eb0e6`)
+
+**结论: `[+] Approved`** — 0C/0H/0M/1N。覆盖率 60.9%。
+
+**正面信号 (10条)**:
+1. ✅ `overviewStore` 接口扩展 `LoadUsers` + `LoadModels`，零破坏性变更
+2. ✅ users SQL 精确：`users LEFT JOIN usage_events LEFT JOIN usage_token_breakdown`，当月窗口 `$1/$2`
+3. ✅ models SQL 三级 COALESCE：`model_actual → model_requested → 'unknown'`，与 overview 一致
+4. ✅ models SQL 包含 `cost_ledger` JOIN，前端可展示真实成本
+5. ✅ handler pattern 与 overview 完全一致：nil store → 200 空数组、DB error → 500 + envelope
+6. ✅ `emptyUsersResponse()` / `emptyModelsResponse()` 返回非 nil 空切片（JSON `[]` 不是 `null`）
+7. ✅ users `quota` 字段固定 0，符合 "Demo 阶段无配额系统" 约束
+8. ✅ 测试覆盖 8 case：handler 正常/空/error × 2 API + store SQL 映射 + 空结果 × 2 API
+9. ✅ fakeOverviewStore 扩展干净，每个方法独立 called/now/err 字段
+10. ✅ SQL 参数断言 + query 文本断言双验证
+
+**N-33**: users query 的 `ORDER BY used_tokens DESC` 中 `used_tokens` 是 `SUM(utb.total_tokens)` 的别名，部分 Postgres 版本可能不支持在 ORDER BY 中使用 SELECT 别名。实际 PG 12+ 都支持，不阻塞。
+
+**Pre-push gate 进度: 1/4**

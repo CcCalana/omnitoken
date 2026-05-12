@@ -116,11 +116,11 @@
 ## PRE-PUSH GATE (2026-05-12 user-locked)
 
 **必须全过才能 push**: T-009a → T-009b → T-010 → T-012 → push。
-当前进度：**0/4**
+当前进度：**1/4** (T-009a ✅)
 
 ---
 
-## T-009a 后端用户/模型聚合 API [phase:1] [owner:codex] [status:review]
+## T-009a 后端用户/模型聚合 API [phase:1] [owner:codex] [status:approved]
 
 **Started**: 2026-05-12 21:30 CST
 
@@ -152,7 +152,7 @@
 
 ---
 
-## T-009b 前端用户/模型页接真数据 [phase:1] [owner:codex] [status:blocked-by-T-009a]
+## T-009b 前端用户/模型页接真数据 [phase:1] [owner:codex] [status:todo]
 
 **目标**: 消除 `测试前端.html` 中的**全部**硬编码假数据，3 个 tab 全展示真实数据。
 
@@ -190,7 +190,7 @@
 
 ---
 
-## T-012 并发压测验证 [phase:1] [owner:codex] [status:blocked-by-T-009a]
+## T-012 并发压测验证 [phase:1] [owner:codex] [status:todo]
 
 **目标**: 用 Go 写一个简单的并发测试工具，证明 gateway 在 10 并发 × 10 请求（共 100 次）下无 panic、无 data race、usage 入账一致。
 
