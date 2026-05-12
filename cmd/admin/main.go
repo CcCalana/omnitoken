@@ -50,6 +50,33 @@ type modelUsage struct {
 	Share  float64 `json:"share"`
 }
 
+type usersResponse struct {
+	Users []adminUserUsage `json:"users"`
+}
+
+type adminUserUsage struct {
+	UserID      string `json:"user_id"`
+	Email       string `json:"email"`
+	DisplayName string `json:"display_name"`
+	UsedTokens  int64  `json:"used_tokens"`
+	Quota       int64  `json:"quota"`
+	Status      string `json:"status"`
+}
+
+type modelsResponse struct {
+	Models []adminModelUsage `json:"models"`
+}
+
+type adminModelUsage struct {
+	Model            string  `json:"model"`
+	Provider         string  `json:"provider"`
+	PromptTokens     int64   `json:"prompt_tokens"`
+	CompletionTokens int64   `json:"completion_tokens"`
+	TotalTokens      int64   `json:"total_tokens"`
+	CostUSD          float64 `json:"cost_usd"`
+	CallCount        int64   `json:"call_count"`
+}
+
 type createVirtualKeyRequest struct {
 	OrganizationID string     `json:"organization_id"`
 	UserID         string     `json:"user_id"`
@@ -89,6 +116,8 @@ type virtualKeyCreator interface {
 
 type overviewStore interface {
 	LoadOverview(context.Context, time.Time) (overviewResponse, error)
+	LoadUsers(context.Context, time.Time) (usersResponse, error)
+	LoadModels(context.Context, time.Time) (modelsResponse, error)
 }
 
 type postgresVirtualKeyCreator struct {
@@ -169,6 +198,8 @@ func newMux(logger *slog.Logger, cfg config.AdminConfig, overview overviewStore,
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
 	mux.HandleFunc("GET /api/admin/overview", makeOverviewHandler(logger, overview, time.Now))
+	mux.HandleFunc("GET /api/admin/users", makeUsersHandler(logger, overview, time.Now))
+	mux.HandleFunc("GET /api/admin/models", makeModelsHandler(logger, overview, time.Now))
 	if cfg.BootstrapToken != "" && creator != nil {
 		// Demo-Ready 简化版: this admin-port-only endpoint lives on
 		// 8081, not the gateway data-plane port 8080. Full admin auth/RBAC and
@@ -209,6 +240,50 @@ func makeOverviewHandler(logger *slog.Logger, store overviewStore, now func() ti
 	}
 }
 
+func makeUsersHandler(logger *slog.Logger, store overviewStore, now func() time.Time) http.HandlerFunc {
+	if now == nil {
+		now = time.Now
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		if store == nil {
+			httpx.WriteJSON(w, http.StatusOK, emptyUsersResponse())
+			return
+		}
+
+		users, err := store.LoadUsers(r.Context(), now())
+		if err != nil {
+			logger.Error("load admin users", "error", err)
+			httpx.WriteJSON(w, http.StatusInternalServerError, errorEnvelope("failed to load users", "server_error", "users_query_failed"))
+			return
+		}
+
+		httpx.WriteJSON(w, http.StatusOK, users)
+	}
+}
+
+func makeModelsHandler(logger *slog.Logger, store overviewStore, now func() time.Time) http.HandlerFunc {
+	if now == nil {
+		now = time.Now
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		if store == nil {
+			httpx.WriteJSON(w, http.StatusOK, emptyModelsResponse())
+			return
+		}
+
+		models, err := store.LoadModels(r.Context(), now())
+		if err != nil {
+			logger.Error("load admin models", "error", err)
+			httpx.WriteJSON(w, http.StatusInternalServerError, errorEnvelope("failed to load models", "server_error", "models_query_failed"))
+			return
+		}
+
+		httpx.WriteJSON(w, http.StatusOK, models)
+	}
+}
+
 func zeroOverview(now time.Time) overviewResponse {
 	return overviewResponse{
 		Period:            now.UTC().Format("2006-01"),
@@ -216,6 +291,14 @@ func zeroOverview(now time.Time) overviewResponse {
 		Trend:             []dailyTokenUsage{},
 		ModelUsage:        []modelUsage{},
 	}
+}
+
+func emptyUsersResponse() usersResponse {
+	return usersResponse{Users: []adminUserUsage{}}
+}
+
+func emptyModelsResponse() modelsResponse {
+	return modelsResponse{Models: []adminModelUsage{}}
 }
 
 func (s *postgresOverviewStore) LoadOverview(ctx context.Context, now time.Time) (overviewResponse, error) {
@@ -333,6 +416,92 @@ ORDER BY total_tokens DESC, model ASC`
 		return nil, fmt.Errorf("iterate overview model usage: %w", err)
 	}
 	return usage, nil
+}
+
+func (s *postgresOverviewStore) LoadUsers(ctx context.Context, now time.Time) (usersResponse, error) {
+	monthStart, monthEnd := monthWindow(now)
+	const usersQuery = `
+SELECT
+  u.id::text AS user_id,
+  u.email,
+  u.display_name,
+  COALESCE(SUM(utb.total_tokens), 0)::bigint AS used_tokens,
+  u.status
+FROM users u
+LEFT JOIN usage_events ue
+  ON ue.user_id = u.id
+  AND ue.created_at >= $1
+  AND ue.created_at < $2
+LEFT JOIN usage_token_breakdown utb ON utb.usage_event_id = ue.id
+GROUP BY u.id, u.email, u.display_name, u.status
+ORDER BY used_tokens DESC, u.display_name ASC, u.email ASC`
+
+	rows, err := s.db.QueryContext(ctx, usersQuery, monthStart, monthEnd)
+	if err != nil {
+		return usersResponse{}, fmt.Errorf("query admin users: %w", err)
+	}
+	defer rows.Close()
+
+	response := emptyUsersResponse()
+	for rows.Next() {
+		var item adminUserUsage
+		if err := rows.Scan(&item.UserID, &item.Email, &item.DisplayName, &item.UsedTokens, &item.Status); err != nil {
+			return usersResponse{}, fmt.Errorf("scan admin users: %w", err)
+		}
+		response.Users = append(response.Users, item)
+	}
+	if err := rows.Err(); err != nil {
+		return usersResponse{}, fmt.Errorf("iterate admin users: %w", err)
+	}
+	return response, nil
+}
+
+func (s *postgresOverviewStore) LoadModels(ctx context.Context, now time.Time) (modelsResponse, error) {
+	monthStart, monthEnd := monthWindow(now)
+	const modelsQuery = `
+SELECT
+  COALESCE(NULLIF(ue.model_actual, ''), ue.model_requested, 'unknown') AS model,
+  COALESCE(NULLIF(ue.provider, ''), 'unknown') AS provider,
+  COALESCE(SUM(utb.prompt_tokens), 0)::bigint AS prompt_tokens,
+  COALESCE(SUM(utb.completion_tokens), 0)::bigint AS completion_tokens,
+  COALESCE(SUM(utb.total_tokens), 0)::bigint AS total_tokens,
+  COALESCE(SUM(cl.cost_usd), 0)::float8 AS cost_usd,
+  COUNT(*)::bigint AS call_count
+FROM usage_events ue
+LEFT JOIN usage_token_breakdown utb ON utb.usage_event_id = ue.id
+LEFT JOIN cost_ledger cl ON cl.usage_event_id = ue.id
+WHERE ue.created_at >= $1 AND ue.created_at < $2
+GROUP BY
+  COALESCE(NULLIF(ue.model_actual, ''), ue.model_requested, 'unknown'),
+  COALESCE(NULLIF(ue.provider, ''), 'unknown')
+ORDER BY total_tokens DESC, model ASC`
+
+	rows, err := s.db.QueryContext(ctx, modelsQuery, monthStart, monthEnd)
+	if err != nil {
+		return modelsResponse{}, fmt.Errorf("query admin models: %w", err)
+	}
+	defer rows.Close()
+
+	response := emptyModelsResponse()
+	for rows.Next() {
+		var item adminModelUsage
+		if err := rows.Scan(
+			&item.Model,
+			&item.Provider,
+			&item.PromptTokens,
+			&item.CompletionTokens,
+			&item.TotalTokens,
+			&item.CostUSD,
+			&item.CallCount,
+		); err != nil {
+			return modelsResponse{}, fmt.Errorf("scan admin models: %w", err)
+		}
+		response.Models = append(response.Models, item)
+	}
+	if err := rows.Err(); err != nil {
+		return modelsResponse{}, fmt.Errorf("iterate admin models: %w", err)
+	}
+	return response, nil
 }
 
 func makeCreateVirtualKeyHandler(logger *slog.Logger, bootstrapToken string, creator virtualKeyCreator) http.HandlerFunc {

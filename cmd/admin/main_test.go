@@ -137,6 +137,157 @@ func TestOverviewStoreErrorReturns500(t *testing.T) {
 	}
 }
 
+func TestUsersFallsBackToEmptyWithoutStore(t *testing.T) {
+	t.Parallel()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/users", nil)
+	rec := httptest.NewRecorder()
+
+	newMux(testLogger(), testAdminConfig(), nil, nil).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"users":[]`) {
+		t.Fatalf("expected empty users array, got %s", rec.Body.String())
+	}
+}
+
+func TestUsersReturnsStoreData(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 12, 9, 0, 0, 0, time.UTC)
+	store := &fakeOverviewStore{
+		users: usersResponse{
+			Users: []adminUserUsage{
+				{
+					UserID:      "00000000-0000-0000-0000-000000000201",
+					Email:       "admin@democorp.local",
+					DisplayName: "Demo Admin",
+					UsedTokens:  42,
+					Quota:       0,
+					Status:      "active",
+				},
+			},
+		},
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/users", nil)
+	rec := httptest.NewRecorder()
+
+	makeUsersHandler(testLogger(), store, func() time.Time { return now }).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+	if !store.usersCalled || !store.usersNow.Equal(now) {
+		t.Fatalf("store was not called with fixed now: called=%v now=%s", store.usersCalled, store.usersNow)
+	}
+	var body usersResponse
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode users response: %v", err)
+	}
+	if len(body.Users) != 1 || body.Users[0].UsedTokens != 42 || body.Users[0].Quota != 0 {
+		t.Fatalf("unexpected users response: %+v", body)
+	}
+}
+
+func TestUsersStoreErrorReturns500(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeOverviewStore{usersErr: errors.New("database unavailable")}
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/users", nil)
+	rec := httptest.NewRecorder()
+
+	makeUsersHandler(testLogger(), store, time.Now).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, rec.Code)
+	}
+	var body map[string]map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if body["error"]["code"] != "users_query_failed" {
+		t.Fatalf("unexpected error body: %#v", body)
+	}
+}
+
+func TestModelsFallsBackToEmptyWithoutStore(t *testing.T) {
+	t.Parallel()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/models", nil)
+	rec := httptest.NewRecorder()
+
+	newMux(testLogger(), testAdminConfig(), nil, nil).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"models":[]`) {
+		t.Fatalf("expected empty models array, got %s", rec.Body.String())
+	}
+}
+
+func TestModelsReturnsStoreData(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 12, 9, 0, 0, 0, time.UTC)
+	store := &fakeOverviewStore{
+		models: modelsResponse{
+			Models: []adminModelUsage{
+				{
+					Model:            "glm-5.1",
+					Provider:         "ark",
+					PromptTokens:     10,
+					CompletionTokens: 5,
+					TotalTokens:      15,
+					CostUSD:          0.0001,
+					CallCount:        2,
+				},
+			},
+		},
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/models", nil)
+	rec := httptest.NewRecorder()
+
+	makeModelsHandler(testLogger(), store, func() time.Time { return now }).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+	if !store.modelsCalled || !store.modelsNow.Equal(now) {
+		t.Fatalf("store was not called with fixed now: called=%v now=%s", store.modelsCalled, store.modelsNow)
+	}
+	var body modelsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode models response: %v", err)
+	}
+	if len(body.Models) != 1 || body.Models[0].Model != "glm-5.1" || body.Models[0].CallCount != 2 {
+		t.Fatalf("unexpected models response: %+v", body)
+	}
+}
+
+func TestModelsStoreErrorReturns500(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeOverviewStore{modelsErr: errors.New("database unavailable")}
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/models", nil)
+	rec := httptest.NewRecorder()
+
+	makeModelsHandler(testLogger(), store, time.Now).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, rec.Code)
+	}
+	var body map[string]map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if body["error"]["code"] != "models_query_failed" {
+		t.Fatalf("unexpected error body: %#v", body)
+	}
+}
+
 func TestPostgresOverviewStoreLoadOverviewMapsSQLResults(t *testing.T) {
 	now := time.Date(2026, 5, 12, 10, 30, 0, 0, time.UTC)
 	db := openFakeAdminDB(t, []adminFakeSQLResponse{
@@ -235,6 +386,147 @@ func TestPostgresOverviewStoreLoadOverviewGuardsZeroTokenShare(t *testing.T) {
 	}
 	if got.ModelUsage[0].Share != 0 {
 		t.Fatalf("expected zero share when total tokens is zero, got %+v", got.ModelUsage[0])
+	}
+}
+
+func TestPostgresOverviewStoreLoadUsersMapsSQLResults(t *testing.T) {
+	now := time.Date(2026, 5, 12, 10, 30, 0, 0, time.UTC)
+	db := openFakeAdminDB(t, []adminFakeSQLResponse{
+		{
+			columns: []string{"user_id", "email", "display_name", "used_tokens", "status"},
+			rows: [][]driver.Value{
+				{"00000000-0000-0000-0000-000000000201", "admin@democorp.local", "Demo Admin", int64(300), "active"},
+				{"00000000-0000-0000-0000-000000000202", "user01@democorp.local", "Demo User 01", int64(0), "disabled"},
+			},
+		},
+	})
+	store := &postgresOverviewStore{db: db}
+
+	got, err := store.LoadUsers(context.Background(), now)
+	if err != nil {
+		t.Fatalf("load users: %v", err)
+	}
+
+	if len(got.Users) != 2 {
+		t.Fatalf("expected two users, got %+v", got.Users)
+	}
+	if got.Users[0].Email != "admin@democorp.local" || got.Users[0].UsedTokens != 300 || got.Users[0].Quota != 0 {
+		t.Fatalf("unexpected first user row: %+v", got.Users[0])
+	}
+	if got.Users[1].Status != "disabled" || got.Users[1].UsedTokens != 0 {
+		t.Fatalf("unexpected second user row: %+v", got.Users[1])
+	}
+
+	queries := fakeAdminSQLSnapshot()
+	if len(queries) != 1 {
+		t.Fatalf("expected 1 query, got %d", len(queries))
+	}
+	monthStart, monthEnd := monthWindow(now)
+	assertTimeArg(t, queries[0].args[0], monthStart)
+	assertTimeArg(t, queries[0].args[1], monthEnd)
+	if !strings.Contains(queries[0].query, "FROM users u") || !strings.Contains(queries[0].query, "LEFT JOIN usage_events ue") {
+		t.Fatalf("users query should aggregate users through usage events: %s", queries[0].query)
+	}
+	if !strings.Contains(queries[0].query, "ue.created_at >= $1") || !strings.Contains(queries[0].query, "ue.created_at < $2") {
+		t.Fatalf("users query should filter usage rows by month window: %s", queries[0].query)
+	}
+}
+
+func TestPostgresOverviewStoreLoadUsersEmptyResults(t *testing.T) {
+	db := openFakeAdminDB(t, []adminFakeSQLResponse{
+		{
+			columns: []string{"user_id", "email", "display_name", "used_tokens", "status"},
+			rows:    [][]driver.Value{},
+		},
+	})
+	store := &postgresOverviewStore{db: db}
+
+	got, err := store.LoadUsers(context.Background(), time.Date(2026, 5, 12, 10, 30, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("load users: %v", err)
+	}
+	if got.Users == nil || len(got.Users) != 0 {
+		t.Fatalf("expected empty users array, got %+v", got.Users)
+	}
+}
+
+func TestPostgresOverviewStoreLoadModelsMapsSQLResults(t *testing.T) {
+	now := time.Date(2026, 5, 12, 10, 30, 0, 0, time.UTC)
+	db := openFakeAdminDB(t, []adminFakeSQLResponse{
+		{
+			columns: []string{
+				"model",
+				"provider",
+				"prompt_tokens",
+				"completion_tokens",
+				"total_tokens",
+				"cost_usd",
+				"call_count",
+			},
+			rows: [][]driver.Value{
+				{"glm-5.1", "ark", int64(100), int64(50), int64(150), float64(0.0001), int64(2)},
+				{"unknown", "unknown", int64(1), int64(0), int64(1), float64(0), int64(1)},
+			},
+		},
+	})
+	store := &postgresOverviewStore{db: db}
+
+	got, err := store.LoadModels(context.Background(), now)
+	if err != nil {
+		t.Fatalf("load models: %v", err)
+	}
+
+	if len(got.Models) != 2 {
+		t.Fatalf("expected two model rows, got %+v", got.Models)
+	}
+	if got.Models[0].Model != "glm-5.1" || got.Models[0].Provider != "ark" || got.Models[0].TotalTokens != 150 {
+		t.Fatalf("unexpected first model row: %+v", got.Models[0])
+	}
+	if got.Models[0].PromptTokens != 100 || got.Models[0].CompletionTokens != 50 || got.Models[0].CallCount != 2 {
+		t.Fatalf("unexpected first model counters: %+v", got.Models[0])
+	}
+	if got.Models[1].Provider != "unknown" || got.Models[1].CostUSD != 0 {
+		t.Fatalf("unexpected second model row: %+v", got.Models[1])
+	}
+
+	queries := fakeAdminSQLSnapshot()
+	if len(queries) != 1 {
+		t.Fatalf("expected 1 query, got %d", len(queries))
+	}
+	monthStart, monthEnd := monthWindow(now)
+	assertTimeArg(t, queries[0].args[0], monthStart)
+	assertTimeArg(t, queries[0].args[1], monthEnd)
+	if !strings.Contains(queries[0].query, "GROUP BY") || !strings.Contains(queries[0].query, "model_actual") {
+		t.Fatalf("models query should group by model fallback expression: %s", queries[0].query)
+	}
+	if !strings.Contains(queries[0].query, "COUNT(*)::bigint AS call_count") {
+		t.Fatalf("models query should expose call_count: %s", queries[0].query)
+	}
+}
+
+func TestPostgresOverviewStoreLoadModelsEmptyResults(t *testing.T) {
+	db := openFakeAdminDB(t, []adminFakeSQLResponse{
+		{
+			columns: []string{
+				"model",
+				"provider",
+				"prompt_tokens",
+				"completion_tokens",
+				"total_tokens",
+				"cost_usd",
+				"call_count",
+			},
+			rows: [][]driver.Value{},
+		},
+	})
+	store := &postgresOverviewStore{db: db}
+
+	got, err := store.LoadModels(context.Background(), time.Date(2026, 5, 12, 10, 30, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("load models: %v", err)
+	}
+	if got.Models == nil || len(got.Models) != 0 {
+		t.Fatalf("expected empty models array, got %+v", got.Models)
 	}
 }
 
@@ -380,16 +672,36 @@ func (f *fakeVirtualKeyCreator) CreateVirtualKey(_ context.Context, params creat
 }
 
 type fakeOverviewStore struct {
-	response overviewResponse
-	err      error
-	called   bool
-	now      time.Time
+	response     overviewResponse
+	users        usersResponse
+	models       modelsResponse
+	err          error
+	usersErr     error
+	modelsErr    error
+	called       bool
+	usersCalled  bool
+	modelsCalled bool
+	now          time.Time
+	usersNow     time.Time
+	modelsNow    time.Time
 }
 
 func (f *fakeOverviewStore) LoadOverview(_ context.Context, now time.Time) (overviewResponse, error) {
 	f.called = true
 	f.now = now
 	return f.response, f.err
+}
+
+func (f *fakeOverviewStore) LoadUsers(_ context.Context, now time.Time) (usersResponse, error) {
+	f.usersCalled = true
+	f.usersNow = now
+	return f.users, f.usersErr
+}
+
+func (f *fakeOverviewStore) LoadModels(_ context.Context, now time.Time) (modelsResponse, error) {
+	f.modelsCalled = true
+	f.modelsNow = now
+	return f.models, f.modelsErr
 }
 
 func assertTimeArg(t *testing.T, value driver.Value, want time.Time) {

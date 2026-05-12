@@ -120,25 +120,27 @@
 
 ---
 
-## T-009a 后端用户/模型聚合 API [phase:1] [owner:codex] [status:todo]
+## T-009a 后端用户/模型聚合 API [phase:1] [owner:codex] [status:review]
+
+**Started**: 2026-05-12 21:30 CST
 
 **目标**: 新增 2 个 admin API，为前端用户页和模型页提供真实数据。
 
 **接受标准**:
-- [ ] `GET /api/admin/users` 返回当前月 users 列表 + 各用户 token 聚合：
+- [x] `GET /api/admin/users` 返回当前月 users 列表 + 各用户 token 聚合：
   ```json
   {"users": [{"user_id":"...","email":"...","display_name":"...","used_tokens":12345,"quota":0,"status":"active"}]}
   ```
   查询 `users` JOIN `usage_events` + `usage_token_breakdown`，当月窗口 `[monthStart, nextMonth)`。`quota` 字段 Demo 阶段固定返回 0（无配额系统）。
-- [ ] `GET /api/admin/models` 返回当前月模型维度聚合：
+- [x] `GET /api/admin/models` 返回当前月模型维度聚合：
   ```json
   {"models": [{"model":"glm-5.1","provider":"ark","prompt_tokens":100,"completion_tokens":50,"total_tokens":150,"cost_usd":0.0001,"call_count":2}]}
   ```
   查询 `usage_events` + `usage_token_breakdown` + `cost_ledger`，按 `model_actual` 分组。
-- [ ] 两个 endpoint 都走 `overviewStore` 或同级抽象，复用 `cmd/admin` 的 `*sql.DB`。
-- [ ] DB 连接为空时返回 200 + 空数组（降级一致性，同 overview）。
-- [ ] 单元测试覆盖有数据 + 空数据 case。
-- [ ] 不改 gateway、不改 overview API、不引入新依赖。
+- [x] 两个 endpoint 都走 `overviewStore` 或同级抽象，复用 `cmd/admin` 的 `*sql.DB`。
+- [x] DB 连接为空时返回 200 + 空数组（降级一致性，同 overview）。
+- [x] 单元测试覆盖有数据 + 空数据 case。
+- [x] 不改 gateway、不改 overview API、不引入新依赖。
 
 **不在范围**: 分页 / 搜索 / 额度修改 / RBAC。
 
@@ -223,4 +225,3 @@ Admin 端口 session/JWT + audit_logs。依赖 T-005a。
 
 ### T-004 小修小补 [status:todo]
 docker-compose profile / Makefile / OpenAPI 等 NIT。
-
