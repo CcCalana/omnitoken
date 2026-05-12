@@ -14,6 +14,7 @@ import (
 	"github.com/omnitoken/omnitoken/internal/config"
 	"github.com/omnitoken/omnitoken/internal/httpx"
 	"github.com/omnitoken/omnitoken/internal/proxy"
+	"github.com/omnitoken/omnitoken/internal/usage"
 )
 
 type healthResponse struct {
@@ -69,7 +70,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              cfg.Gateway.Addr,
-		Handler:           newMux(logger, auth.NewPostgresStore(db), newArkChatProxy(cfg, logger)),
+		Handler:           newMux(logger, auth.NewPostgresStore(db), newChatHandler(cfg, logger, db)),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -96,6 +97,17 @@ func newArkChatProxy(cfg config.Config, logger *slog.Logger) http.Handler {
 		DefaultModel:    cfg.Ark.DefaultModel,
 		DisableThinking: cfg.Ark.DisableThinking,
 	}, logger, nil)
+}
+
+func newChatHandler(cfg config.Config, logger *slog.Logger, db *sql.DB) http.Handler {
+	return usage.Middleware(
+		usage.NewRecorder(usage.NewPostgresStore(db), logger),
+		usage.MiddlewareConfig{
+			Provider:      "ark",
+			ModelFallback: cfg.Ark.DefaultModel,
+			Logger:        logger,
+		},
+	)(newArkChatProxy(cfg, logger))
 }
 
 func protectGatewayRoute(store auth.VirtualKeyStore, next http.Handler) http.Handler {

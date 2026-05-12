@@ -32,6 +32,38 @@ UPDATE model_catalog
 SET supports_reasoning = true
 WHERE canonical_model = 'ark-code-latest';
 
+-- Demo-Ready placeholder pricing only.
+-- These Ark rates are NOT real provider pricing and MUST NOT be used for commercial quotes.
+-- Rates are USD per 1M tokens.
+INSERT INTO model_pricing (
+  model_id,
+  input_rate_usd,
+  output_rate_usd,
+  reasoning_rate_usd,
+  cached_input_rate_usd,
+  currency,
+  effective_from,
+  source_url
+)
+SELECT
+  model_catalog.id,
+  0.50,
+  1.50,
+  0.00,
+  0.00,
+  'USD',
+  '2026-05-11 00:00:00+00'::timestamptz,
+  'demo-placeholder:not-real-ark-pricing'
+FROM model_catalog
+WHERE model_catalog.canonical_model = 'ark-code-latest'
+  AND model_catalog.provider = 'ark'
+  AND NOT EXISTS (
+    SELECT 1
+    FROM model_pricing
+    WHERE model_pricing.model_id = model_catalog.id
+      AND model_pricing.source_url = 'demo-placeholder:not-real-ark-pricing'
+  );
+
 INSERT INTO users (id, organization_id, email, display_name)
 VALUES
   ('00000000-0000-0000-0000-000000000201', '00000000-0000-0000-0000-000000000001', 'admin@democorp.local', 'Demo Admin'),
