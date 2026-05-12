@@ -92,7 +92,7 @@
         <header class="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-8 flex-shrink-0 sticky top-0 z-10 shadow-sm">
             <h1 id="page-title" class="text-xl font-semibold text-slate-800">组织消耗概览</h1>
             <div class="flex items-center space-x-4 text-sm">
-                <span class="text-slate-500">账期: <strong class="text-slate-800">2026年5月</strong></span>
+                <span class="text-slate-500">账期: <strong id="overview-period" class="text-slate-800">--</strong></span>
                 <button class="bg-white border border-slate-300 text-slate-700 px-3 py-1.5 rounded-md hover:bg-slate-50 transition-colors shadow-sm font-medium">
                     导出报告 ⬇
                 </button>
@@ -108,31 +108,33 @@
                     <p class="text-slate-500 text-sm">本版块提供组织架构内所有AI大模型接口的总体消耗态势。您可以快速把握总支出、活跃情况以及未来消耗趋势预测。</p>
                 </div>
 
+                <div id="overview-alert" class="hidden mb-6 rounded-md border px-4 py-3 text-sm"></div>
+
                 <!-- KPI 卡片 -->
                 <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
                     <div class="bg-white rounded-xl shadow-sm border border-slate-100 p-5 relative overflow-hidden">
                         <div class="absolute top-0 right-0 p-4 opacity-10 text-4xl">💰</div>
                         <h3 class="text-slate-500 text-sm font-medium mb-1">本月总消耗 (Tokens)</h3>
-                        <div class="text-3xl font-bold text-slate-800">42.5 M</div>
-                        <div class="mt-2 text-sm text-emerald-600 font-medium">↑ 12% <span class="text-slate-400 text-xs font-normal">较上月</span></div>
+                        <div id="overview-total-tokens" class="text-3xl font-bold text-slate-800">--</div>
+                        <div class="mt-2 text-sm text-slate-500">来自实时 usage ledger</div>
                     </div>
                     <div class="bg-white rounded-xl shadow-sm border border-slate-100 p-5 relative overflow-hidden">
                         <div class="absolute top-0 right-0 p-4 opacity-10 text-4xl">💵</div>
                         <h3 class="text-slate-500 text-sm font-medium mb-1">预估账单总额 ($)</h3>
-                        <div class="text-3xl font-bold text-slate-800">$1,240.50</div>
-                        <div class="mt-2 text-sm text-emerald-600 font-medium">↑ 8% <span class="text-slate-400 text-xs font-normal">较上月</span></div>
+                        <div id="overview-estimated-cost" class="text-3xl font-bold text-slate-800">--</div>
+                        <div class="mt-2 text-sm text-slate-500">来自实时 cost_ledger</div>
                     </div>
                     <div class="bg-white rounded-xl shadow-sm border border-slate-100 p-5 relative overflow-hidden">
                         <div class="absolute top-0 right-0 p-4 opacity-10 text-4xl">👥</div>
                         <h3 class="text-slate-500 text-sm font-medium mb-1">活跃调用用户数</h3>
-                        <div class="text-3xl font-bold text-slate-800">128</div>
-                        <div class="mt-2 text-sm text-slate-500">占总配额用户 85%</div>
+                        <div id="overview-active-users" class="text-3xl font-bold text-slate-800">--</div>
+                        <div class="mt-2 text-sm text-slate-500">本月成功请求用户</div>
                     </div>
                     <div class="bg-white rounded-xl shadow-sm border border-slate-100 p-5 relative overflow-hidden">
                         <div class="absolute top-0 right-0 p-4 opacity-10 text-4xl">⚠️</div>
                         <h3 class="text-slate-500 text-sm font-medium mb-1">额度预警用户</h3>
-                        <div class="text-3xl font-bold text-rose-600">12</div>
-                        <div class="mt-2 text-sm text-slate-500 cursor-pointer hover:text-indigo-600" onclick="switchTab('users')">点击前往分配额度 →</div>
+                        <div id="overview-quota-warning-users" class="text-3xl font-bold text-rose-600">--</div>
+                        <div class="mt-2 text-sm text-slate-500 cursor-pointer hover:text-indigo-600" onclick="switchTab('users')">配额系统接入后更新 →</div>
                     </div>
                 </div>
 
@@ -143,6 +145,7 @@
                         <h3 class="text-base font-semibold text-slate-800 mb-4">近30天 Token 消耗趋势</h3>
                         <div class="chart-container h-[300px]">
                             <canvas id="trendChart"></canvas>
+                            <div id="trend-empty-state" class="hidden absolute inset-0 flex items-center justify-center rounded-lg bg-white/80 text-sm text-slate-500">暂无数据</div>
                         </div>
                     </div>
                     <!-- 占比图 -->
@@ -150,6 +153,7 @@
                         <h3 class="text-base font-semibold text-slate-800 mb-4">主流模型调用占比</h3>
                         <div class="chart-container h-[300px]">
                             <canvas id="modelPieChart"></canvas>
+                            <div id="model-empty-state" class="hidden absolute inset-0 flex items-center justify-center rounded-lg bg-white/80 text-sm text-slate-500">暂无数据</div>
                         </div>
                         <div class="mt-4 text-center text-xs text-slate-500">
                             注：数据包含 Prompt 与 Completion 的合并 Token。
@@ -249,7 +253,12 @@
 
     <!-- 核心交互逻辑与图表渲染 -->
     <script>
-        // --- 数据模拟 (Mock Data - 设定在2026年背景下) ---
+        const ADMIN_API_BASE_URL = resolveAdminBaseURL();
+        const OVERVIEW_ENDPOINT = `${ADMIN_API_BASE_URL}/api/admin/overview`;
+        let overviewData = normalizeOverview(null);
+        let visibleModelUsage = [];
+
+        // --- 用户额度演示数据 ---
         
         // 1. 用户额度数据
         let userData = [
@@ -261,11 +270,7 @@
             { id: 6, name: "刘洋", dept: "客服中心", used: 450000, quota: 500000, avatar: "🧑‍💻" },
         ];
 
-        // 2. 趋势图数据 (近30天简化版)
-        const trendLabels = Array.from({length: 15}, (_, i) => `5月${i+1}日`);
-        const trendData = [1.2, 1.5, 1.1, 1.8, 2.5, 2.2, 1.9, 2.8, 3.1, 2.9, 1.5, 1.4, 2.1, 2.7, 3.0]; // 单位百万
-
-        // 3. 模型图表配置预设 (Chart.js全局配置)
+        // 2. 模型图表配置预设 (Chart.js全局配置)
         Chart.defaults.font.family = "'Inter', sans-serif";
         Chart.defaults.color = '#64748b'; // slate-500
         Chart.defaults.plugins.tooltip.backgroundColor = 'rgba(15, 23, 42, 0.9)'; // slate-900
@@ -284,6 +289,164 @@
         // 格式化数字 (如: 1,000,000)
         function formatNumber(num) {
             return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+        }
+
+        function resolveAdminBaseURL() {
+            const params = new URLSearchParams(window.location.search);
+            const explicitBaseURL = params.get('admin');
+            if (explicitBaseURL) {
+                return explicitBaseURL.replace(/\/+$/, '');
+            }
+
+            let savedBaseURL = '';
+            try {
+                savedBaseURL = localStorage.getItem('omnitokenAdminBaseURL') || '';
+            } catch (_) {
+                savedBaseURL = '';
+            }
+            if (savedBaseURL) {
+                return savedBaseURL.replace(/\/+$/, '');
+            }
+
+            if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
+                if (window.location.port === '8081') {
+                    return window.location.origin;
+                }
+                return `${window.location.protocol}//${window.location.hostname}:8081`;
+            }
+
+            return 'http://localhost:8081';
+        }
+
+        function normalizeOverview(raw) {
+            const overview = raw && typeof raw === 'object' ? raw : {};
+            return {
+                period: typeof overview.period === 'string' ? overview.period : '--',
+                total_tokens: Number(overview.total_tokens) || 0,
+                estimated_cost_usd: Number(overview.estimated_cost_usd) || 0,
+                active_users: Number(overview.active_users) || 0,
+                quota_warning_users: Number(overview.quota_warning_users) || 0,
+                trend: Array.isArray(overview.trend) ? overview.trend : [],
+                model_usage: Array.isArray(overview.model_usage) ? overview.model_usage : [],
+            };
+        }
+
+        function formatTokens(tokens) {
+            const value = Number(tokens) || 0;
+            if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)} B`;
+            if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)} M`;
+            if (value >= 1_000) return `${(value / 1_000).toFixed(1)} K`;
+            return formatNumber(Math.round(value));
+        }
+
+        function formatUSD(value) {
+            const amount = Number(value) || 0;
+            const digits = amount > 0 && amount < 0.01 ? 4 : 2;
+            return `$${amount.toLocaleString('en-US', {
+                minimumFractionDigits: digits,
+                maximumFractionDigits: digits,
+            })}`;
+        }
+
+        function formatPeriod(period) {
+            const match = /^(\d{4})-(\d{2})$/.exec(period || '');
+            if (!match) return period || '--';
+            return `${match[1]}年${Number(match[2])}月`;
+        }
+
+        function formatTrendLabel(date) {
+            const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date || '');
+            if (!match) return date || '--';
+            return `${Number(match[2])}月${Number(match[3])}日`;
+        }
+
+        function setOverviewAlert(type, message) {
+            const alert = document.getElementById('overview-alert');
+            alert.className = 'mb-6 rounded-md border px-4 py-3 text-sm';
+            if (!message) {
+                alert.classList.add('hidden');
+                alert.textContent = '';
+                return;
+            }
+            const styles = {
+                loading: ['bg-indigo-50', 'border-indigo-100', 'text-indigo-700'],
+                error: ['bg-rose-50', 'border-rose-100', 'text-rose-700'],
+                empty: ['bg-slate-50', 'border-slate-200', 'text-slate-600'],
+            };
+            alert.classList.add(...(styles[type] || styles.empty));
+            alert.textContent = message;
+        }
+
+        function setEmptyState(id, visible) {
+            const element = document.getElementById(id);
+            if (!element) return;
+            element.classList.toggle('hidden', !visible);
+        }
+
+        function renderOverview(overview) {
+            overviewData = normalizeOverview(overview);
+            document.getElementById('overview-period').textContent = formatPeriod(overviewData.period);
+            document.getElementById('overview-total-tokens').textContent = formatTokens(overviewData.total_tokens);
+            document.getElementById('overview-estimated-cost').textContent = formatUSD(overviewData.estimated_cost_usd);
+            document.getElementById('overview-active-users').textContent = formatNumber(overviewData.active_users);
+            document.getElementById('overview-quota-warning-users').textContent = formatNumber(overviewData.quota_warning_users);
+            updateOverviewCharts();
+
+            if (overviewData.total_tokens === 0 && overviewData.trend.length === 0 && overviewData.model_usage.length === 0) {
+                setOverviewAlert('empty', '暂无用量数据。完成一次网关调用并写入账本后，这里会自动显示实时统计。');
+            } else {
+                setOverviewAlert('', '');
+            }
+        }
+
+        function updateOverviewCharts() {
+            if (!chartsInitialized.overview) return;
+
+            const trendRows = overviewData.trend.filter(item => Number(item.tokens) > 0 || Number(item.cost_usd) > 0);
+            chartInstances.trend.data.labels = trendRows.map(item => formatTrendLabel(item.date));
+            chartInstances.trend.data.datasets[0].data = trendRows.map(item => Number(item.tokens) || 0);
+            chartInstances.trend.update();
+            setEmptyState('trend-empty-state', trendRows.length === 0);
+
+            const modelRows = overviewData.model_usage.filter(item => Number(item.tokens) > 0 || Number(item.cost_usd) > 0);
+            visibleModelUsage = modelRows;
+            chartInstances.pie.data.labels = modelRows.length ? modelRows.map(item => item.model || 'unknown') : ['暂无数据'];
+            chartInstances.pie.data.datasets[0].data = modelRows.length ? modelRows.map(item => Number(item.tokens) || 0) : [1];
+            chartInstances.pie.data.datasets[0].backgroundColor = modelRows.length
+                ? ['#4f46e5', '#0ea5e9', '#10b981', '#f59e0b', '#cbd5e1', '#a855f7', '#ef4444']
+                : ['#e2e8f0'];
+            chartInstances.pie.update();
+            setEmptyState('model-empty-state', modelRows.length === 0);
+        }
+
+        async function loadOverview() {
+            setOverviewAlert('loading', '正在加载实时用量数据...');
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 8000);
+
+            try {
+                const response = await fetch(OVERVIEW_ENDPOINT, {
+                    headers: { 'Accept': 'application/json' },
+                    cache: 'no-store',
+                    signal: controller.signal,
+                });
+                if (!response.ok) {
+                    let code = `HTTP ${response.status}`;
+                    try {
+                        const body = await response.json();
+                        code = body?.error?.code || code;
+                    } catch (_) {}
+                    throw new Error(code);
+                }
+                const overview = await response.json();
+                renderOverview(overview);
+            } catch (error) {
+                renderOverview(overviewData);
+                const reason = error.name === 'AbortError' ? '请求超时' : error.message;
+                setOverviewAlert('error', `无法加载 admin overview (${reason})。请确认 admin 服务已启动，且 OMNITOKEN_ADMIN_CORS_ORIGINS 包含当前页面 origin。`);
+            } finally {
+                clearTimeout(timeout);
+            }
         }
 
         // 渲染用户表格
@@ -437,10 +600,10 @@
             chartInstances.trend = new Chart(ctxTrend, {
                 type: 'line',
                 data: {
-                    labels: trendLabels,
+                    labels: [],
                     datasets: [{
-                        label: '每日总消耗 (百万 Tokens)',
-                        data: trendData,
+                        label: '每日总消耗 (Tokens)',
+                        data: [],
                         borderColor: '#4f46e5', // indigo-600
                         backgroundColor: gradient,
                         borderWidth: 2,
@@ -457,11 +620,23 @@
                     responsive: true,
                     maintainAspectRatio: false,
                     plugins: {
-                        legend: { display: false }
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    return `Token: ${formatNumber(context.parsed.y || 0)}`;
+                                }
+                            }
+                        }
                     },
                     scales: {
                         y: {
                             beginAtZero: true,
+                            ticks: {
+                                callback: function(value) {
+                                    return formatTokens(value);
+                                }
+                            },
                             grid: { borderDash: [4, 4], color: '#f1f5f9' },
                             border: { display: false }
                         },
@@ -482,15 +657,11 @@
             chartInstances.pie = new Chart(ctxPie, {
                 type: 'doughnut',
                 data: {
-                    labels: ['GPT-4o', 'Claude 3.5 Opus', 'Gemini 1.5 Pro', 'Llama-3-70B', '其他微调模型'],
+                    labels: ['暂无数据'],
                     datasets: [{
-                        data: [45, 25, 15, 10, 5],
+                        data: [1],
                         backgroundColor: [
-                            '#4f46e5', // Indigo
-                            '#0ea5e9', // Sky
-                            '#10b981', // Emerald
-                            '#f59e0b', // Amber
-                            '#cbd5e1'  // Slate
+                            '#e2e8f0'
                         ],
                         borderWidth: 0,
                         hoverOffset: 4
@@ -504,10 +675,24 @@
                         legend: {
                             position: 'bottom',
                             labels: { padding: 20, usePointStyle: true, boxWidth: 8 }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const row = visibleModelUsage[context.dataIndex];
+                                    if (!row) return '暂无数据';
+                                    const percent = overviewData.total_tokens > 0
+                                        ? ((Number(row.tokens) || 0) / overviewData.total_tokens) * 100
+                                        : 0;
+                                    return `${row.model || 'unknown'}: ${percent.toFixed(1)}% (${formatTokens(row.tokens)} Tokens)`;
+                                }
+                            }
                         }
                     }
                 }
             });
+
+            updateOverviewCharts();
         }
 
         function initModelsCharts() {
@@ -568,6 +753,7 @@
             renderUserTable();
             // 默认加载概览标签页，图表会在 switchTab 中被初始化
             switchTab('overview');
+            loadOverview();
         });
 
     </script>
