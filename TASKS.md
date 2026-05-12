@@ -417,7 +417,7 @@ fixture 设计：
 
 ---
 
-## T-006b admin overview 真查 DB [phase:1] [owner:codex] [status:todo]
+## T-006b admin overview 真查 DB [phase:1] [owner:codex] [status:review]
 
 **目标**: 把 `cmd/admin` 的 `GET /api/admin/overview` 从硬编码 mock 替换为真实 DB 查询。前端 `测试前端.html` 的 Overview 视图从此展示 **活数据**——真实 token 消耗、真实成本、真实活跃用户数。这是 Demo-Ready 路线"admin 真查 DB"的核心。
 
@@ -517,6 +517,8 @@ monthEnd := monthStart.AddDate(0, 1, 0)
 Demo-Ready 阶段不做租户时区；Phase 2 如果做企业账单周期，再引入 org-level timezone/billing window。
 
 边界确认：T-006b 只改 `cmd/admin` 的 overview 查询与测试，不改 `internal/usage`、不改前端、不接 RBAC、不接配额系统、不跑真方舟。
+
+**Result**: `290a5bb` - replaced the hardcoded admin overview mock with shared admin DB wiring plus Postgres-backed summary, sparse 30-day trend, and model usage queries. Self-test: `go test -count=1 ./cmd/admin`, `go test -count=1 ./...`, `go vet ./...`, `gofmt -l .`, and `go test -count=1 -cover ./cmd/admin` (51.9%) passed. `make lint` could not run because `make` is not installed on this Windows PATH; `go test -race ./...` could not run because local race builds require CGO/gcc and `gcc` is not installed.
 
 ---
 
