@@ -17,6 +17,7 @@
 | 05-11 22:15 | R-007 approve (14+/0M/3N). proxy 88.4%. **首次真方舟e2e通过** |
 | 05-12 09:40 | R-008 approve (13+/2M/4N). usage 93.7%. 账本闭环 |
 | 05-12 11:45 | R-006b approve (10+/1M/2N). admin 51.9%. **进度75%** |
+| 05-12 12:55 | R-006c approve (8+/0M/2N). 前端接真API. **进度87.5%** |
 
 ---
 
@@ -35,37 +36,17 @@
 | T-007 | SSE 反向代理 + 方舟转发 | `34a5b6a` | proxy 88.4% |
 | T-008 | usage parser + cost_ledger | `4761671` | usage 93.7% |
 | T-006b | admin overview 真查 DB | `290a5bb` | admin 51.9% |
+| T-006c | 前端 fetch 真实数据 | `51ba90c` | — |
 
 ---
 
 ## DEMO-READY ROUTE (2026-05-11 user-locked)
 
-用户决策：先把 Demo-Ready 路线跑通（gateway 真转发方舟 + 计费落库 + admin 真查 DB + 前端 fetch 真实数据 + 最小种子），**再** push。进度：**75% (6/8)**。剩余：T-006c → T-006d → push。
+进度：**87.5% (7/8)**。剩余：T-006d → push。
 
 ---
 
-## T-006c 前端 fetch 真实数据 [phase:1] [owner:codex] [status:review]
-
-**目标**: 把 `测试前端.html` 从 mock 数据改为 fetch 真实 admin API。
-
-**接受标准**:
-- [ ] Overview 视图的 KPI 卡片、trend 图、model share 饼图全部从 `GET /api/admin/overview` 拿实时数据。
-- [ ] fetch 失败时展示友好的 error state（不是空白、不是 JS 报错）。
-- [ ] CORS 与 admin 端口配置保持一致（`OMNITOKEN_ADMIN_CORS_ORIGINS` 包含前端 origin）。
-- [ ] 不改后端 API 结构；不新增后端依赖。
-- [ ] 手动打开 `测试前端.html` 能看到真实数据（需要本地 Postgres + seed + 至少 1 条 usage 记录）。
-
-**不在范围**: 前端工程化 / React/Next.js 迁移 / 新增页面 / 用户管理视图改造。
-
-**Codex propose 前置**: 不需要，按上述标准直接做。
-
-**依赖**: T-006b approved（已通过）。
-
-**Result**: `51ba90c` - replaced Overview mock KPI/chart data with `GET /api/admin/overview`, plus loading, empty, and error states. Self-test: inline script syntax check passed; `git diff --check` passed; Chrome headless fallback with a local mock admin API verified live data render (`3.46 M`, `$12.35`, active users `3`), empty overview state, and unreachable-admin error state. Browser plugin path was attempted first but timed out while connecting, so rendered QA used local Chrome headless.
-
----
-
-## T-006d Demo-Ready 端到端验收 [phase:1] [owner:codex] [status:blocked-by-T-006c]
+## T-006d Demo-Ready 端到端验收 [phase:1] [owner:codex] [status:todo]
 
 **目标**: 跑通完整 Demo-Ready 链路并记录验收结果。
 
@@ -74,7 +55,7 @@
 - [ ] 验收表（见下方 DEMO-READY VERIFICATION TABLE）所有项全绿。
 - [ ] 录一段 curl + 前端截图作为 Demo 证据。
 
-**依赖**: T-006c approved。
+**依赖**: T-006c approved（已通过）。
 
 ---
 
@@ -124,7 +105,7 @@
 | cmd/migrate | 45.5% | — | ✅ |
 | cmd/admin | 51.9% | — | ✅ |
 
-
+---
 
 ## 未来任务 (Phase 1 完整验收后)
 

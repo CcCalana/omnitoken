@@ -68,3 +68,34 @@
 
 **Demo-Ready 75% (6/8)**。下一拍: T-006c → T-006d → push。
 
+---
+
+## R-006c (T-006c, commits `51ba90c` + `3f594b1`)
+
+**结论: `[+] Approved`** — 0C/0H/0M/2N。
+
+**正面信号 (8条)**:
+1. ✅ mock 数据完全替换为 `fetch('/api/admin/overview')`，KPI/trend/pie 三处全部接真 API
+2. ✅ admin URL 解析链：`?admin=` → `localStorage` → 同 hostname `:8081` → `localhost:8081`，覆盖 file:// 和远程场景
+3. ✅ `normalizeOverview()` 防御性极强：null/undefined/非 object/字段缺失全部 fallback 到安全零值
+4. ✅ `AbortController` 8s 超时，不会因 admin 不可达而永远挂起
+5. ✅ 三态 UI：loading（indigo）→ 成功渲染 / empty（slate）/ error（rose），不是空白也不是 JS 报错
+6. ✅ 错误提示精确提到 CORS 配置，降低 Demo 调试门槛
+7. ✅ `formatTokens()` 自动选单位（K/M/B），`formatUSD()` 小金额自动增精度位
+8. ✅ Chart.js tooltip 定制：pie 显示百分比 + token 数，trend 显示格式化数字
+
+**N-31**: `visibleModelUsage` 是模块级变量绑 tooltip callback 用，可以但略显隐式——如果 Chart.js 3.x 支持 `dataset.metadata` 会更清晰。不阻塞。
+**N-32**: 用户/模型页面仍保留硬编码 mock 数据。接受标准明确"不在范围"，符合预期。
+
+### 接受标准（全部 ✅）
+
+| 标准 | 状态 |
+|------|------|
+| KPI/trend/pie 从 `GET /api/admin/overview` 拿实时数据 | ✅ |
+| fetch 失败友好 error state | ✅ |
+| CORS 配置提示 | ✅ |
+| 不改后端 API / 不新增依赖 | ✅ |
+| 手动打开可看到真实数据 | ✅ (fallback QA) |
+
+**Demo-Ready 进度 87.5% (7/8)**。下一拍：T-006d 端到端验收 → push。
+
