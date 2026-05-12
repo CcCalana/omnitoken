@@ -12,15 +12,15 @@
             采用现代 SaaS 控制台 (Dashboard) 结构。
             侧边栏提供全局导航，主内容区按逻辑划分为三个核心视图：
             1. 概览 (Overview)：提供全局视角，汇总核心指标(KPIs)和消耗趋势，帮助管理者快速掌握总体情况。
-            2. 用户与额度 (Users & Quotas)：基于“能够进行用户总用量额度分配”的需求，设计交互式表格，直观展示每个用户的消耗进度，并提供内联或弹窗式的额度调整功能。
-            3. 模型分析 (Models)：下钻分析，展示不同模型（如GPT-4o, Claude 3.5等在2026年主流模型）的调用量和成本对比。
+            2. 用户与额度 (Users & Quotas)：基于真实 admin API 数据设计只读表格，直观展示每个用户的消耗进度与配额接入状态。
+            3. 模型分析 (Models)：下钻分析，展示 admin API 返回的真实模型调用量和成本对比。
             这种结构符合从宏观到微观的管理逻辑，最大化信息获取效率。
         -->
         <!-- Visualization & Content Choices: 
             1. 核心指标 (KPI卡片) -> 目标：通知 -> 纯文本与HTML/CSS排版 -> 最快速传达关键数据。
             2. 消耗趋势图 (折线图) -> 目标：展示变化趋势 -> Chart.js Line Chart -> 直观反映Token消耗的高峰和低谷，支持跨时间段对比。无SVG。
             3. 模型调用占比 (环形图) -> 目标：比较比例 -> Chart.js Doughnut Chart -> 清晰展示组织最依赖的模型。无SVG。
-            4. 用户额度管理 (带进度条的表格) -> 目标：组织与操作 -> HTML/CSS Table + JS交互 -> 进度条直观显示风险（接近超额时变红），"分配额度"按钮直接触发JS逻辑修改数据，实时反馈。不使用复杂图表，强调功能性。无SVG。
+            4. 用户额度管理 (带进度条的表格) -> 目标：组织与监控 -> HTML/CSS Table + JS交互 -> 进度条直观显示风险；Demo-Ready 阶段只读展示真实 API 数据。不使用复杂图表，强调功能性。无SVG。
             5. 模型成本详情 (柱状图) -> 目标：比较绝对值 -> Chart.js Bar Chart -> 直观对比各模型的实际Token消耗量。无SVG。
         -->
         <!-- CONFIRMATION: NO SVG graphics used. NO Mermaid JS used. -->
@@ -166,11 +166,11 @@
             <div id="tab-users" class="tab-content hidden animate-fade-in">
                 <div class="mb-6 flex justify-between items-end">
                     <div class="max-w-2xl">
-                        <p class="text-slate-500 text-sm mb-2">此模块允许管理员监控每个组织成员的模型使用情况，并动态分配当月 Token 额度。接近或超出额度的用户将被高亮显示。</p>
+                        <p class="text-slate-500 text-sm mb-2">此模块展示 admin API 返回的组织成员本月模型使用情况。配额系统尚未接入时，额度列显示为无限额。</p>
                     </div>
                     <div class="flex space-x-2">
-                        <input type="text" id="user-search" placeholder="搜索用户名..." class="border border-slate-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
-                        <button class="bg-indigo-600 text-white px-4 py-1.5 rounded-md text-sm font-medium hover:bg-indigo-700 shadow-sm transition-colors">批量重置额度</button>
+                        <input type="text" id="user-search" placeholder="搜索用户名或邮箱..." class="border border-slate-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                        <button class="bg-slate-100 text-slate-400 px-4 py-1.5 rounded-md text-sm font-medium cursor-not-allowed" disabled>额度配置待接入</button>
                     </div>
                 </div>
 
@@ -179,11 +179,11 @@
                         <table class="min-w-full divide-y divide-slate-200">
                             <thead class="bg-slate-50">
                                 <tr>
-                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">用户 / 部门</th>
+                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">用户 / 邮箱</th>
                                     <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">当前消耗 (Tokens)</th>
-                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">分配额度 (Tokens)</th>
+                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">配额状态</th>
                                     <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider w-1/4">消耗进度</th>
-                                    <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">操作</th>
+                                    <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">用户状态</th>
                                 </tr>
                             </thead>
                             <tbody id="user-table-body" class="bg-white divide-y divide-slate-200">
@@ -205,34 +205,20 @@
                         <h3 class="text-base font-semibold text-slate-800 mb-4">各模型输入与输出 Token 对比分析</h3>
                         <div class="chart-container h-[40vh] max-h-[500px]">
                             <canvas id="modelsBarChart"></canvas>
+                            <div id="models-chart-empty-state" class="hidden absolute inset-0 flex items-center justify-center rounded-lg bg-white/80 text-sm text-slate-500">暂无数据</div>
                         </div>
+                        <div id="models-alert" class="hidden mt-4 rounded-md border px-4 py-3 text-sm"></div>
                     </div>
                 </div>
 
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div class="bg-indigo-50 rounded-xl p-6 border border-indigo-100">
-                        <h4 class="font-semibold text-indigo-900 mb-2">💡 成本优化建议</h4>
-                        <ul class="list-disc pl-5 text-sm text-indigo-800 space-y-2">
-                            <li><strong>GPT-4o 降本：</strong> 当前 GPT-4o 消耗占比最高，建议将部分非复杂推理的常规任务迁移至成本更低的 Llama-3-70B 或 GPT-4o-mini。</li>
-                            <li><strong>长文本处理：</strong> 观察到 Claude 3.5 Opus 的输入 Token 极高，这通常是因为长文档总结。可考虑引入 RAG 机制减少上下文窗口压力。</li>
-                        </ul>
+                        <h4 class="font-semibold text-indigo-900 mb-2">实时成本线索</h4>
+                        <div id="model-insight-content" class="text-sm text-indigo-800 space-y-2">正在等待模型用量数据...</div>
                     </div>
                     <div class="bg-white rounded-xl p-6 border border-slate-200 shadow-sm">
-                        <h4 class="font-semibold text-slate-800 mb-2">⚙️ 平台管控状态</h4>
-                        <div class="space-y-3 mt-4">
-                            <div class="flex justify-between items-center text-sm">
-                                <span class="text-slate-600">全局调用并发限制 (RPM)</span>
-                                <span class="font-medium px-2 py-1 bg-slate-100 rounded text-slate-700">5,000</span>
-                            </div>
-                            <div class="flex justify-between items-center text-sm">
-                                <span class="text-slate-600">模型回退机制 (Fallback)</span>
-                                <span class="font-medium px-2 py-1 bg-emerald-100 text-emerald-700 rounded">已开启</span>
-                            </div>
-                            <div class="flex justify-between items-center text-sm">
-                                <span class="text-slate-600">API 密钥泄露检测</span>
-                                <span class="font-medium px-2 py-1 bg-emerald-100 text-emerald-700 rounded">主动监控中</span>
-                            </div>
-                        </div>
+                        <h4 class="font-semibold text-slate-800 mb-2">本月模型聚合</h4>
+                        <div id="model-aggregate-content" class="space-y-3 mt-4">正在等待模型用量数据...</div>
                     </div>
                 </div>
             </div>
@@ -255,20 +241,16 @@
     <script>
         const ADMIN_API_BASE_URL = resolveAdminBaseURL();
         const OVERVIEW_ENDPOINT = `${ADMIN_API_BASE_URL}/api/admin/overview`;
+        const USERS_ENDPOINT = `${ADMIN_API_BASE_URL}/api/admin/users`;
+        const MODELS_ENDPOINT = `${ADMIN_API_BASE_URL}/api/admin/models`;
         let overviewData = normalizeOverview(null);
         let visibleModelUsage = [];
-
-        // --- 用户额度演示数据 ---
-        
-        // 1. 用户额度数据
-        let userData = [
-            { id: 1, name: "陈明", dept: "研发部 - 算法组", used: 4500000, quota: 5000000, avatar: "👨‍💻" },
-            { id: 2, name: "林晓", dept: "产品部", used: 1200000, quota: 1000000, avatar: "👩‍💼" }, // 超额示例
-            { id: 3, name: "王建国", dept: "运营部", used: 850000, quota: 2000000, avatar: "👨‍🏫" },
-            { id: 4, name: "李思", dept: "研发部 - 前端", used: 3200000, quota: 3500000, avatar: "👩‍💻" },
-            { id: 5, name: "张伟", dept: "数据分析", used: 8900000, quota: 10000000, avatar: "👨‍🔬" },
-            { id: 6, name: "刘洋", dept: "客服中心", used: 450000, quota: 500000, avatar: "🧑‍💻" },
-        ];
+        let usersData = [];
+        let usersLoadState = 'idle';
+        let usersLoadError = '';
+        let modelsData = [];
+        let modelsLoadState = 'idle';
+        let modelsLoadError = '';
 
         // 2. 模型图表配置预设 (Chart.js全局配置)
         Chart.defaults.font.family = "'Inter', sans-serif";
@@ -289,6 +271,16 @@
         // 格式化数字 (如: 1,000,000)
         function formatNumber(num) {
             return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+        }
+
+        function escapeHTML(value) {
+            return String(value ?? '').replace(/[&<>"']/g, char => ({
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#39;',
+            }[char]));
         }
 
         function resolveAdminBaseURL() {
@@ -331,6 +323,37 @@
             };
         }
 
+        function normalizeUsers(raw) {
+            const rows = raw && Array.isArray(raw.users) ? raw.users : [];
+            return rows.map(user => {
+                const displayName = String(user.display_name || user.email || 'Unknown User').trim();
+                const email = String(user.email || '').trim();
+                const quota = Number(user.quota) || 0;
+                const usedTokens = Number(user.used_tokens) || 0;
+                return {
+                    user_id: String(user.user_id || email || displayName),
+                    display_name: displayName,
+                    email,
+                    used_tokens: Math.max(0, usedTokens),
+                    quota: Math.max(0, quota),
+                    status: String(user.status || 'unknown').trim() || 'unknown',
+                };
+            });
+        }
+
+        function normalizeModels(raw) {
+            const rows = raw && Array.isArray(raw.models) ? raw.models : [];
+            return rows.map(model => ({
+                model: String(model.model || 'unknown').trim() || 'unknown',
+                provider: String(model.provider || 'unknown').trim() || 'unknown',
+                prompt_tokens: Math.max(0, Number(model.prompt_tokens) || 0),
+                completion_tokens: Math.max(0, Number(model.completion_tokens) || 0),
+                total_tokens: Math.max(0, Number(model.total_tokens) || 0),
+                cost_usd: Math.max(0, Number(model.cost_usd) || 0),
+                call_count: Math.max(0, Number(model.call_count) || 0),
+            }));
+        }
+
         function formatTokens(tokens) {
             const value = Number(tokens) || 0;
             if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)} B`;
@@ -363,6 +386,23 @@
         function setOverviewAlert(type, message) {
             const alert = document.getElementById('overview-alert');
             alert.className = 'mb-6 rounded-md border px-4 py-3 text-sm';
+            if (!message) {
+                alert.classList.add('hidden');
+                alert.textContent = '';
+                return;
+            }
+            const styles = {
+                loading: ['bg-indigo-50', 'border-indigo-100', 'text-indigo-700'],
+                error: ['bg-rose-50', 'border-rose-100', 'text-rose-700'],
+                empty: ['bg-slate-50', 'border-slate-200', 'text-slate-600'],
+            };
+            alert.classList.add(...(styles[type] || styles.empty));
+            alert.textContent = message;
+        }
+
+        function setModelsAlert(type, message) {
+            const alert = document.getElementById('models-alert');
+            alert.className = 'mt-4 rounded-md border px-4 py-3 text-sm';
             if (!message) {
                 alert.classList.add('hidden');
                 alert.textContent = '';
@@ -449,24 +489,46 @@
             }
         }
 
-        // 渲染用户表格
         function renderUserTable(filterText = '') {
             const tbody = document.getElementById('user-table-body');
             tbody.innerHTML = '';
-            
-            const filteredData = userData.filter(user => 
-                user.name.includes(filterText) || user.dept.includes(filterText)
-            );
 
-            // 按消耗百分比降序排序
-            filteredData.sort((a, b) => (b.used/b.quota) - (a.used/a.quota));
+            if (usersLoadState === 'loading') {
+                tbody.innerHTML = `<tr><td colspan="5" class="px-6 py-10 text-center text-indigo-600 text-sm">正在加载用户用量数据...</td></tr>`;
+                return;
+            }
+
+            if (usersLoadState === 'error') {
+                tbody.innerHTML = `<tr><td colspan="5" class="px-6 py-10 text-center text-rose-600 text-sm">${escapeHTML(usersLoadError)}</td></tr>`;
+                return;
+            }
+
+            const query = filterText.trim().toLowerCase();
+            const filteredData = usersData.filter(user => {
+                const haystack = `${user.display_name} ${user.email} ${user.status}`.toLowerCase();
+                return haystack.includes(query);
+            });
+
+            filteredData.sort((a, b) => {
+                const aRatio = a.quota > 0 ? a.used_tokens / a.quota : -1;
+                const bRatio = b.quota > 0 ? b.used_tokens / b.quota : -1;
+                if (aRatio !== bRatio) return bRatio - aRatio;
+                return b.used_tokens - a.used_tokens;
+            });
 
             filteredData.forEach(user => {
-                const percent = Math.min(100, (user.used / user.quota) * 100);
-                const isOverLimit = percent >= 100;
-                const isWarning = percent >= 85 && !isOverLimit;
-                
-                // 决定进度条颜色
+                const hasQuota = user.quota > 0;
+                const percent = hasQuota ? Math.min(100, (user.used_tokens / user.quota) * 100) : 0;
+                const isOverLimit = hasQuota && percent >= 100;
+                const isWarning = hasQuota && percent >= 85 && !isOverLimit;
+                const initial = Array.from(user.display_name || user.email || '?')[0] || '?';
+                const escapedName = escapeHTML(user.display_name);
+                const escapedEmail = escapeHTML(user.email || '未提供邮箱');
+                const escapedStatus = escapeHTML(user.status);
+                const statusClasses = user.status === 'active'
+                    ? 'bg-emerald-50 text-emerald-700'
+                    : 'bg-slate-100 text-slate-600';
+
                 let barColor = 'bg-indigo-500';
                 let textColor = 'text-slate-700';
                 if (isOverLimit) {
@@ -477,71 +539,209 @@
                     textColor = 'text-amber-600 font-medium';
                 }
 
-                const tr = document.createElement('tr');
-                tr.className = 'hover:bg-slate-50 transition-colors';
-                tr.innerHTML = `
-                    <td class="px-6 py-4 whitespace-nowrap">
-                        <div class="flex items-center">
-                            <div class="text-2xl mr-3">${user.avatar}</div>
-                            <div>
-                                <div class="text-sm font-medium text-slate-800">${user.name}</div>
-                                <div class="text-xs text-slate-500">${user.dept}</div>
-                            </div>
-                        </div>
-                    </td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm ${textColor}">
-                        ${formatNumber(user.used)} ${isOverLimit ? ' <span class="text-xs text-rose-500">(超额)</span>' : ''}
-                    </td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-600">
-                        ${formatNumber(user.quota)}
-                    </td>
-                    <td class="px-6 py-4 whitespace-nowrap">
+                const quotaCell = hasQuota ? formatTokens(user.quota) : '无限额';
+                const progressCell = hasQuota
+                    ? `
                         <div class="flex items-center w-full">
                             <span class="text-xs ${textColor} w-12 text-right mr-2">${percent.toFixed(1)}%</span>
                             <div class="w-full bg-slate-200 rounded-full h-2.5">
                                 <div class="${barColor} h-2.5 rounded-full" style="width: ${percent}%"></div>
                             </div>
+                        </div>`
+                    : `<span class="inline-flex px-2 py-1 rounded bg-slate-100 text-xs text-slate-600">无限额</span>`;
+
+                const tr = document.createElement('tr');
+                tr.className = 'hover:bg-slate-50 transition-colors';
+                tr.innerHTML = `
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        <div class="flex items-center">
+                            <div class="w-9 h-9 rounded-full bg-indigo-50 text-indigo-700 flex items-center justify-center text-sm font-semibold mr-3">${escapeHTML(initial)}</div>
+                            <div>
+                                <div class="text-sm font-medium text-slate-800">${escapedName}</div>
+                                <div class="text-xs text-slate-500">${escapedEmail}</div>
+                            </div>
                         </div>
                     </td>
-                    <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                        <button onclick="allocateQuota(${user.id})" class="text-indigo-600 hover:text-indigo-900 bg-indigo-50 px-3 py-1 rounded hover:bg-indigo-100 transition-colors">调整额度</button>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm ${textColor}">
+                        ${formatTokens(user.used_tokens)} ${isOverLimit ? '<span class="text-xs text-rose-500">(超额)</span>' : ''}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-600">
+                        ${quotaCell}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        ${progressCell}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-right text-sm">
+                        <span class="inline-flex px-2 py-1 rounded ${statusClasses}">${escapedStatus}</span>
                     </td>
                 `;
                 tbody.appendChild(tr);
             });
 
-            if(filteredData.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="5" class="px-6 py-8 text-center text-slate-500 text-sm">未找到匹配的用户记录</td></tr>`;
+            if (usersLoadState === 'ready' && usersData.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="5" class="px-6 py-10 text-center text-slate-500 text-sm">暂无用户用量数据</td></tr>`;
+            } else if (filteredData.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="5" class="px-6 py-10 text-center text-slate-500 text-sm">未找到匹配的用户记录</td></tr>`;
             }
         }
 
-        // 分配额度交互逻辑 (模拟)
-        window.allocateQuota = function(userId) {
-            const user = userData.find(u => u.id === userId);
-            if (!user) return;
-            
-            // 使用原生 prompt 进行简单交互 (避免引入复杂的模态框 HTML)
-            const newQuotaStr = prompt(`为 ${user.name} (${user.dept}) 分配新的 Token 额度：\n当前已用: ${formatNumber(user.used)}\n当前总额度: ${formatNumber(user.quota)}\n\n请输入新的数值(整型):`, user.quota);
-            
-            if (newQuotaStr !== null) {
-                const newQuota = parseInt(newQuotaStr.replace(/,/g, ''), 10);
-                if (!isNaN(newQuota) && newQuota > 0) {
-                    user.quota = newQuota;
-                    renderUserTable(document.getElementById('user-search').value);
-                    // 简单的操作反馈
-                    const btn = event.target;
-                    const originalText = btn.innerText;
-                    btn.innerText = "已更新 ✓";
-                    btn.classList.add("text-emerald-600", "bg-emerald-50");
-                    setTimeout(() => {
-                        btn.innerText = originalText;
-                        btn.classList.remove("text-emerald-600", "bg-emerald-50");
-                    }, 2000);
-                } else {
-                    alert("请输入有效的整数！");
+        async function loadUsers(force = false) {
+            if (!force && (usersLoadState === 'loading' || usersLoadState === 'ready')) return;
+            usersLoadState = 'loading';
+            usersLoadError = '';
+            renderUserTable(document.getElementById('user-search').value);
+
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 8000);
+            try {
+                const response = await fetch(USERS_ENDPOINT, {
+                    headers: { 'Accept': 'application/json' },
+                    cache: 'no-store',
+                    signal: controller.signal,
+                });
+                if (!response.ok) {
+                    let code = `HTTP ${response.status}`;
+                    try {
+                        const body = await response.json();
+                        code = body?.error?.code || code;
+                    } catch (_) {}
+                    throw new Error(code);
                 }
+                usersData = normalizeUsers(await response.json());
+                usersLoadState = 'ready';
+            } catch (error) {
+                usersLoadState = 'error';
+                const reason = error.name === 'AbortError' ? '请求超时' : error.message;
+                usersLoadError = `无法加载用户用量 (${reason})。请确认 admin 服务已启动，且 CORS 允许当前页面 origin。`;
+            } finally {
+                clearTimeout(timeout);
+                renderUserTable(document.getElementById('user-search').value);
             }
-        };
+        }
+
+        function modelRowsWithUsage() {
+            return [...modelsData]
+                .filter(model => model.total_tokens > 0 || model.prompt_tokens > 0 || model.completion_tokens > 0 || model.cost_usd > 0 || model.call_count > 0)
+                .sort((a, b) => b.total_tokens - a.total_tokens || a.model.localeCompare(b.model));
+        }
+
+        function renderModelPanels() {
+            const insight = document.getElementById('model-insight-content');
+            const aggregate = document.getElementById('model-aggregate-content');
+
+            if (modelsLoadState === 'loading') {
+                insight.textContent = '正在加载模型用量数据...';
+                aggregate.textContent = '正在加载模型用量数据...';
+                return;
+            }
+
+            if (modelsLoadState === 'error') {
+                insight.innerHTML = `<div class="text-rose-700">${escapeHTML(modelsLoadError)}</div>`;
+                aggregate.innerHTML = `<div class="text-rose-700">${escapeHTML(modelsLoadError)}</div>`;
+                return;
+            }
+
+            const rows = modelRowsWithUsage();
+            if (rows.length === 0) {
+                insight.textContent = '暂无模型用量数据。完成一次网关调用并写入账本后，这里会显示真实成本线索。';
+                aggregate.innerHTML = `
+                    <div class="flex justify-between items-center text-sm">
+                        <span class="text-slate-600">模型数</span>
+                        <span class="font-medium px-2 py-1 bg-slate-100 rounded text-slate-700">0</span>
+                    </div>`;
+                return;
+            }
+
+            const totalTokens = rows.reduce((sum, row) => sum + row.total_tokens, 0);
+            const promptTokens = rows.reduce((sum, row) => sum + row.prompt_tokens, 0);
+            const completionTokens = rows.reduce((sum, row) => sum + row.completion_tokens, 0);
+            const totalCost = rows.reduce((sum, row) => sum + row.cost_usd, 0);
+            const totalCalls = rows.reduce((sum, row) => sum + row.call_count, 0);
+            const providers = new Set(rows.map(row => row.provider)).size;
+            const topModel = rows[0];
+            const topShare = totalTokens > 0 ? (topModel.total_tokens / totalTokens) * 100 : 0;
+            const completionShare = totalTokens > 0 ? (completionTokens / totalTokens) * 100 : 0;
+
+            insight.innerHTML = `
+                <div><strong>${escapeHTML(topModel.model)}</strong> 是当前最高消耗模型，占本月模型 Token 的 ${topShare.toFixed(1)}%。</div>
+                <div>输出 Token 占比 ${completionShare.toFixed(1)}%，可结合业务场景检查 max_tokens 与流式响应长度。</div>`;
+            aggregate.innerHTML = `
+                <div class="flex justify-between items-center text-sm">
+                    <span class="text-slate-600">总调用次数</span>
+                    <span class="font-medium px-2 py-1 bg-slate-100 rounded text-slate-700">${formatNumber(totalCalls)}</span>
+                </div>
+                <div class="flex justify-between items-center text-sm">
+                    <span class="text-slate-600">Prompt / Completion</span>
+                    <span class="font-medium px-2 py-1 bg-slate-100 rounded text-slate-700">${formatTokens(promptTokens)} / ${formatTokens(completionTokens)}</span>
+                </div>
+                <div class="flex justify-between items-center text-sm">
+                    <span class="text-slate-600">预估成本</span>
+                    <span class="font-medium px-2 py-1 bg-slate-100 rounded text-slate-700">${formatUSD(totalCost)}</span>
+                </div>
+                <div class="flex justify-between items-center text-sm">
+                    <span class="text-slate-600">Provider 数</span>
+                    <span class="font-medium px-2 py-1 bg-slate-100 rounded text-slate-700">${formatNumber(providers)}</span>
+                </div>`;
+        }
+
+        function updateModelsChart() {
+            const rows = modelRowsWithUsage();
+            if (chartsInitialized.models && chartInstances.bar) {
+                chartInstances.bar.data.labels = rows.length ? rows.map(row => row.model) : ['暂无数据'];
+                chartInstances.bar.data.datasets[0].data = rows.length ? rows.map(row => row.prompt_tokens) : [0];
+                chartInstances.bar.data.datasets[1].data = rows.length ? rows.map(row => row.completion_tokens) : [0];
+                chartInstances.bar.update();
+            }
+            setEmptyState('models-chart-empty-state', rows.length === 0 && modelsLoadState !== 'loading');
+        }
+
+        function renderModelsView() {
+            if (modelsLoadState === 'loading') {
+                setModelsAlert('loading', '正在加载模型用量数据...');
+            } else if (modelsLoadState === 'error') {
+                setModelsAlert('error', modelsLoadError);
+            } else if (modelsLoadState === 'ready' && modelRowsWithUsage().length === 0) {
+                setModelsAlert('empty', '暂无模型用量数据。完成一次网关调用后会自动显示 Prompt / Completion 拆分。');
+            } else {
+                setModelsAlert('', '');
+            }
+            updateModelsChart();
+            renderModelPanels();
+        }
+
+        async function loadModels(force = false) {
+            if (!force && (modelsLoadState === 'loading' || modelsLoadState === 'ready')) return;
+            modelsLoadState = 'loading';
+            modelsLoadError = '';
+            renderModelsView();
+
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 8000);
+            try {
+                const response = await fetch(MODELS_ENDPOINT, {
+                    headers: { 'Accept': 'application/json' },
+                    cache: 'no-store',
+                    signal: controller.signal,
+                });
+                if (!response.ok) {
+                    let code = `HTTP ${response.status}`;
+                    try {
+                        const body = await response.json();
+                        code = body?.error?.code || code;
+                    } catch (_) {}
+                    throw new Error(code);
+                }
+                modelsData = normalizeModels(await response.json());
+                modelsLoadState = 'ready';
+            } catch (error) {
+                modelsLoadState = 'error';
+                const reason = error.name === 'AbortError' ? '请求超时' : error.message;
+                modelsLoadError = `无法加载模型用量 (${reason})。请确认 admin 服务已启动，且 CORS 允许当前页面 origin。`;
+            } finally {
+                clearTimeout(timeout);
+                renderModelsView();
+            }
+        }
 
         // 搜索监听
         document.getElementById('user-search').addEventListener('input', (e) => {
@@ -580,9 +780,14 @@
             if (tabId === 'overview' && !chartsInitialized.overview) {
                 initOverviewCharts();
                 chartsInitialized.overview = true;
+            } else if (tabId === 'users') {
+                loadUsers();
             } else if (tabId === 'models' && !chartsInitialized.models) {
                 initModelsCharts();
                 chartsInitialized.models = true;
+                loadModels();
+            } else if (tabId === 'models') {
+                loadModels();
             }
         };
 
@@ -696,22 +901,21 @@
         }
 
         function initModelsCharts() {
-            // 3. 模型明细柱状图 (输入 vs 输出)
             const ctxBar = document.getElementById('modelsBarChart').getContext('2d');
             chartInstances.bar = new Chart(ctxBar, {
                 type: 'bar',
                 data: {
-                    labels: ['GPT-4o', 'Claude 3.5 Opus', 'Gemini 1.5 Pro', 'Llama-3-70B (自托管)', 'GPT-4o-mini'],
+                    labels: ['暂无数据'],
                     datasets: [
                         {
                             label: 'Prompt (输入) Tokens',
-                            data: [15.2, 18.5, 8.4, 6.2, 12.1], // 百万
+                            data: [0],
                             backgroundColor: '#93c5fd', // blue-300
                             borderRadius: 4
                         },
                         {
                             label: 'Completion (输出) Tokens',
-                            data: [8.5, 4.2, 3.1, 2.8, 6.5], // 百万
+                            data: [0],
                             backgroundColor: '#3b82f6', // blue-500
                             borderRadius: 4
                         }
@@ -725,7 +929,7 @@
                         tooltip: {
                             callbacks: {
                                 label: function(context) {
-                                    return context.dataset.label + ': ' + context.parsed.y + ' M';
+                                    return context.dataset.label + ': ' + formatTokens(context.parsed.y || 0);
                                 }
                             }
                         }
@@ -733,7 +937,12 @@
                     scales: {
                         y: {
                             stacked: true,
-                            title: { display: true, text: 'Tokens (百万)' },
+                            title: { display: true, text: 'Tokens' },
+                            ticks: {
+                                callback: function(value) {
+                                    return formatTokens(value);
+                                }
+                            },
                             grid: { borderDash: [4, 4], color: '#f1f5f9' },
                             border: { display: false }
                         },
@@ -745,12 +954,11 @@
                     }
                 }
             });
+            renderModelsView();
         }
 
         // --- 初始化执行 ---
         window.addEventListener('DOMContentLoaded', () => {
-            // 渲染用户列表
-            renderUserTable();
             // 默认加载概览标签页，图表会在 switchTab 中被初始化
             switchTab('overview');
             loadOverview();

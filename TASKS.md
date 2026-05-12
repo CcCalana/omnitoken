@@ -152,16 +152,18 @@
 
 ---
 
-## T-009b 前端用户/模型页接真数据 [phase:1] [owner:codex] [status:todo]
+## T-009b 前端用户/模型页接真数据 [phase:1] [owner:codex] [status:review]
+
+**Started**: 2026-05-12 22:05 CST
 
 **目标**: 消除 `测试前端.html` 中的**全部**硬编码假数据，3 个 tab 全展示真实数据。
 
 **接受标准**:
-- [ ] 用户额度页：删除 `userData` 硬编码数组（陈明/林晓等），改为 `fetch('/api/admin/users')`。进度条用真实 `used_tokens`；`quota==0` 时显示"无限额"或隐藏进度条。
-- [ ] 模型分析页：删除 GPT-4o/Claude/Gemini 硬编码数据，改为 `fetch('/api/admin/models')`。柱状图展示真实 prompt/completion 拆分。
-- [ ] 两个页面都补 loading / empty / error 三态（复用 overview 的 pattern）。
-- [ ] `fetch` 使用与 overview 相同的 `ADMIN_API_BASE_URL`。
-- [ ] 不改后端 API；不新增后端依赖。
+- [x] 用户额度页：删除 `userData` 硬编码数组（陈明/林晓等），改为 `fetch('/api/admin/users')`。进度条用真实 `used_tokens`；`quota==0` 时显示"无限额"或隐藏进度条。
+- [x] 模型分析页：删除 GPT-4o/Claude/Gemini 硬编码数据，改为 `fetch('/api/admin/models')`。柱状图展示真实 prompt/completion 拆分。
+- [x] 两个页面都补 loading / empty / error 三态（复用 overview 的 pattern）。
+- [x] `fetch` 使用与 overview 相同的 `ADMIN_API_BASE_URL`。
+- [x] 不改后端 API；不新增后端依赖。
 
 **不在范围**: 额度修改弹窗、分页、搜索。
 
