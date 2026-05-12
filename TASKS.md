@@ -148,6 +148,8 @@
 
 **依赖**: T-006b approved。
 
+**Result**: `ce204b5`。新增 `GET /api/admin/users` 与 `GET /api/admin/models`，复用 `cmd/admin` 现有 `overviewStore` / `*sql.DB`，DB 未配置时返回 200 + 空数组；未改 gateway、overview API、前端或依赖。自测：`go test -count=1 ./cmd/admin`、`go test -count=1 ./...`、`go vet ./...`、`go test -cover -count=1 ./cmd/admin`（cmd/admin 60.9%）通过；`go test -race -count=1 ./cmd/admin` 因本机缺少 gcc/cgo 工具链未能构建。
+
 ---
 
 ## T-009b 前端用户/模型页接真数据 [phase:1] [owner:codex] [status:blocked-by-T-009a]
