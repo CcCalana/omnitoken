@@ -417,6 +417,109 @@ fixture 设计：
 
 ---
 
+## T-006b admin overview 真查 DB [phase:1] [owner:codex] [status:todo]
+
+**目标**: 把 `cmd/admin` 的 `GET /api/admin/overview` 从硬编码 mock 替换为真实 DB 查询。前端 `测试前端.html` 的 Overview 视图从此展示 **活数据**——真实 token 消耗、真实成本、真实活跃用户数。这是 Demo-Ready 路线"admin 真查 DB"的核心。
+
+**接受标准**:
+- [ ] `GET /api/admin/overview` 返回与现有 `overviewResponse` **完全兼容**的 JSON 结构（`period` / `total_tokens` / `estimated_cost_usd` / `active_users` / `quota_warning_users` / `trend[]` / `model_usage[]`），前端 JS 不需要任何改动即可渲染。
+- [ ] **`total_tokens`**: `SELECT COALESCE(SUM(total_tokens), 0) FROM usage_token_breakdown JOIN usage_events ON ...`，按当前月聚合。
+- [ ] **`estimated_cost_usd`**: `SELECT COALESCE(SUM(cost_usd), 0) FROM cost_ledger JOIN usage_events ON ...`，按当前月聚合。返回 `float64`（前端用 JS `toFixed(2)` 显示，精度足够 Demo-Ready）。
+- [ ] **`active_users`**: 当前月内至少 1 次成功请求（`usage_events.status_code BETWEEN 200 AND 299`）的 distinct `user_id` 数。
+- [ ] **`quota_warning_users`**: Demo-Ready 阶段返回 `0`（没有配额系统），但字段保留。
+- [ ] **`trend[]`**: 过去 30 天（或有数据的天数），按 `DATE(usage_events.created_at)` 聚合 tokens + cost。
+- [ ] **`model_usage[]`**: 按 `model_actual` 聚合 tokens + cost + share（share = tokens / total_tokens）。
+- [ ] **DB 连接**: admin 进程使用 `OMNITOKEN_DATABASE_URL`，与 gateway 共享同一个 Postgres。`cmd/admin/main.go` 启动时如 `cfg.DatabaseURL == ""` 则 overview 仍返回全零 mock（降级不崩溃）。
+- [ ] **查询性能**: 单次 overview 查询在 1000 行 `usage_events` 内应 < 100ms（Demo-Ready 数据量极小，不要求索引优化，但 SQL 必须走已有索引 `usage_events(created_at)` 和 `usage_events(organization_id, created_at)`）。
+- [ ] **安全**: 不暴露 request_id、prompt、API key 等敏感字段；overview 只返回聚合数据。
+- [ ] **测试**: `cmd/admin` 至少 2 个 handler 单测（有数据 case + 空数据 case），覆盖率不要求（main 包），但 SQL 逻辑必须有测试。
+- [ ] **不改 `internal/usage`**：T-006b 只在 `cmd/admin` 层做查询，不修改 `internal/usage` 包。
+- [ ] **不改前端**: 前端 `测试前端.html` 在 T-006c 统一改，T-006b 只改后端 API。
+
+**不在范围**:
+- 前端改造（T-006c）。
+- 用户维度查询 / 额度分配接口（Phase 1 完整版）。
+- RBAC 鉴权（T-005b）。
+- 分页 / 筛选 / 导出（Phase 2）。
+
+**Codex propose 前置 (必须)**:
+至少覆盖：
+1. **SQL 设计**：overview 的 4 个聚合 query 是写 1 条大 CTE 还是拆 4 条小 query？给出取舍。
+2. **overview handler 重构方式**：直接改 `handleOverview` 还是新增 `overviewStore` 接口做可测试抽象？
+3. **`cmd/admin/main.go` DB 连接管理**：当前 `newVirtualKeyCreator` 已经有条件打开 DB，overview 是否复用同一个 `*sql.DB`？
+4. **降级策略**：DB 查询失败时返回什么——500 error 还是 fallback 到全零数据？
+5. **`period` 字段**：用 `time.Now().Format("2006-01")` 还是可配置？
+
+**依赖**: T-008 approved（已通过，usage_events / cost_ledger 已有数据写入路径）。
+
+**预计**: 3-4 小时（含 propose）。
+
+## PROPOSAL
+
+1. SQL 设计
+
+选择拆成少量小 query，而不是 1 条大 CTE/JSON 聚合 SQL。T-006b 的目标是替换 mock 并保持响应结构稳定；把 JSON shape 留在 Go 结构体里，SQL 只返回聚合数字，可读性和单测都更好。
+
+具体查询分三类：
+- summary query：当前月窗口 `[monthStart, nextMonthStart)` 内一次取 `total_tokens`、`estimated_cost_usd`、`active_users`。从 `usage_events` 左连接 `usage_token_breakdown` / `cost_ledger`，`active_users` 只统计 `status_code BETWEEN 200 AND 299 AND user_id IS NOT NULL`。
+- trend query：过去 30 天 UTC 日期窗口内按 `DATE(usage_events.created_at)` 聚合 tokens + cost，只返回有数据的天；前端可直接渲染空数组或少量点。
+- model usage query：当前月按 `COALESCE(NULLIF(model_actual,''), model_requested, 'unknown')` 聚合 tokens + cost，Go 端用 `tokens / total_tokens` 算 share，避免 SQL 里处理除零和 float 细节。
+
+`quota_warning_users` Demo-Ready 固定返回 0，不查配额表。所有 SQL 都以 `usage_events.created_at >= $1 AND usage_events.created_at < $2` 作为主过滤条件，走 T-003 已有 `usage_events(created_at)` 索引；后续如果接组织维度再切到 `(organization_id, created_at)`。
+
+2. overview handler 重构方式
+
+新增 `overviewStore` 接口做可测试抽象，不直接把 SQL 塞进 `handleOverview`：
+
+```go
+type overviewStore interface {
+    LoadOverview(ctx context.Context, now time.Time) (overviewResponse, error)
+}
+```
+
+`handleOverview` 改为 `makeOverviewHandler(logger, store, now)`。`store == nil` 时返回全零 `overviewResponse`，用于 `OMNITOKEN_DATABASE_URL` 为空的本地降级；有 store 时调用 DB，成功后返回与现有 `overviewResponse` 完全兼容的 JSON。旧的硬编码 mock 数据删除，避免前端误以为有真实活跃用户。
+
+测试上：
+- handler 用 fake store 覆盖有数据、空数据、DB error 三类。
+- `postgresOverviewStore` 用 fake SQL driver 或轻量 integration 测 SQL scan/聚合映射，确保 `total_tokens` / `cost` / `active_users` / `trend` / `model_usage.share` 正确。
+
+3. `cmd/admin/main.go` DB 连接管理
+
+复用同一个 `*sql.DB`，不再让 overview 和 dev virtual key endpoint 各开一个连接池。
+
+实施方式：
+- `main()` 里新增 `newAdminDB(logger, cfg)`：`cfg.DatabaseURL == ""` 时返回 `(nil, noop)` 并记录 info，不退出。
+- `newOverviewStore(db)`：`db == nil` 则传 nil store 给 overview handler，返回全零 overview。
+- `newVirtualKeyCreator(logger, cfg, db)`：bootstrap token 为空时仍不注册 dev endpoint；bootstrap token 非空但 `db == nil` 时保持当前 fail-fast（dev key 创建必须有 DB）。
+- `newMux(logger, cfg.Admin, overviewStore, creator)` 统一注入依赖。
+
+这样 admin 进程即使没有 DB 也能启动、healthz 和 overview 全零可用；一旦配置 DB，overview 和 dev endpoint 共享同一连接池。
+
+4. 降级策略
+
+分两层：
+- 启动时 `OMNITOKEN_DATABASE_URL == ""`：`GET /api/admin/overview` 返回 200 + 全零结构，`period` 仍是当前月。这是明确的本地降级，不假装有数据。
+- 请求时 DB 查询失败：返回 500 envelope，`code:"overview_query_failed"`，并 log error。不要 fallback 到全零，因为这会把“数据库坏了”伪装成“本月没有用量”，Demo 验收和排障都会被误导。
+
+响应不暴露 SQL、request_id 列表、prompt、API key、email 等敏感字段；只返回聚合数字。
+
+5. `period` 字段
+
+使用 `time.Now().UTC().Format("2006-01")`，不新增配置项。handler 接收 `now func() time.Time` 仅用于测试固定时间；生产永远用 UTC 当前月。
+
+当前月统计窗口用 UTC：
+
+```go
+monthStart := time.Date(now.UTC().Year(), now.UTC().Month(), 1, 0, 0, 0, 0, time.UTC)
+monthEnd := monthStart.AddDate(0, 1, 0)
+```
+
+Demo-Ready 阶段不做租户时区；Phase 2 如果做企业账单周期，再引入 org-level timezone/billing window。
+
+边界确认：T-006b 只改 `cmd/admin` 的 overview 查询与测试，不改 `internal/usage`、不改前端、不接 RBAC、不接配额系统、不跑真方舟。
+
+---
+
 ## T-008 usage parser + cost_ledger 入账（Demo-Ready 版） [phase:1] [owner:codex] [status:review]
 
 **目标**: T-007 已经把 usage 字段透传给客户端；T-008 在 gateway **同步把 usage 解析并入 cost_ledger / usage_events 两张表**。这是 Demo-Ready 路线让"账本闭环"真正成立的核心。
