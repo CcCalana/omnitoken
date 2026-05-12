@@ -87,10 +87,18 @@ type virtualKeyCreator interface {
 	CreateVirtualKey(context.Context, createVirtualKeyParams) (createVirtualKeyResult, error)
 }
 
+type overviewStore interface {
+	LoadOverview(context.Context, time.Time) (overviewResponse, error)
+}
+
 type postgresVirtualKeyCreator struct {
 	db     *sql.DB
 	random io.Reader
 	now    func() time.Time
+}
+
+type postgresOverviewStore struct {
+	db *sql.DB
 }
 
 func main() {
@@ -101,12 +109,14 @@ func main() {
 	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	creator, closeCreator := newVirtualKeyCreator(logger, cfg)
-	defer closeCreator()
+	db, closeDB := newAdminDB(logger, cfg)
+	defer closeDB()
+	creator := newVirtualKeyCreator(logger, cfg, db)
+	overview := newOverviewStore(db)
 
 	server := &http.Server{
 		Addr:              cfg.Admin.Addr,
-		Handler:           newMux(logger, cfg.Admin, creator),
+		Handler:           newMux(logger, cfg.Admin, overview, creator),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -117,14 +127,10 @@ func main() {
 	}
 }
 
-func newVirtualKeyCreator(logger *slog.Logger, cfg config.Config) (virtualKeyCreator, func()) {
-	if cfg.Admin.BootstrapToken == "" {
-		logger.Info("admin dev virtual key endpoint disabled", "reason", "bootstrap_token_empty", "port", cfg.Admin.Addr)
-		return nil, func() {}
-	}
+func newAdminDB(logger *slog.Logger, cfg config.Config) (*sql.DB, func()) {
 	if cfg.DatabaseURL == "" {
-		logger.Error("admin dev virtual key endpoint requires OMNITOKEN_DATABASE_URL")
-		os.Exit(1)
+		logger.Info("admin database disabled", "reason", "database_url_empty")
+		return nil, func() {}
 	}
 
 	db, err := sql.Open("postgres", cfg.DatabaseURL)
@@ -132,17 +138,37 @@ func newVirtualKeyCreator(logger *slog.Logger, cfg config.Config) (virtualKeyCre
 		logger.Error("open postgres", "error", err)
 		os.Exit(1)
 	}
-	return &postgresVirtualKeyCreator{db: db, random: nil, now: time.Now}, func() {
+	return db, func() {
 		if err := db.Close(); err != nil {
 			logger.Error("close postgres", "error", err)
 		}
 	}
 }
 
-func newMux(logger *slog.Logger, cfg config.AdminConfig, creator virtualKeyCreator) http.Handler {
+func newOverviewStore(db *sql.DB) overviewStore {
+	if db == nil {
+		return nil
+	}
+	return &postgresOverviewStore{db: db}
+}
+
+func newVirtualKeyCreator(logger *slog.Logger, cfg config.Config, db *sql.DB) virtualKeyCreator {
+	if cfg.Admin.BootstrapToken == "" {
+		logger.Info("admin dev virtual key endpoint disabled", "reason", "bootstrap_token_empty", "port", cfg.Admin.Addr)
+		return nil
+	}
+	if db == nil {
+		logger.Error("admin dev virtual key endpoint requires OMNITOKEN_DATABASE_URL")
+		os.Exit(1)
+	}
+
+	return &postgresVirtualKeyCreator{db: db, random: nil, now: time.Now}
+}
+
+func newMux(logger *slog.Logger, cfg config.AdminConfig, overview overviewStore, creator virtualKeyCreator) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
-	mux.HandleFunc("GET /api/admin/overview", handleOverview)
+	mux.HandleFunc("GET /api/admin/overview", makeOverviewHandler(logger, overview, time.Now))
 	if cfg.BootstrapToken != "" && creator != nil {
 		// Demo-Ready 简化版: this admin-port-only endpoint lives on
 		// 8081, not the gateway data-plane port 8080. Full admin auth/RBAC and
@@ -161,25 +187,152 @@ func handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-func handleOverview(w http.ResponseWriter, _ *http.Request) {
-	httpx.WriteJSON(w, http.StatusOK, overviewResponse{
-		Period:            "2026-05",
-		TotalTokens:       42_500_000,
-		EstimatedCostUSD:  1240.50,
-		ActiveUsers:       128,
-		QuotaWarningUsers: 12,
-		Trend: []dailyTokenUsage{
-			{Date: "2026-05-01", Tokens: 1_200_000, Cost: 35.10},
-			{Date: "2026-05-02", Tokens: 1_500_000, Cost: 44.80},
-			{Date: "2026-05-03", Tokens: 1_100_000, Cost: 31.90},
-		},
-		ModelUsage: []modelUsage{
-			{Model: "gpt-4o", Tokens: 19_125_000, Cost: 558.22, Share: 0.45},
-			{Model: "claude-3-5-sonnet", Tokens: 10_625_000, Cost: 341.13, Share: 0.25},
-			{Model: "gemini-1.5-pro", Tokens: 6_375_000, Cost: 188.40, Share: 0.15},
-			{Model: "gpt-4o-mini", Tokens: 6_375_000, Cost: 152.75, Share: 0.15},
-		},
-	})
+func makeOverviewHandler(logger *slog.Logger, store overviewStore, now func() time.Time) http.HandlerFunc {
+	if now == nil {
+		now = time.Now
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		if store == nil {
+			httpx.WriteJSON(w, http.StatusOK, zeroOverview(now()))
+			return
+		}
+
+		overview, err := store.LoadOverview(r.Context(), now())
+		if err != nil {
+			logger.Error("load overview", "error", err)
+			httpx.WriteJSON(w, http.StatusInternalServerError, errorEnvelope("failed to load overview", "server_error", "overview_query_failed"))
+			return
+		}
+
+		httpx.WriteJSON(w, http.StatusOK, overview)
+	}
+}
+
+func zeroOverview(now time.Time) overviewResponse {
+	return overviewResponse{
+		Period:            now.UTC().Format("2006-01"),
+		QuotaWarningUsers: 0,
+		Trend:             []dailyTokenUsage{},
+		ModelUsage:        []modelUsage{},
+	}
+}
+
+func (s *postgresOverviewStore) LoadOverview(ctx context.Context, now time.Time) (overviewResponse, error) {
+	now = now.UTC()
+	monthStart, monthEnd := monthWindow(now)
+	response := zeroOverview(now)
+
+	const summaryQuery = `
+SELECT
+  COALESCE(SUM(utb.total_tokens), 0)::bigint AS total_tokens,
+  COALESCE(SUM(cl.cost_usd), 0)::float8 AS estimated_cost_usd,
+  COUNT(DISTINCT ue.user_id) FILTER (
+    WHERE ue.status_code BETWEEN 200 AND 299 AND ue.user_id IS NOT NULL
+  )::bigint AS active_users
+FROM usage_events ue
+LEFT JOIN usage_token_breakdown utb ON utb.usage_event_id = ue.id
+LEFT JOIN cost_ledger cl ON cl.usage_event_id = ue.id
+WHERE ue.created_at >= $1 AND ue.created_at < $2`
+
+	var activeUsers int64
+	if err := s.db.QueryRowContext(ctx, summaryQuery, monthStart, monthEnd).Scan(
+		&response.TotalTokens,
+		&response.EstimatedCostUSD,
+		&activeUsers,
+	); err != nil {
+		return overviewResponse{}, fmt.Errorf("query overview summary: %w", err)
+	}
+	response.ActiveUsers = int(activeUsers)
+
+	trend, err := s.loadTrend(ctx, now.AddDate(0, 0, -30), now)
+	if err != nil {
+		return overviewResponse{}, err
+	}
+	response.Trend = trend
+
+	modelUsage, err := s.loadModelUsage(ctx, monthStart, monthEnd, response.TotalTokens)
+	if err != nil {
+		return overviewResponse{}, err
+	}
+	response.ModelUsage = modelUsage
+
+	return response, nil
+}
+
+func monthWindow(now time.Time) (time.Time, time.Time) {
+	now = now.UTC()
+	start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	return start, start.AddDate(0, 1, 0)
+}
+
+func (s *postgresOverviewStore) loadTrend(ctx context.Context, start time.Time, end time.Time) ([]dailyTokenUsage, error) {
+	const trendQuery = `
+SELECT
+  to_char((ue.created_at AT TIME ZONE 'UTC')::date, 'YYYY-MM-DD') AS usage_date,
+  COALESCE(SUM(utb.total_tokens), 0)::bigint AS total_tokens,
+  COALESCE(SUM(cl.cost_usd), 0)::float8 AS cost_usd
+FROM usage_events ue
+LEFT JOIN usage_token_breakdown utb ON utb.usage_event_id = ue.id
+LEFT JOIN cost_ledger cl ON cl.usage_event_id = ue.id
+WHERE ue.created_at >= $1 AND ue.created_at < $2
+GROUP BY (ue.created_at AT TIME ZONE 'UTC')::date
+ORDER BY (ue.created_at AT TIME ZONE 'UTC')::date ASC`
+
+	rows, err := s.db.QueryContext(ctx, trendQuery, start.UTC(), end.UTC())
+	if err != nil {
+		return nil, fmt.Errorf("query overview trend: %w", err)
+	}
+	defer rows.Close()
+
+	trend := []dailyTokenUsage{}
+	for rows.Next() {
+		var item dailyTokenUsage
+		if err := rows.Scan(&item.Date, &item.Tokens, &item.Cost); err != nil {
+			return nil, fmt.Errorf("scan overview trend: %w", err)
+		}
+		trend = append(trend, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate overview trend: %w", err)
+	}
+	return trend, nil
+}
+
+func (s *postgresOverviewStore) loadModelUsage(ctx context.Context, start time.Time, end time.Time, totalTokens int64) ([]modelUsage, error) {
+	const modelUsageQuery = `
+SELECT
+  COALESCE(NULLIF(ue.model_actual, ''), ue.model_requested, 'unknown') AS model,
+  COALESCE(SUM(utb.total_tokens), 0)::bigint AS total_tokens,
+  COALESCE(SUM(cl.cost_usd), 0)::float8 AS cost_usd
+FROM usage_events ue
+LEFT JOIN usage_token_breakdown utb ON utb.usage_event_id = ue.id
+LEFT JOIN cost_ledger cl ON cl.usage_event_id = ue.id
+WHERE ue.created_at >= $1 AND ue.created_at < $2
+GROUP BY COALESCE(NULLIF(ue.model_actual, ''), ue.model_requested, 'unknown')
+ORDER BY total_tokens DESC, model ASC`
+
+	rows, err := s.db.QueryContext(ctx, modelUsageQuery, start.UTC(), end.UTC())
+	if err != nil {
+		return nil, fmt.Errorf("query overview model usage: %w", err)
+	}
+	defer rows.Close()
+
+	usage := []modelUsage{}
+	for rows.Next() {
+		var item modelUsage
+		if err := rows.Scan(&item.Model, &item.Tokens, &item.Cost); err != nil {
+			return nil, fmt.Errorf("scan overview model usage: %w", err)
+		}
+		if totalTokens > 0 {
+			item.Share = float64(item.Tokens) / float64(totalTokens)
+		}
+		usage = append(usage, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate overview model usage: %w", err)
+	}
+	return usage, nil
 }
 
 func makeCreateVirtualKeyHandler(logger *slog.Logger, bootstrapToken string, creator virtualKeyCreator) http.HandlerFunc {
