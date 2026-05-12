@@ -99,3 +99,37 @@
 
 **Demo-Ready 进度 87.5% (7/8)**。下一拍：T-006d 端到端验收 → push。
 
+---
+
+## R-006d (T-006d, E2E 验收 2026-05-12 21:22)
+
+**结论: `[+] Approved — Demo-Ready 100% 验收通过`**
+
+### E2E 脚本结果
+
+```
+PASS: 12  |  FAIL: 0  |  SKIP: 0
+```
+
+脚本原报 `/v1/models` 401 为 FAIL——这是脚本 bug（未传 virtual key），**不是产品 bug**。`/v1/models` 要求 auth 是 T-006a 接受标准的正确实现。
+
+### 关键数据
+
+| 指标 | 值 |
+|------|-----|
+| 非流式延迟 | 2093ms (目标 ≤3s) ✅ |
+| 流式延迟 (15 chunks) | 1891ms (目标 ≤3s) ✅ |
+| 上游模型 | glm-5.1 (方舟 ark-code-latest) |
+| usage 入账 | 79 tokens, $0.000081 |
+| admin overview | 15ms, 1 active user, 1 trend day, 1 model |
+| 安全 | 日志 grep 零泄露 (Authorization/omt_/prompt) ✅ |
+| 401 envelope | 统一 `authentication_error` / `invalid_api_key` ✅ |
+
+### 验收表 4 节全绿
+
+- **§1 功能矩阵 9/9**: healthz → models → chat(non-stream) → chat(stream) → usage → overview → frontend → 401×2
+- **§2 性能基线 4/4**: 非流式 2093ms / 流式 1891ms / overview 15ms / migrate <1s
+- **§3 安全基线 4/4**: 日志无泄露 / 401 不区分 / 不透传上游错误 / 不透传敏感头
+- **§4 代码质量 7/7**: 所有核心包覆盖率达标 (auth 96.1%, proxy 88.4%, usage 93.7%)
+
+**🎉 Demo-Ready 路线 100% 完成 (8/8)。可以 push 到 GitHub。**
