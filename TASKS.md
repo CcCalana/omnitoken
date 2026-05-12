@@ -171,6 +171,8 @@
 
 **依赖**: T-009a approved。
 
+**Result**: `71408dc`。用户页改为 `GET /api/admin/users`，模型页改为 `GET /api/admin/models`，删除本地 `userData`、额度 prompt mock、模型静态数组与 GPT/Claude/Gemini 静态建议；两页均有 loading / empty / error 三态，并复用 `ADMIN_API_BASE_URL`。自测：重建 Docker admin 后真实 API 返回 users=11、models=1；Playwright fallback 打开 `http://localhost:3000/?admin=http://127.0.0.1:8081` 验证真实数据、搜索、空态、错误态与模型 chart 数据；截图在 `tmp/t009b-users-real.png`、`tmp/t009b-models-real.png`。`go test -count=1 ./...`、`git diff --check` 通过；Browser 插件连接阶段两次超时，故改用 Playwright fallback。
+
 ---
 
 ## T-010 Admin bootstrap token 全路由鉴权 [phase:1] [owner:codex] [status:todo]
