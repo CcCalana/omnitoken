@@ -44,7 +44,7 @@
 
 ---
 
-## T-006c 前端 fetch 真实数据 [phase:1] [owner:codex] [status:todo]
+## T-006c 前端 fetch 真实数据 [phase:1] [owner:codex] [status:review]
 
 **目标**: 把 `测试前端.html` 从 mock 数据改为 fetch 真实 admin API。
 
@@ -60,6 +60,8 @@
 **Codex propose 前置**: 不需要，按上述标准直接做。
 
 **依赖**: T-006b approved（已通过）。
+
+**Result**: `51ba90c` - replaced Overview mock KPI/chart data with `GET /api/admin/overview`, plus loading, empty, and error states. Self-test: inline script syntax check passed; `git diff --check` passed; Chrome headless fallback with a local mock admin API verified live data render (`3.46 M`, `$12.35`, active users `3`), empty overview state, and unreachable-admin error state. Browser plugin path was attempted first but timed out while connecting, so rendered QA used local Chrome headless.
 
 ---
 
