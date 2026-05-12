@@ -16,7 +16,7 @@
 ## 2. 工作循环（每次会话）
 
 ```
-1. 读 规划.md 顶部三节（状态、协作模式、当前 Phase）
+1. 读 规划.md **仅**零节「当前项目状态」（约 5 行）— 确认当前 Phase。不要读全文。
 2. 读 TASKS.md，找到第一条 status:todo & owner:codex 的任务
 3. 读 REVIEW.md，确认没有未解决的 CRITICAL/HIGH 阻塞
 4. 把 TASKS.md 的该条 status 改为 in-progress，写下开始时间
@@ -37,7 +37,38 @@
 2. **测试与代码同 PR**。没有测试的代码视同未完成，不进 review。
 3. **每个新包配 README 一两行**说明职责，避免后人猜。
 4. **数据库改动必须配 up + down 迁移**，并在本地跑通 `migrate up && migrate down && migrate up`。
-5. **任何依赖新增**：先在 `TASKS.md` 任务条目 `Dependencies` 区写明（包名、用途、替代品评估），等 Claude 在 `REVIEW.md` 给出 `[+] approved` 之前不要锁版本。
+5. **依赖与许可证政策**（**2026-05-11 R-003-license 更新为分级规则**）：
+
+   依赖新增的流程：先在 `TASKS.md` 任务条目 `Dependencies` 或 `PROPOSAL` 区写明（包名、用途、替代品评估、license），等 Claude 在 `REVIEW.md` 给 `[+] approved` 后再锁版本。**直接 + 间接**依赖都要写。
+
+   **许可证分级**（按是否需要 propose 决定）：
+
+   **5.a Approved without propose（permissive OSI，可直接用）**
+   - MIT / BSD-2-Clause / BSD-3-Clause / ISC
+   - Apache-2.0
+   - 0BSD / Unlicense
+   - BSL-1.0 (Boost Software License，**不是** Business Source License)
+
+   **5.b Approved as transitive only, MUST NOT fork/modify（weak copyleft，间接依赖可接受）**
+   - MPL-2.0
+   - EPL-2.0
+   - CDDL-1.0 / 1.1
+
+   出现在 `go.mod` 间接依赖里时不需 propose；但必须更新 `THIRD_PARTY_LICENSES.md` 台账，标注"未 fork、未修改源文件"。**禁止** 改这些包的源代码——一改性质就变成"直接受 license 约束"。
+
+   **5.c Propose required（必须停下来让 Claude 决策）**
+   - 把 5.b 中的 weak copyleft 作为**直接依赖**引入。
+   - LGPL-2.1 / LGPL-3.0（即使间接也要 propose）。
+   - 任何 GPL 系：GPL-2.0 / GPL-3.0 / AGPL-3.0。
+   - 商业受限或"源可见但商用受限"协议：SSPL、BSL（Business Source License）、Elastic License、Confluent Community License、Redis Source Available License 等。
+   - license 标注缺失、不清晰、或自定义协议。
+
+   **5.d Hard ban（直接拒绝，不接受 propose）**
+   - Proprietary 闭源依赖。
+   - 任何明确禁止商业使用的协议。
+   - 修改 AGPL 源码并合并到本仓库。
+
+   **5.e 自动化门**: CI 必跑 `github.com/google/go-licenses check ./...`，允许列表 = 5.a + 5.b；命中 5.c 即阻断 CI 直至 propose 通过并加进 allow-list。allow-list 文件 `.licenses/allowed.txt`，每次新增条目都附 `REVIEW.md` 引用号。
 6. **配置项命名前缀** `OMNITOKEN_`，env 优先于配置文件。
 7. **错误处理**：内部错误用 `fmt.Errorf("xxx: %w", err)`；HTTP 边界统一通过 `internal/httpx/errors.go`（如不存在则在第一次需要时新建并写入任务记录）。
 8. **日志**：`log/slog`，结构化字段；严禁打印任何 Authorization / API Key / Prompt 全文。
@@ -141,3 +172,33 @@ new internal/proxy package.
 - 现阶段没有 git 仓库初始化 —— `T-001` 任务会处理。在那之前所有改动通过文件保存即可，Claude 会单独审。
 - 用户日常工作里有飞书/lark 系列工具；非用户主动要求，不要发飞书消息。
 - 若需要交互式登录（`gcloud auth login` 之流），向用户提出"请你在终端输入 `! <command>`"，不要自己尝试 spawn。
+
+---
+
+## 9. 本地 Secrets 与上游联调（Phase 1 用）
+
+**仓库根目录 `.env`** 是本地唯一的 secret 落点，**已加入 `.gitignore`**（`.gitignore:7`）。Phase 1 的所有联调与 L2 e2e 测试都从这里读取。
+
+### 9.1 当前已授权的 dev secrets
+
+- `OMNITOKEN_ARK_API_KEY` —— 火山方舟 dev key，用户 2026-05-11 授权用于 Phase 1 全量测试（含 L2 e2e）。`.env` 已填好。
+- 上游 URL / 默认模型 / DisableThinking 默认值同步落在 `.env`。
+
+### 9.2 调用规则（**强约束**）
+
+1. **不要把 `.env` 的真 key 写入任何源文件、测试 fixture、commit 消息、日志、Issue/PR 描述、注释**。`testdata/golden/ark/` 里已经有脱敏样本作为回放基线，做单测时优先用这些。
+2. **不要把 key 通过 HTTP / 任何外发请求泄漏**。`internal/proxy` 转发上游时也只走配置注入路径，不允许打印请求头。
+3. **运行成本意识**：单次 e2e 跑预计消耗 1–5 元 RMB token（详见 T-100 的成本上限保护）。L2 套件**默认不在每次 PR 上跑**，只 nightly + 手动；本地调试时也要给出预算上限（建议 `MAX_REQUESTS` 环境变量）。
+4. **如果发现 key 在任何输出里出现**：立刻按 `AGENTS.md §6.3 紧急通道` 处理（顶部 URGENT + REVIEW.md 红旗），等用户决定是否轮换。
+5. **CI/GitHub Actions 注入**：T-100 nightly job 必须从 `secrets.OMNITOKEN_ARK_API_KEY` 读，本仓库 `.env` 文件**只**在本地使用。
+
+### 9.3 加载 `.env` 的两种姿势（任选其一，**不要**写 .env loader 进生产代码）
+
+- PowerShell：`Get-Content .env | Where-Object { $_ -and -not $_.StartsWith('#') } | ForEach-Object { $kv = $_ -split '=', 2; [System.Environment]::SetEnvironmentVariable($kv[0], $kv[1]) }`
+- Bash：`set -a && source .env && set +a`
+
+或者使用一个**只用于 e2e / smoke**的 dev 辅助二进制（如 `cmd/e2e-runner` 自带 godotenv），但生产 `cmd/gateway` / `cmd/admin` 必须只读环境变量，不读 `.env` 文件。
+
+### 9.4 实测过的最快配方（写进未来代码默认值或 demo 文档）
+
+OpenAI-compat 端点 + 请求体加 `thinking: {"type": "disabled"}` + `stream_options: {"include_usage": true}` → 稳定 1.7–2.0s 完成含 usage 的完整 SSE。Anthropic-compat 端点延迟显著更高且 thinking 默认开启，**Phase 1 内不推荐做主路径**。
