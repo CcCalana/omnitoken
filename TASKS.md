@@ -196,6 +196,8 @@
 
 **Implementation note**: 为满足 `file://` 直接打开，正式代码使用拆分的 classic `defer` 脚本 + `window.OmniToken*` 命名空间；仍是纯 vanilla HTML/JS/CSS，无 npm/build tool。`type=module` 需要静态服务器，否则 Chromium 会拦截本地文件 import。
 
+**Result**: `10177c8` — 新增 `web/` 正式静态前端，Overview / Users / Models 三页全部从 admin API 拉取数据，保留 `测试前端.html` 作为参考未改动。自测：JS `node --check` 全通过；Playwright + 本机 Chrome 验证 static server 三页真实 fetch、`file://` 入口、loading/empty/error 三态均通过；`rg` 确认无旧 mock / fake 数据；`go test -count=1 ./...` 通过；`go vet ./...` 通过；`git diff --check` 通过。Docker race 已在容器内补跑，gcc 问题已绕开，但现有 `cmd/migrate` 的 Windows path normalize 单测在 Linux 容器下失败（`file://C:\workspace...` vs `file://C:/workspace...`），非本次前端改动引入，留给后续测试环境修正。
+
 ---
 
 ## T-010 Admin bootstrap token 全路由鉴权 [phase:1] [owner:codex] [status:todo]
