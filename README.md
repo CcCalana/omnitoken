@@ -1,26 +1,76 @@
 # OmniToken
 
-OmniToken is a Demo-Ready enterprise AI API gateway for issuing virtual API
-keys, proxying OpenAI-compatible chat requests to upstream providers, and
-recording token/cost usage for an admin console.
+Language: English | [简体中文](README.zh-CN.md)
 
-The current local demo flow is:
+OmniToken is an enterprise AI access gateway for internal platform teams. It
+issues virtual API keys, proxies OpenAI-compatible chat requests to upstream
+providers, records usage and cost, and gives administrators a control plane for
+user, key, model, and budget governance.
 
-1. Register a demo tenant and user from seed data.
-2. Fill in an upstream provider key.
-3. Create a virtual key for that user.
-4. Let the user call the gateway.
-5. View real usage in the admin API and web console.
+The long-term positioning is deliberately narrow: OmniToken is not another
+"largest model marketplace". It is a self-hosted AI access-control and cost
+ledger layer for companies that need to know who used which model, through
+which key, under which policy, at what cost, without leaking provider keys or
+prompt bodies.
 
-> Status note: this is Phase 1 Demo-Ready software. The dev virtual-key endpoint
-> is for local demos only. Full admin RBAC, production signup, quota changes, and
-> admin-route authentication hardening are tracked in later tasks.
+> Phase 1 status: Demo-Ready. The local flow below works end to end, but the
+> dev virtual-key endpoint is not a production signup system. Full admin auth,
+> RBAC, quota enforcement, and production key lifecycle workflows are tracked in
+> later tasks.
+
+## Why OmniToken
+
+Most AI gateway products are converging around a few common shapes:
+
+| Market pattern | Examples | Strong at | OmniToken differentiation |
+| --- | --- | --- | --- |
+| Broad model proxy | [LiteLLM](https://docs.litellm.ai/docs/proxy_server), [New API](https://github.com/QuantumNous/new-api) | Many providers, OpenAI-compatible routing, virtual keys, budgets, retries | Smaller provider surface at first, but a stricter enterprise ledger: user/project/key attribution, provider-specific token breakdowns, and audit-ready cost records. |
+| Hosted developer gateway | [Vercel AI Gateway](https://vercel.com/docs/ai-gateway), [Cloudflare AI Gateway](https://developers.cloudflare.com/ai-gateway/) | Fast hosted onboarding, observability, caching, simple base URL migration | Self-hosted by default, designed for internal security boundaries, private cost centers, and controllable data retention. |
+| API gateway plugin suite | [Kong AI Gateway](https://docs.konghq.com/gateway/latest/get-started/ai-gateway/), [Envoy AI Gateway](https://aigateway.envoyproxy.io/) | Mature traffic management, plugins, Kubernetes-native operations | Product surface is AI-governance-first instead of generic gateway-first: virtual key policy, cost accounting, and admin workflows are first-class. |
+| Developer portal / API product platform | [APIPark](https://github.com/APIParkLab/APIPark), enterprise API portals | API subscription, approvals, developer onboarding | Planned portal flow is centered on internal AI usage: request access, issue scoped keys, enforce model/budget policy, and show chargeback evidence. |
+| LLM observability and experimentation | [Helicone](https://docs.helicone.ai/getting-started/integration-method/gateway), [TensorZero](https://www.tensorzero.com/docs/gateway) | Request logs, traces, prompts, experiments, feedback loops | Observability is cost/security oriented first. Prompt capture is not the default; accounting, redaction, and auditability come before experimentation. |
+
+In practice, OmniToken aims to own five things well:
+
+1. Enterprise virtual keys: organization, project, user, key prefix, status,
+   expiration, model allow-list, budgets, RPM/TPM, and rotation.
+2. Accurate AI cost ledger: prompt, completion, cached, reasoning, multimodal,
+   provider, model requested, model actual, latency, status, and settlement
+   state.
+3. Safe-by-default gateway: no provider key exposure, no full Authorization
+   header logging, no prompt body logging by default, unified error envelopes.
+4. Internal admin workflow: registration or invite, user setup, key issuance,
+   usage review, budget review, and eventually approval/audit trails.
+5. Self-hosted control plane: Go data plane, Postgres ledger, Docker/Kubernetes
+   deployment path, and a static admin console that can be replaced later.
+
+## Target Product Flow
+
+The final product should feel like this for a company administrator:
+
+1. Register or create an organization.
+2. Invite users or sync them from the company identity provider.
+3. Add upstream provider credentials once, stored securely.
+4. Create projects and model access policies.
+5. Issue virtual keys to users, apps, or service accounts.
+6. Let teams call one OpenAI-compatible gateway endpoint.
+7. Enforce quotas, model allow-lists, budget limits, and rate limits.
+8. Review usage by org, project, user, key, model, provider, and time window.
+9. Export audit and cost data for FinOps, security review, and chargeback.
+
+The current demo implements the smallest useful slice of that path:
+
+1. Use seeded organization and users.
+2. Fill an upstream Ark API key.
+3. Create one virtual key.
+4. Send a chat completion through the gateway.
+5. See real usage in admin APIs and the web console.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  User["User with virtual key"] --> Gateway["Gateway :8080"]
+  User["User or app with virtual key"] --> Gateway["Gateway :8080"]
   Gateway --> Auth["Virtual key auth"]
   Gateway --> Ark["Volcano Ark OpenAI-compatible API"]
   Gateway --> Usage["usage_events + token breakdown + cost_ledger"]
