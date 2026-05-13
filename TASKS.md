@@ -152,26 +152,49 @@
 
 ---
 
-## T-009b 前端用户/模型页接真数据 [phase:1] [owner:codex] [status:review]
+## T-009b 正式前端工程化 [phase:1] [owner:codex] [status:review]
 
-**Started**: 2026-05-12 22:05 CST
+**Started**: 2026-05-12 22:45 CST
 
-**目标**: 消除 `测试前端.html` 中的**全部**硬编码假数据，3 个 tab 全展示真实数据。
+> **方向修正**: Codex 的 `71408dc` commit 继续堆 `测试前端.html`，方向错误。该 commit 保留但不用于生产。`测试前端.html` 仅作**视觉/交互风格参考**，正式前端在 `web/` 下搭建。
+
+**目标**: 在 `web/` 下搭建正式前端，3 个视图全部接真实 admin API，不含任何硬编码假数据。
+
+**技术方案**:
+- 纯 vanilla HTML + JS（ES modules）+ CSS，不引入 React/Vue/Next.js
+- Chart.js CDN（与参考一致）
+- 文件结构：
+  ```
+  web/
+    index.html          # SPA 入口
+    styles.css          # 全局样式（参考 测试前端.html 的 slate/indigo 风格）
+    src/
+      app.js            # 路由 / tab 切换 / 初始化
+      api.js            # fetch 封装（admin base URL 解析、超时、错误处理）
+      utils.js          # formatTokens / formatUSD / formatNumber 等
+      views/
+        overview.js     # KPI 卡片 + trend 折线图 + model share 饼图
+        users.js        # 用户列表表格 + 进度条 + 搜索
+        models.js       # 模型柱状图（prompt/completion 拆分）
+  ```
 
 **接受标准**:
-- [x] 用户额度页：删除 `userData` 硬编码数组（陈明/林晓等），改为 `fetch('/api/admin/users')`。进度条用真实 `used_tokens`；`quota==0` 时显示"无限额"或隐藏进度条。
-- [x] 模型分析页：删除 GPT-4o/Claude/Gemini 硬编码数据，改为 `fetch('/api/admin/models')`。柱状图展示真实 prompt/completion 拆分。
-- [x] 两个页面都补 loading / empty / error 三态（复用 overview 的 pattern）。
-- [x] `fetch` 使用与 overview 相同的 `ADMIN_API_BASE_URL`。
-- [x] 不改后端 API；不新增后端依赖。
+- [x] `web/index.html` 可直接用浏览器打开（file://）或通过任意静态服务器 serve。
+- [x] 3 个视图（Overview / Users / Models）全部 fetch 真实 API：`/api/admin/overview`、`/api/admin/users`、`/api/admin/models`。
+- [x] **零硬编码假数据**。Overview / Users / Models 全部从 API 获取。
+- [x] admin base URL 解析：`?admin=` → `localStorage` → 同 hostname `:8081` → `localhost:8081`（复用 T-006c 的逻辑）。
+- [x] 每个视图补 loading / empty / error 三态。
+- [x] 视觉风格贴近 `测试前端.html`：白底 SaaS 控制台、slate/indigo 配色、左侧导航、KPI 卡片、Chart.js 图表。
+- [x] 不改后端 API；不引入 npm/node 构建工具；不新增后端依赖。
+- [x] `测试前端.html` 保留不动（作为历史参考），不删除。
 
-**不在范围**: 额度修改弹窗、分页、搜索。
+**不在范围**: 额度修改弹窗、分页、搜索过滤、npm 构建工具、TypeScript。
 
 **Codex propose 前置**: 不需要，按上述标准直接做。
 
 **依赖**: T-009a approved。
 
-**Result**: `71408dc`。用户页改为 `GET /api/admin/users`，模型页改为 `GET /api/admin/models`，删除本地 `userData`、额度 prompt mock、模型静态数组与 GPT/Claude/Gemini 静态建议；两页均有 loading / empty / error 三态，并复用 `ADMIN_API_BASE_URL`。自测：重建 Docker admin 后真实 API 返回 users=11、models=1；Playwright fallback 打开 `http://localhost:3000/?admin=http://127.0.0.1:8081` 验证真实数据、搜索、空态、错误态与模型 chart 数据；截图在 `tmp/t009b-users-real.png`、`tmp/t009b-models-real.png`。`go test -count=1 ./...`、`git diff --check` 通过；Browser 插件连接阶段两次超时，故改用 Playwright fallback。
+**Implementation note**: 为满足 `file://` 直接打开，正式代码使用拆分的 classic `defer` 脚本 + `window.OmniToken*` 命名空间；仍是纯 vanilla HTML/JS/CSS，无 npm/build tool。`type=module` 需要静态服务器，否则 Chromium 会拦截本地文件 import。
 
 ---
 

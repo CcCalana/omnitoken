@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OmniToken Admin Console</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script defer src="./src/utils.js"></script>
+  <script defer src="./src/api.js"></script>
+  <script defer src="./src/views/overview.js"></script>
+  <script defer src="./src/views/users.js"></script>
+  <script defer src="./src/views/models.js"></script>
+  <script defer src="./src/app.js"></script>
+</head>
+<body>
+  <aside class="sidebar" aria-label="管理控制台导航">
+    <div class="brand">
+      <div class="brand-mark">O</div>
+      <div>
+        <div class="brand-title">OmniToken</div>
+        <div class="brand-subtitle">API Token 管理中心</div>
+      </div>
+    </div>
+
+    <nav class="nav" aria-label="主导航">
+      <button class="nav-link is-active" type="button" data-tab="overview">
+        <span class="nav-icon" aria-hidden="true">→</span>
+        <span>组织消耗概览</span>
+      </button>
+      <button class="nav-link" type="button" data-tab="users">
+        <span class="nav-icon" aria-hidden="true">●</span>
+        <span>用户额度分配</span>
+      </button>
+      <button class="nav-link" type="button" data-tab="models">
+        <span class="nav-icon" aria-hidden="true">■</span>
+        <span>模型调用分析</span>
+      </button>
+    </nav>
+
+    <div class="sidebar-footer">
+      <span>Admin API</span>
+      <strong id="admin-origin">--</strong>
+    </div>
+  </aside>
+
+  <main class="main-shell">
+    <header class="topbar">
+      <div>
+        <h1 id="page-title">组织消耗概览</h1>
+        <p id="page-subtitle">实时查看网关请求、Token 消耗和成本账本。</p>
+      </div>
+      <div class="topbar-actions">
+        <span class="period-chip">账期 <strong id="current-period">--</strong></span>
+        <button id="refresh-button" class="secondary-button" type="button">刷新</button>
+      </div>
+    </header>
+
+    <section id="view-overview" class="view is-active">
+      <div id="overview-alert" class="alert is-hidden"></div>
+
+      <div class="kpi-grid">
+        <article class="metric-card">
+          <p>本月总消耗</p>
+          <strong id="overview-total-tokens">--</strong>
+          <span>来自 usage ledger</span>
+        </article>
+        <article class="metric-card">
+          <p>预估账单</p>
+          <strong id="overview-estimated-cost">--</strong>
+          <span>来自 cost_ledger</span>
+        </article>
+        <article class="metric-card">
+          <p>活跃用户</p>
+          <strong id="overview-active-users">--</strong>
+          <span>本月成功请求用户</span>
+        </article>
+        <article class="metric-card metric-card-danger">
+          <p>额度预警</p>
+          <strong id="overview-quota-warning-users">--</strong>
+          <span>配额系统接入后更新</span>
+        </article>
+      </div>
+
+      <div class="chart-grid">
+        <article class="panel panel-wide">
+          <div class="panel-header">
+            <h2>近 30 天 Token 消耗趋势</h2>
+          </div>
+          <div class="chart-box">
+            <canvas id="trend-chart"></canvas>
+            <div id="trend-empty" class="empty-overlay is-hidden">暂无数据</div>
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-header">
+            <h2>模型调用占比</h2>
+          </div>
+          <div class="chart-box">
+            <canvas id="model-share-chart"></canvas>
+            <div id="model-share-empty" class="empty-overlay is-hidden">暂无数据</div>
+          </div>
+          <p class="panel-note">包含 Prompt 与 Completion 的合并 Token。</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="view-users" class="view">
+      <div class="view-intro">
+        <p>用户列表来自 admin API，当月窗口与后端聚合保持一致。</p>
+        <button class="secondary-button" type="button" data-action="reload-users">刷新用户</button>
+      </div>
+      <div id="users-alert" class="alert is-hidden"></div>
+
+      <article class="panel table-panel">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>用户 / 邮箱</th>
+                <th>当前消耗</th>
+                <th>配额状态</th>
+                <th>消耗进度</th>
+                <th class="align-right">状态</th>
+              </tr>
+            </thead>
+            <tbody id="users-table-body">
+              <tr><td colspan="5" class="table-state">等待加载</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+    </section>
+
+    <section id="view-models" class="view">
+      <div class="view-intro">
+        <p>模型分析来自 usage_events、usage_token_breakdown 与 cost_ledger 聚合结果。</p>
+        <button class="secondary-button" type="button" data-action="reload-models">刷新模型</button>
+      </div>
+      <div id="models-alert" class="alert is-hidden"></div>
+
+      <article class="panel">
+        <div class="panel-header">
+          <h2>各模型输入与输出 Token 对比</h2>
+        </div>
+        <div class="chart-box chart-box-tall">
+          <canvas id="models-bar-chart"></canvas>
+          <div id="models-empty" class="empty-overlay is-hidden">暂无数据</div>
+        </div>
+      </article>
+
+      <div class="insight-grid">
+        <article class="insight-panel accent-panel">
+          <h2>实时成本线索</h2>
+          <div id="model-insight">等待模型用量数据</div>
+        </article>
+        <article class="insight-panel">
+          <h2>本月模型聚合</h2>
+          <div id="model-aggregate">等待模型用量数据</div>
+        </article>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
