@@ -1,5 +1,7 @@
 .PHONY: help up down logs test lint vet format docker-build clean
 
+COMPOSE := docker compose --env-file .env -f deploy/docker-compose.yml
+
 help:
 	@echo "OmniToken commands:"
 	@echo "  make up            Start local Postgres, Redis, NATS, gateway, and admin"
@@ -14,13 +16,13 @@ up:
 	docker build -f deploy/Dockerfile.gateway -t omnitoken-gateway:local .
 	docker build -f deploy/Dockerfile.admin -t omnitoken-admin:local .
 	docker build -f deploy/Dockerfile.migrate -t omnitoken-migrate:local .
-	docker compose -f deploy/docker-compose.yml up -d --no-build
+	$(COMPOSE) up -d --no-build
 
 down:
-	docker compose -f deploy/docker-compose.yml down
+	$(COMPOSE) down
 
 logs:
-	docker compose -f deploy/docker-compose.yml logs -f
+	$(COMPOSE) logs -f
 
 test:
 	go test -race ./...

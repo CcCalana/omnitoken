@@ -6,6 +6,7 @@ param(
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
+$Compose = @("compose", "--env-file", ".env", "-f", "deploy/docker-compose.yml")
 
 function Show-Help {
     Write-Host "OmniToken commands:"
@@ -31,13 +32,13 @@ switch ($Task) {
         docker build -f deploy/Dockerfile.gateway -t omnitoken-gateway:local .
         docker build -f deploy/Dockerfile.admin -t omnitoken-admin:local .
         docker build -f deploy/Dockerfile.migrate -t omnitoken-migrate:local .
-        docker compose -f deploy/docker-compose.yml up -d --no-build
+        docker @Compose up -d --no-build
     }
     "down" {
-        docker compose -f deploy/docker-compose.yml down
+        docker @Compose down
     }
     "logs" {
-        docker compose -f deploy/docker-compose.yml logs -f
+        docker @Compose logs -f
     }
     "test" {
         go test ./...

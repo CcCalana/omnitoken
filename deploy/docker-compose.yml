@@ -88,6 +88,11 @@ services:
     environment:
       OMNITOKEN_GATEWAY_ADDR: ":8080"
       OMNITOKEN_DATABASE_URL: "postgres://omnitoken:omnitoken@postgres:5432/omnitoken?sslmode=disable"
+      OMNITOKEN_ARK_API_KEY: "${OMNITOKEN_ARK_API_KEY:-}"
+      OMNITOKEN_ARK_OPENAI_BASE_URL: "${OMNITOKEN_ARK_OPENAI_BASE_URL:-https://ark.cn-beijing.volces.com/api/coding/v3}"
+      OMNITOKEN_ARK_ANTHROPIC_BASE_URL: "${OMNITOKEN_ARK_ANTHROPIC_BASE_URL:-https://ark.cn-beijing.volces.com/api/coding}"
+      OMNITOKEN_ARK_DEFAULT_MODEL: "${OMNITOKEN_ARK_DEFAULT_MODEL:-ark-code-latest}"
+      OMNITOKEN_ARK_DISABLE_THINKING: "${OMNITOKEN_ARK_DISABLE_THINKING:-true}"
     ports:
       - "8080:8080"
     depends_on:
@@ -107,6 +112,8 @@ services:
       OMNITOKEN_ADMIN_ADDR: ":8081"
       OMNITOKEN_DATABASE_URL: "postgres://omnitoken:omnitoken@postgres:5432/omnitoken?sslmode=disable"
       OMNITOKEN_ADMIN_BOOTSTRAP_TOKEN: "${OMNITOKEN_ADMIN_BOOTSTRAP_TOKEN:-}"
+      OMNITOKEN_ADMIN_CORS_ORIGINS: "${OMNITOKEN_ADMIN_CORS_ORIGINS:-http://localhost:3000}"
+      OMNITOKEN_ADMIN_CORS_METHODS: "${OMNITOKEN_ADMIN_CORS_METHODS:-GET,POST,PATCH,DELETE,OPTIONS}"
     ports:
       - "8081:8081"
     depends_on:
