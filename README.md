@@ -3,15 +3,16 @@
 Language: English | [简体中文](README.zh-CN.md)
 
 OmniToken is an enterprise AI access gateway for internal platform teams. It
-issues virtual API keys, proxies OpenAI-compatible chat requests to upstream
-providers, records usage and cost, and gives administrators a control plane for
-user, key, model, and budget governance.
+issues virtual API keys, proxies AI API requests to upstream model providers,
+records usage and cost, and gives administrators a control plane for user, key,
+model, provider, and budget governance.
 
 The long-term positioning is deliberately narrow: OmniToken is not another
 "largest model marketplace". It is a self-hosted AI access-control and cost
 ledger layer for companies that need to know who used which model, through
 which key, under which policy, at what cost, without leaking provider keys or
-prompt bodies.
+prompt bodies. Broad provider support is still required, but it should live in
+a provider-adapter layer rather than dilute the governance product.
 
 > Phase 1 status: Demo-Ready. The local flow below works end to end, but the
 > dev virtual-key endpoint is not a production signup system. Full admin auth,
@@ -24,13 +25,13 @@ Most AI gateway products are converging around a few common shapes:
 
 | Market pattern | Examples | Strong at | OmniToken differentiation |
 | --- | --- | --- | --- |
-| Broad model proxy | [LiteLLM](https://docs.litellm.ai/docs/proxy_server), [New API](https://github.com/QuantumNous/new-api) | Many providers, OpenAI-compatible routing, virtual keys, budgets, retries | Smaller provider surface at first, but a stricter enterprise ledger: user/project/key attribution, provider-specific token breakdowns, and audit-ready cost records. |
+| Broad model proxy | [LiteLLM](https://docs.litellm.ai/docs/proxy_server), [New API](https://github.com/QuantumNous/new-api) | Many providers, OpenAI-compatible routing, virtual keys, budgets, retries | Provider breadth is necessary for adoption, but OmniToken pairs it with a stricter enterprise ledger: user/project/key attribution, provider-specific token breakdowns, and audit-ready cost records. |
 | Hosted developer gateway | [Vercel AI Gateway](https://vercel.com/docs/ai-gateway), [Cloudflare AI Gateway](https://developers.cloudflare.com/ai-gateway/) | Fast hosted onboarding, observability, caching, simple base URL migration | Self-hosted by default, designed for internal security boundaries, private cost centers, and controllable data retention. |
 | API gateway plugin suite | [Kong AI Gateway](https://docs.konghq.com/gateway/latest/get-started/ai-gateway/), [Envoy AI Gateway](https://aigateway.envoyproxy.io/) | Mature traffic management, plugins, Kubernetes-native operations | Product surface is AI-governance-first instead of generic gateway-first: virtual key policy, cost accounting, and admin workflows are first-class. |
 | Developer portal / API product platform | [APIPark](https://github.com/APIParkLab/APIPark), enterprise API portals | API subscription, approvals, developer onboarding | Planned portal flow is centered on internal AI usage: request access, issue scoped keys, enforce model/budget policy, and show chargeback evidence. |
 | LLM observability and experimentation | [Helicone](https://docs.helicone.ai/getting-started/integration-method/gateway), [TensorZero](https://www.tensorzero.com/docs/gateway) | Request logs, traces, prompts, experiments, feedback loops | Observability is cost/security oriented first. Prompt capture is not the default; accounting, redaction, and auditability come before experimentation. |
 
-In practice, OmniToken aims to own five things well:
+In practice, OmniToken aims to own six things well:
 
 1. Enterprise virtual keys: organization, project, user, key prefix, status,
    expiration, model allow-list, budgets, RPM/TPM, and rotation.
@@ -39,10 +40,30 @@ In practice, OmniToken aims to own five things well:
    state.
 3. Safe-by-default gateway: no provider key exposure, no full Authorization
    header logging, no prompt body logging by default, unified error envelopes.
-4. Internal admin workflow: registration or invite, user setup, key issuance,
+4. Provider adapter layer: OpenAI-compatible providers first, then native
+   adapters for Anthropic, Gemini/Vertex, Bedrock, Azure OpenAI, and private
+   OpenAI-compatible runtimes.
+5. Internal admin workflow: registration or invite, user setup, key issuance,
    usage review, budget review, and eventually approval/audit trails.
-5. Self-hosted control plane: Go data plane, Postgres ledger, Docker/Kubernetes
+6. Self-hosted control plane: Go data plane, Postgres ledger, Docker/Kubernetes
    deployment path, and a static admin console that can be replaced later.
+
+## Provider Strategy
+
+The current demo uses Volcano Ark because it gives us a fast OpenAI-compatible
+path with streaming usage. The product, however, must be provider-neutral to be
+widely useful. Provider support should grow in layers:
+
+| Stage | Provider class | Examples | Product requirement |
+| --- | --- | --- | --- |
+| Current demo | One OpenAI-compatible upstream | Volcano Ark | Prove virtual-key auth, SSE proxying, usage capture, and ledger writes. |
+| Near term | OpenAI-compatible providers | OpenAI, Azure OpenAI, DeepSeek, DashScope/Qwen, OpenRouter, vLLM-compatible private endpoints | Same gateway contract, provider credential management, model catalog, health checks, and per-provider pricing. |
+| Native adapters | Provider-specific APIs | Anthropic Messages, Google Gemini/Vertex AI, AWS Bedrock | Request/response adapters plus provider-specific usage mappers for cache, reasoning, image, audio, and tool tokens. |
+| Enterprise routing | Provider pools | Region-specific keys, fallback chains, weighted routing, canaries | Policy-driven routing by org, project, model, latency, budget, availability, and compliance tags. |
+
+The design rule is simple: one internal OpenAI-compatible entry point for
+callers, many provider adapters behind it, and no loss of billing fidelity when
+providers report usage differently.
 
 ## Target Product Flow
 
@@ -61,7 +82,8 @@ The final product should feel like this for a company administrator:
 The current demo implements the smallest useful slice of that path:
 
 1. Use seeded organization and users.
-2. Fill an upstream Ark API key.
+2. Fill the current demo upstream key. Today that is Volcano Ark; the product
+   roadmap requires more provider adapters.
 3. Create one virtual key.
 4. Send a chat completion through the gateway.
 5. See real usage in admin APIs and the web console.
@@ -72,7 +94,11 @@ The current demo implements the smallest useful slice of that path:
 flowchart LR
   User["User or app with virtual key"] --> Gateway["Gateway :8080"]
   Gateway --> Auth["Virtual key auth"]
-  Gateway --> Ark["Volcano Ark OpenAI-compatible API"]
+  Gateway --> Adapters["Provider adapter layer"]
+  Adapters --> Ark["Current demo: Volcano Ark"]
+  Adapters -. planned .-> OpenAI["OpenAI / Azure OpenAI"]
+  Adapters -. planned .-> Native["Anthropic / Gemini / Bedrock"]
+  Adapters -. planned .-> Private["Private OpenAI-compatible runtimes"]
   Gateway --> Usage["usage_events + token breakdown + cost_ledger"]
   Admin["Admin API :8081"] --> Usage
   Web["web/ static console"] --> Admin
@@ -89,6 +115,7 @@ flowchart LR
 - Usage and cost ledger writes after chat completions
 - Admin APIs for overview, users, and models
 - Static admin console in `web/`
+- Current provider adapter: Volcano Ark through an OpenAI-compatible endpoint
 
 ## Prerequisites
 
@@ -116,7 +143,7 @@ cp .env.example .env
 ${EDITOR:-vi} .env
 ```
 
-Fill in at least these values:
+Fill in at least these values for the current Ark demo:
 
 ```dotenv
 OMNITOKEN_ADMIN_BOOTSTRAP_TOKEN=dev-bootstrap-token-change-me
@@ -337,7 +364,8 @@ Use the full `virtual_key` returned by `/api/admin/dev/virtual-keys`, not the
 
 ### Gateway cannot reach the upstream provider
 
-Check that `.env` contains `OMNITOKEN_ARK_API_KEY`, then recreate the gateway:
+For the current Ark demo, check that `.env` contains `OMNITOKEN_ARK_API_KEY`,
+then recreate the gateway:
 
 ```powershell
 make up
@@ -372,7 +400,7 @@ make up
 | `cmd/admin` | Admin API and dev virtual-key endpoint |
 | `cmd/migrate` | golang-migrate wrapper |
 | `internal/auth` | Virtual-key generation and auth middleware |
-| `internal/proxy` | Ark chat-completions proxy |
+| `internal/proxy` | Current Ark chat-completions proxy; future home for provider adapters |
 | `internal/usage` | Usage parsing, recording, and cost ledger writes |
 | `migrations` | Database schema migrations |
 | `deploy` | Dockerfiles, Compose, and seed SQL |
