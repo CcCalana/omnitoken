@@ -11,6 +11,7 @@
   <script defer src="./src/views/overview.js"></script>
   <script defer src="./src/views/users.js"></script>
   <script defer src="./src/views/models.js"></script>
+  <script defer src="./src/views/audit.js"></script>
   <script defer src="./src/app.js"></script>
 </head>
 <body>
@@ -35,6 +36,10 @@
       <button class="nav-link" type="button" data-tab="models">
         <span class="nav-icon" aria-hidden="true">■</span>
         <span>模型调用分析</span>
+      </button>
+      <button class="nav-link" type="button" data-tab="audit">
+        <span class="nav-icon" aria-hidden="true">◇</span>
+        <span>审计日志</span>
       </button>
     </nav>
 
@@ -160,6 +165,58 @@
           <div id="model-aggregate">等待模型用量数据</div>
         </article>
       </div>
+    </section>
+
+    <section id="view-audit" class="view">
+      <div class="view-intro">
+        <p>审计日志来自 audit_logs，用于追踪 admin 写操作与失败尝试。</p>
+        <button class="secondary-button" type="button" data-action="reload-audit">刷新审计</button>
+      </div>
+      <div id="audit-alert" class="alert is-hidden"></div>
+
+      <article class="panel audit-filter-panel">
+        <div class="filter-grid">
+          <label>
+            <span>Actor</span>
+            <input id="audit-filter-actor" type="text" placeholder="bootstrap">
+          </label>
+          <label>
+            <span>资源类型</span>
+            <input id="audit-filter-resource-type" type="text" placeholder="virtual_key">
+          </label>
+          <label>
+            <span>开始时间</span>
+            <input id="audit-filter-since" type="datetime-local">
+          </label>
+          <label>
+            <span>结束时间</span>
+            <input id="audit-filter-until" type="datetime-local">
+          </label>
+        </div>
+        <div class="filter-actions">
+          <button class="secondary-button" type="button" data-action="apply-audit-filters">应用筛选</button>
+          <button class="ghost-button" type="button" data-action="clear-audit-filters">清空</button>
+        </div>
+      </article>
+
+      <article class="panel table-panel">
+        <div class="table-wrap">
+          <table class="audit-table">
+            <thead>
+              <tr>
+                <th>Actor</th>
+                <th>Action</th>
+                <th>Resource</th>
+                <th>Status</th>
+                <th>Created</th>
+              </tr>
+            </thead>
+            <tbody id="audit-table-body">
+              <tr><td colspan="5" class="table-state">等待加载</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
     </section>
   </main>
 </body>

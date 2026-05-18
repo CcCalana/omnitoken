@@ -50,6 +50,7 @@ func TestAdminReadRoutesRequireBootstrapToken(t *testing.T) {
 		"/api/admin/overview",
 		"/api/admin/users",
 		"/api/admin/models",
+		"/api/admin/audit-logs",
 	}
 
 	for _, path := range paths {
@@ -386,6 +387,96 @@ func TestModelsStoreErrorReturns500(t *testing.T) {
 	}
 }
 
+func TestAuditLogsReturnsEmptyWithoutStore(t *testing.T) {
+	t.Parallel()
+
+	cfg := testAdminConfig()
+	cfg.BootstrapToken = "dev-bootstrap"
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/audit-logs", nil)
+	req.Header.Set("Authorization", "Bearer dev-bootstrap")
+	rec := httptest.NewRecorder()
+
+	newMux(testLogger(), cfg, nil, nil).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+	var body []adminAuditLog
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode audit logs response: %v", err)
+	}
+	if len(body) != 0 {
+		t.Fatalf("expected empty audit log array, got %+v", body)
+	}
+}
+
+func TestAuditLogsHandlerParsesFilters(t *testing.T) {
+	t.Parallel()
+
+	since := time.Date(2026, 5, 19, 9, 0, 0, 0, time.UTC)
+	until := since.Add(time.Hour)
+	store := &fakeOverviewStore{
+		auditLogs: []adminAuditLog{{
+			ActorID:      "bootstrap",
+			ActorType:    "bootstrap",
+			Action:       "create_virtual_key",
+			ResourceType: "virtual_key",
+			StatusCode:   http.StatusCreated,
+			CreatedAt:    since.Format(time.RFC3339),
+		}},
+	}
+	cfg := testAdminConfig()
+	cfg.BootstrapToken = "dev-bootstrap"
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/admin/audit-logs?actor_id=bootstrap&resource_type=virtual_key&resource_id=key-1&since="+since.Format(time.RFC3339)+"&until="+until.Format(time.RFC3339)+"&limit=700",
+		nil,
+	)
+	req.Header.Set("Authorization", "Bearer dev-bootstrap")
+	rec := httptest.NewRecorder()
+
+	newMux(testLogger(), cfg, store, nil).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	if !store.auditLogsCalled {
+		t.Fatal("expected store to be called")
+	}
+	if store.auditLogFilters.ActorID != "bootstrap" ||
+		store.auditLogFilters.ResourceType != "virtual_key" ||
+		store.auditLogFilters.ResourceID != "key-1" ||
+		store.auditLogFilters.Limit != 500 {
+		t.Fatalf("unexpected filters: %+v", store.auditLogFilters)
+	}
+	if store.auditLogFilters.Since == nil || !store.auditLogFilters.Since.Equal(since) {
+		t.Fatalf("unexpected since filter: %+v", store.auditLogFilters.Since)
+	}
+	if store.auditLogFilters.Until == nil || !store.auditLogFilters.Until.Equal(until) {
+		t.Fatalf("unexpected until filter: %+v", store.auditLogFilters.Until)
+	}
+	var body []adminAuditLog
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode audit logs response: %v", err)
+	}
+	if len(body) != 1 || body[0].Action != "create_virtual_key" {
+		t.Fatalf("unexpected audit logs response: %+v", body)
+	}
+}
+
+func TestAuditLogsHandlerRejectsInvalidFilters(t *testing.T) {
+	t.Parallel()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/audit-logs?since=bad-time", nil)
+	rec := httptest.NewRecorder()
+
+	makeAuditLogsHandler(testLogger(), &fakeOverviewStore{}).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
+	}
+	assertErrorCode(t, rec, "invalid_audit_log_filters")
+}
+
 func TestPostgresOverviewStoreLoadOverviewMapsSQLResults(t *testing.T) {
 	now := time.Date(2026, 5, 12, 10, 30, 0, 0, time.UTC)
 	db := openFakeAdminDB(t, []adminFakeSQLResponse{
@@ -626,6 +717,106 @@ func TestPostgresOverviewStoreLoadModelsEmptyResults(t *testing.T) {
 	if got.Models == nil || len(got.Models) != 0 {
 		t.Fatalf("expected empty models array, got %+v", got.Models)
 	}
+}
+
+func TestPostgresOverviewStoreLoadAuditLogsMapsSQLResults(t *testing.T) {
+	createdAt := time.Date(2026, 5, 19, 9, 30, 0, 123, time.UTC)
+	db := openFakeAdminDB(t, []adminFakeSQLResponse{
+		{
+			columns: auditLogColumns(),
+			rows: [][]driver.Value{
+				{
+					"bootstrap",
+					"bootstrap",
+					"create_virtual_key",
+					"virtual_key",
+					"key-1",
+					nil,
+					`{"key_prefix":"abcdefghijkl"}`,
+					"192.0.2.10",
+					"admin-test",
+					"req-1",
+					int64(201),
+					createdAt,
+				},
+			},
+		},
+	})
+	store := &postgresOverviewStore{db: db}
+
+	got, err := store.LoadAuditLogs(context.Background(), auditLogFilters{Limit: 10})
+	if err != nil {
+		t.Fatalf("load audit logs: %v", err)
+	}
+
+	if len(got) != 1 {
+		t.Fatalf("expected one audit log, got %+v", got)
+	}
+	row := got[0]
+	if row.ActorID != "bootstrap" || row.ActorType != "bootstrap" || row.Action != "create_virtual_key" {
+		t.Fatalf("unexpected actor/action: %+v", row)
+	}
+	if row.ResourceID == nil || *row.ResourceID != "key-1" || row.IP == nil || *row.IP != "192.0.2.10" {
+		t.Fatalf("unexpected nullable fields: %+v", row)
+	}
+	if row.Before != nil || string(row.After) != `{"key_prefix":"abcdefghijkl"}` {
+		t.Fatalf("unexpected snapshots: before=%s after=%s", row.Before, row.After)
+	}
+	if row.StatusCode != http.StatusCreated || row.CreatedAt != createdAt.UTC().Format(time.RFC3339Nano) {
+		t.Fatalf("unexpected status/created_at: %+v", row)
+	}
+}
+
+func TestPostgresOverviewStoreLoadAuditLogsBuildsFilteredQuery(t *testing.T) {
+	since := time.Date(2026, 5, 19, 9, 0, 0, 0, time.UTC)
+	until := since.Add(time.Hour)
+	db := openFakeAdminDB(t, []adminFakeSQLResponse{
+		{
+			columns: auditLogColumns(),
+			rows:    [][]driver.Value{},
+		},
+	})
+	store := &postgresOverviewStore{db: db}
+
+	got, err := store.LoadAuditLogs(context.Background(), auditLogFilters{
+		ActorID:      "bootstrap",
+		ResourceType: "virtual_key",
+		ResourceID:   "key-1",
+		Since:        &since,
+		Until:        &until,
+		Limit:        50,
+	})
+	if err != nil {
+		t.Fatalf("load audit logs: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected no audit logs, got %+v", got)
+	}
+
+	queries := fakeAdminSQLSnapshot()
+	if len(queries) != 1 {
+		t.Fatalf("expected 1 query, got %d", len(queries))
+	}
+	query := queries[0].query
+	for _, want := range []string{
+		"FROM audit_logs",
+		"actor_id = $1",
+		"resource_type = $2",
+		"resource_id = $3",
+		"created_at >= $4",
+		"created_at < $5",
+		"LIMIT $6",
+	} {
+		if !strings.Contains(query, want) {
+			t.Fatalf("audit logs query missing %q: %s", want, query)
+		}
+	}
+	args := queries[0].args
+	if len(args) != 6 || args[0] != "bootstrap" || args[1] != "virtual_key" || args[2] != "key-1" || args[5] != int64(50) && args[5] != 50 {
+		t.Fatalf("unexpected audit log query args: %#v", args)
+	}
+	assertTimeArg(t, args[3], since)
+	assertTimeArg(t, args[4], until)
 }
 
 func TestOverviewCORSPreflight(t *testing.T) {
@@ -869,6 +1060,23 @@ func mapValues(values map[string]string) []string {
 	return out
 }
 
+func auditLogColumns() []string {
+	return []string{
+		"actor_id",
+		"actor_type",
+		"action",
+		"resource_type",
+		"resource_id",
+		"before",
+		"after",
+		"ip",
+		"user_agent",
+		"request_id",
+		"status_code",
+		"created_at",
+	}
+}
+
 func testAdminConfig() config.AdminConfig {
 	return config.AdminConfig{
 		Addr:        ":8081",
@@ -928,18 +1136,22 @@ func (r *adminAuditRecorder) expectNoRecord(t *testing.T) {
 }
 
 type fakeOverviewStore struct {
-	response     overviewResponse
-	users        usersResponse
-	models       modelsResponse
-	err          error
-	usersErr     error
-	modelsErr    error
-	called       bool
-	usersCalled  bool
-	modelsCalled bool
-	now          time.Time
-	usersNow     time.Time
-	modelsNow    time.Time
+	response        overviewResponse
+	users           usersResponse
+	models          modelsResponse
+	auditLogs       []adminAuditLog
+	err             error
+	usersErr        error
+	modelsErr       error
+	auditLogsErr    error
+	called          bool
+	usersCalled     bool
+	modelsCalled    bool
+	auditLogsCalled bool
+	now             time.Time
+	usersNow        time.Time
+	modelsNow       time.Time
+	auditLogFilters auditLogFilters
 }
 
 func (f *fakeOverviewStore) LoadOverview(_ context.Context, now time.Time) (overviewResponse, error) {
@@ -958,6 +1170,12 @@ func (f *fakeOverviewStore) LoadModels(_ context.Context, now time.Time) (models
 	f.modelsCalled = true
 	f.modelsNow = now
 	return f.models, f.modelsErr
+}
+
+func (f *fakeOverviewStore) LoadAuditLogs(_ context.Context, filters auditLogFilters) ([]adminAuditLog, error) {
+	f.auditLogsCalled = true
+	f.auditLogFilters = filters
+	return f.auditLogs, f.auditLogsErr
 }
 
 func assertTimeArg(t *testing.T, value driver.Value, want time.Time) {

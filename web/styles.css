@@ -227,6 +227,22 @@ button {
   color: var(--accent-strong);
 }
 
+.ghost-button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.ghost-button:hover {
+  background: var(--surface-soft);
+  color: var(--text);
+}
+
 .view {
   display: none;
   width: min(100%, 1280px);
@@ -526,6 +542,91 @@ tbody tr:hover {
   font-weight: 750;
 }
 
+.audit-filter-panel {
+  margin-bottom: 18px;
+}
+
+.filter-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.filter-grid label {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.filter-grid input {
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.filter-grid input:focus {
+  outline: 2px solid #c7d2fe;
+  border-color: var(--accent);
+}
+
+.filter-actions {
+  margin-top: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.audit-table tbody tr {
+  cursor: pointer;
+}
+
+.audit-resource {
+  display: grid;
+  gap: 2px;
+}
+
+.audit-json-row td {
+  padding: 0;
+  background: #f8fafc;
+}
+
+.audit-json-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  padding: 16px 18px;
+}
+
+.audit-json-grid h3 {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.audit-json-grid pre {
+  min-height: 90px;
+  max-height: 260px;
+  margin: 0;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .insight-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -598,6 +699,7 @@ tbody tr:hover {
   }
 
   .chart-grid,
+  .filter-grid,
   .insight-grid {
     grid-template-columns: 1fr;
   }
@@ -647,6 +749,10 @@ tbody tr:hover {
   .view-intro {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .audit-json-grid {
+    grid-template-columns: 1fr;
   }
 
   .kpi-grid {

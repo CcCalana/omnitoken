@@ -44,7 +44,20 @@ function createAdminAPI(baseURL = resolveAdminBaseURL()) {
     getOverview: () => fetchJSON(`${base}/api/admin/overview`),
     getUsers: () => fetchJSON(`${base}/api/admin/users`),
     getModels: () => fetchJSON(`${base}/api/admin/models`),
+    getAuditLogs: (filters = {}) => fetchJSON(`${base}/api/admin/audit-logs${toQueryString(filters)}`),
   };
+}
+
+function toQueryString(filters) {
+  const params = new URLSearchParams();
+  for (const key of ["actor_id", "resource_type", "resource_id", "since", "until", "limit"]) {
+    const value = filters[key];
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
+      params.set(key, String(value).trim());
+    }
+  }
+  const query = params.toString();
+  return query ? `?${query}` : "";
 }
 
 async function fetchJSON(url) {

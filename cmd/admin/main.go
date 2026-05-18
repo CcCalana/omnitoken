@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -79,6 +80,30 @@ type adminModelUsage struct {
 	CallCount        int64   `json:"call_count"`
 }
 
+type auditLogFilters struct {
+	ActorID      string
+	ResourceType string
+	ResourceID   string
+	Since        *time.Time
+	Until        *time.Time
+	Limit        int
+}
+
+type adminAuditLog struct {
+	ActorID      string          `json:"actor_id"`
+	ActorType    string          `json:"actor_type"`
+	Action       string          `json:"action"`
+	ResourceType string          `json:"resource_type"`
+	ResourceID   *string         `json:"resource_id"`
+	Before       json.RawMessage `json:"before"`
+	After        json.RawMessage `json:"after"`
+	IP           *string         `json:"ip"`
+	UserAgent    string          `json:"user_agent"`
+	RequestID    string          `json:"request_id"`
+	StatusCode   int             `json:"status_code"`
+	CreatedAt    string          `json:"created_at"`
+}
+
 type createVirtualKeyRequest struct {
 	OrganizationID string     `json:"organization_id"`
 	UserID         string     `json:"user_id"`
@@ -120,6 +145,7 @@ type overviewStore interface {
 	LoadOverview(context.Context, time.Time) (overviewResponse, error)
 	LoadUsers(context.Context, time.Time) (usersResponse, error)
 	LoadModels(context.Context, time.Time) (modelsResponse, error)
+	LoadAuditLogs(context.Context, auditLogFilters) ([]adminAuditLog, error)
 }
 
 type postgresVirtualKeyCreator struct {
@@ -223,6 +249,7 @@ func newMux(logger *slog.Logger, cfg config.AdminConfig, overview overviewStore,
 	mux.Handle("GET /api/admin/overview", adminAuth(http.HandlerFunc(makeOverviewHandler(logger, overview, time.Now))))
 	mux.Handle("GET /api/admin/users", adminAuth(http.HandlerFunc(makeUsersHandler(logger, overview, time.Now))))
 	mux.Handle("GET /api/admin/models", adminAuth(http.HandlerFunc(makeModelsHandler(logger, overview, time.Now))))
+	mux.Handle("GET /api/admin/audit-logs", adminAuth(http.HandlerFunc(makeAuditLogsHandler(logger, overview))))
 	if cfg.BootstrapToken != "" && creator != nil {
 		// Demo-Ready 简化版: this admin-port-only endpoint lives on
 		// 8081, not the gateway data-plane port 8080. Full admin auth/RBAC stays
@@ -307,6 +334,29 @@ func makeModelsHandler(logger *slog.Logger, store overviewStore, now func() time
 	}
 }
 
+func makeAuditLogsHandler(logger *slog.Logger, store overviewStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		filters, err := parseAuditLogFilters(r)
+		if err != nil {
+			httpx.WriteJSON(w, http.StatusBadRequest, errorEnvelope(err.Error(), "invalid_request", "invalid_audit_log_filters"))
+			return
+		}
+		if store == nil {
+			httpx.WriteJSON(w, http.StatusOK, []adminAuditLog{})
+			return
+		}
+
+		logs, err := store.LoadAuditLogs(r.Context(), filters)
+		if err != nil {
+			logger.Error("load audit logs", "error", err)
+			httpx.WriteJSON(w, http.StatusInternalServerError, errorEnvelope("failed to load audit logs", "server_error", "audit_logs_query_failed"))
+			return
+		}
+
+		httpx.WriteJSON(w, http.StatusOK, logs)
+	}
+}
+
 func zeroOverview(now time.Time) overviewResponse {
 	return overviewResponse{
 		Period:            now.UTC().Format("2006-01"),
@@ -322,6 +372,63 @@ func emptyUsersResponse() usersResponse {
 
 func emptyModelsResponse() modelsResponse {
 	return modelsResponse{Models: []adminModelUsage{}}
+}
+
+func parseAuditLogFilters(r *http.Request) (auditLogFilters, error) {
+	query := r.URL.Query()
+	filters := auditLogFilters{
+		ActorID:      strings.TrimSpace(query.Get("actor_id")),
+		ResourceType: strings.TrimSpace(query.Get("resource_type")),
+		ResourceID:   strings.TrimSpace(query.Get("resource_id")),
+		Limit:        100,
+	}
+
+	if value := strings.TrimSpace(query.Get("limit")); value != "" {
+		limit, err := parsePositiveInt(value)
+		if err != nil {
+			return auditLogFilters{}, fmt.Errorf("invalid limit")
+		}
+		if limit > 500 {
+			limit = 500
+		}
+		filters.Limit = limit
+	}
+
+	since, err := parseOptionalRFC3339(query.Get("since"))
+	if err != nil {
+		return auditLogFilters{}, fmt.Errorf("invalid since")
+	}
+	until, err := parseOptionalRFC3339(query.Get("until"))
+	if err != nil {
+		return auditLogFilters{}, fmt.Errorf("invalid until")
+	}
+	filters.Since = since
+	filters.Until = until
+	return filters, nil
+}
+
+func parseOptionalRFC3339(value string) (*time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return nil, err
+	}
+	utc := parsed.UTC()
+	return &utc, nil
+}
+
+func parsePositiveInt(value string) (int, error) {
+	out, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, err
+	}
+	if out <= 0 {
+		return 0, fmt.Errorf("must be positive")
+	}
+	return out, nil
 }
 
 func (s *postgresOverviewStore) LoadOverview(ctx context.Context, now time.Time) (overviewResponse, error) {
@@ -525,6 +632,134 @@ ORDER BY total_tokens DESC, model ASC`
 		return modelsResponse{}, fmt.Errorf("iterate admin models: %w", err)
 	}
 	return response, nil
+}
+
+func (s *postgresOverviewStore) LoadAuditLogs(ctx context.Context, filters auditLogFilters) ([]adminAuditLog, error) {
+	if filters.Limit <= 0 {
+		filters.Limit = 100
+	}
+	if filters.Limit > 500 {
+		filters.Limit = 500
+	}
+
+	query, args := buildAuditLogsQuery(filters)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query audit logs: %w", err)
+	}
+	defer rows.Close()
+
+	logs := []adminAuditLog{}
+	for rows.Next() {
+		item, err := scanAuditLog(rows)
+		if err != nil {
+			return nil, err
+		}
+		logs = append(logs, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate audit logs: %w", err)
+	}
+	return logs, nil
+}
+
+type auditLogScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanAuditLog(scanner auditLogScanner) (adminAuditLog, error) {
+	var item adminAuditLog
+	var resourceID sql.NullString
+	var before sql.NullString
+	var after sql.NullString
+	var ip sql.NullString
+	var createdAt time.Time
+	if err := scanner.Scan(
+		&item.ActorID,
+		&item.ActorType,
+		&item.Action,
+		&item.ResourceType,
+		&resourceID,
+		&before,
+		&after,
+		&ip,
+		&item.UserAgent,
+		&item.RequestID,
+		&item.StatusCode,
+		&createdAt,
+	); err != nil {
+		return adminAuditLog{}, fmt.Errorf("scan audit log: %w", err)
+	}
+	item.ResourceID = nullableStringPtr(resourceID)
+	item.Before = nullableRawJSON(before)
+	item.After = nullableRawJSON(after)
+	item.IP = nullableStringPtr(ip)
+	item.CreatedAt = createdAt.UTC().Format(time.RFC3339Nano)
+	return item, nil
+}
+
+func buildAuditLogsQuery(filters auditLogFilters) (string, []any) {
+	var builder strings.Builder
+	builder.WriteString(`
+SELECT
+  actor_id,
+  actor_type,
+  action,
+  resource_type,
+  resource_id,
+  "before"::text,
+  "after"::text,
+  ip::text,
+  user_agent,
+  request_id,
+  status_code,
+  created_at
+FROM audit_logs`)
+
+	args := make([]any, 0, 6)
+	conditions := make([]string, 0, 5)
+	addCondition := func(sql string, value any) {
+		args = append(args, value)
+		conditions = append(conditions, fmt.Sprintf(sql, len(args)))
+	}
+	if filters.ActorID != "" {
+		addCondition("actor_id = $%d", filters.ActorID)
+	}
+	if filters.ResourceType != "" {
+		addCondition("resource_type = $%d", filters.ResourceType)
+	}
+	if filters.ResourceID != "" {
+		addCondition("resource_id = $%d", filters.ResourceID)
+	}
+	if filters.Since != nil {
+		addCondition("created_at >= $%d", filters.Since.UTC())
+	}
+	if filters.Until != nil {
+		addCondition("created_at < $%d", filters.Until.UTC())
+	}
+	if len(conditions) > 0 {
+		builder.WriteString("\nWHERE ")
+		builder.WriteString(strings.Join(conditions, "\n  AND "))
+	}
+
+	args = append(args, filters.Limit)
+	builder.WriteString(fmt.Sprintf("\nORDER BY created_at DESC, id DESC\nLIMIT $%d", len(args)))
+	return builder.String(), args
+}
+
+func nullableStringPtr(value sql.NullString) *string {
+	if !value.Valid {
+		return nil
+	}
+	out := value.String
+	return &out
+}
+
+func nullableRawJSON(value sql.NullString) json.RawMessage {
+	if !value.Valid {
+		return nil
+	}
+	return json.RawMessage(value.String)
 }
 
 func makeCreateVirtualKeyHandler(logger *slog.Logger, creator virtualKeyCreator) http.HandlerFunc {

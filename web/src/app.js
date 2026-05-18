@@ -1,12 +1,13 @@
 (function () {
 const { createAdminAPI } = window.OmniTokenAPI;
-const { createModelsView, createOverviewView, createUsersView } = window.OmniTokenViews;
+const { createAuditView, createModelsView, createOverviewView, createUsersView } = window.OmniTokenViews;
 
 const api = createAdminAPI();
 const views = {
   overview: createOverviewView(api),
   users: createUsersView(api),
   models: createModelsView(api),
+  audit: createAuditView(api),
 };
 
 const titles = {
@@ -21,6 +22,10 @@ const titles = {
   models: {
     title: "模型调用分析",
     subtitle: "按模型聚合 Prompt、Completion、成本和调用次数。",
+  },
+  audit: {
+    title: "审计日志",
+    subtitle: "按 actor、资源与时间窗口查看 admin 写操作记录。",
   },
 };
 
