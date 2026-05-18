@@ -200,22 +200,26 @@
 
 ---
 
-## T-010 Admin bootstrap token 全路由鉴权 [phase:1] [owner:codex] [status:todo]
+## T-010 Admin bootstrap token 全路由鉴权 [phase:1] [owner:codex] [status:review]
+
+**Started**: 2026-05-18 22:03 CST
 
 **目标**: admin 所有 `/api/admin/*` 路由都必须带 `Authorization: Bearer <bootstrap_token>`，防止 overview/users/models 裸奔。
 
 **接受标准**:
-- [ ] 抽取现有 dev endpoint 的 bootstrap token 校验为 `adminAuthMiddleware`。
-- [ ] `GET /api/admin/overview`、`GET /api/admin/users`、`GET /api/admin/models` 全部走此 middleware。
-- [ ] `/healthz` **不**走鉴权（健康检查必须裸露）。
-- [ ] 无 token 或错误 token 返回 401 统一 envelope（与 gateway 401 结构一致）。
-- [ ] `OMNITOKEN_ADMIN_BOOTSTRAP_TOKEN` 为空时，所有受保护路由返回 503 `admin_auth_not_configured`（不是默认放行）。
-- [ ] 单元测试覆盖：正确 token / 错误 token / 空 token / 未配置 token 4 case。
-- [ ] 不做完整 RBAC（留 T-005a/b）。
+- [x] 抽取现有 dev endpoint 的 bootstrap token 校验为 `adminAuthMiddleware`。
+- [x] `GET /api/admin/overview`、`GET /api/admin/users`、`GET /api/admin/models` 全部走此 middleware。
+- [x] `/healthz` **不**走鉴权（健康检查必须裸露）。
+- [x] 无 token 或错误 token 返回 401 统一 envelope（与 gateway 401 结构一致）。
+- [x] `OMNITOKEN_ADMIN_BOOTSTRAP_TOKEN` 为空时，所有受保护路由返回 503 `admin_auth_not_configured`（不是默认放行）。
+- [x] 单元测试覆盖：正确 token / 错误 token / 空 token / 未配置 token 4 case。
+- [x] 不做完整 RBAC（留 T-005a/b）。
 
 **Codex propose 前置**: 不需要，按上述标准直接做。
 
 **依赖**: 无。可与 T-009a 并行（不改同一个文件的同一块代码）。
+
+**Result**: `760020f`。新增 `adminAuthMiddleware` 统一保护 admin read routes 和 dev virtual key endpoint；`/healthz` 保持裸露；未配置 `OMNITOKEN_ADMIN_BOOTSTRAP_TOKEN` 时受保护路由返回 503 `admin_auth_not_configured`，无 token / 错误 token / 空 token 统一返回 401 `invalid_api_key`。自测：`go test -count=1 ./cmd/admin`、`go vet ./...`、`go test ./...`、`go test -cover -count=1 ./cmd/admin`（cmd/admin 63.2%）、`git diff --check` 通过；本机无 `make`，按 Makefile 等价命令执行；`go test -race ./...` 因本机缺少 gcc/cgo 工具链失败（`cgo: C compiler "gcc" not found`），非本次代码改动引入。
 
 ---
 
