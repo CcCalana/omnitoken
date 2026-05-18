@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 	_ "github.com/lib/pq"
+	"github.com/omnitoken/omnitoken/internal/audit"
 	"github.com/omnitoken/omnitoken/internal/auth"
 	"github.com/omnitoken/omnitoken/internal/config"
 	"github.com/omnitoken/omnitoken/internal/httpx"
@@ -143,10 +144,11 @@ func main() {
 	defer closeDB()
 	creator := newVirtualKeyCreator(logger, cfg, db)
 	overview := newOverviewStore(db)
+	auditRecorder := newAuditRecorder(logger, db)
 
 	server := &http.Server{
 		Addr:              cfg.Admin.Addr,
-		Handler:           newMux(logger, cfg.Admin, overview, creator),
+		Handler:           newMux(logger, cfg.Admin, overview, creator, auditRecorder),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -182,6 +184,13 @@ func newOverviewStore(db *sql.DB) overviewStore {
 	return &postgresOverviewStore{db: db}
 }
 
+func newAuditRecorder(logger *slog.Logger, db *sql.DB) audit.Recorder {
+	if db == nil {
+		return audit.NewRecorder(nil, logger)
+	}
+	return audit.NewRecorder(audit.NewPostgresStore(db), logger)
+}
+
 func newVirtualKeyCreator(logger *slog.Logger, cfg config.Config, db *sql.DB) virtualKeyCreator {
 	if cfg.Admin.BootstrapToken == "" {
 		logger.Info("admin dev virtual key endpoint disabled", "reason", "bootstrap_token_empty", "port", cfg.Admin.Addr)
@@ -195,9 +204,20 @@ func newVirtualKeyCreator(logger *slog.Logger, cfg config.Config, db *sql.DB) vi
 	return &postgresVirtualKeyCreator{db: db, random: nil, now: time.Now}
 }
 
-func newMux(logger *slog.Logger, cfg config.AdminConfig, overview overviewStore, creator virtualKeyCreator) http.Handler {
+func newMux(logger *slog.Logger, cfg config.AdminConfig, overview overviewStore, creator virtualKeyCreator, auditRecorders ...audit.Recorder) http.Handler {
 	mux := http.NewServeMux()
 	adminAuth := adminAuthMiddleware(cfg.BootstrapToken)
+	var auditRecorder audit.Recorder
+	if len(auditRecorders) > 0 {
+		auditRecorder = auditRecorders[0]
+	}
+	adminAudit := audit.Middleware(auditRecorder, audit.MiddlewareConfig{
+		ActorResolver: audit.BootstrapActorResolver,
+		Logger:        logger,
+	})
+	protectedWrite := func(handler http.Handler) http.Handler {
+		return adminAuth(adminAudit(handler))
+	}
 
 	mux.HandleFunc("GET /healthz", handleHealthz)
 	mux.Handle("GET /api/admin/overview", adminAuth(http.HandlerFunc(makeOverviewHandler(logger, overview, time.Now))))
@@ -205,9 +225,9 @@ func newMux(logger *slog.Logger, cfg config.AdminConfig, overview overviewStore,
 	mux.Handle("GET /api/admin/models", adminAuth(http.HandlerFunc(makeModelsHandler(logger, overview, time.Now))))
 	if cfg.BootstrapToken != "" && creator != nil {
 		// Demo-Ready 简化版: this admin-port-only endpoint lives on
-		// 8081, not the gateway data-plane port 8080. Full admin auth/RBAC and
-		// audit_logs writes stay in T-005b.
-		mux.Handle("POST /api/admin/dev/virtual-keys", adminAuth(http.HandlerFunc(makeCreateVirtualKeyHandler(logger, creator))))
+		// 8081, not the gateway data-plane port 8080. Full admin auth/RBAC stays
+		// in T-005b.
+		mux.Handle("POST /api/admin/dev/virtual-keys", protectedWrite(http.HandlerFunc(makeCreateVirtualKeyHandler(logger, creator))))
 	}
 
 	return httpx.RequestID(httpx.RequestLogger(logger)(httpx.CORS(cfg.CORSOrigins, cfg.CORSMethods)(mux)))
@@ -534,6 +554,16 @@ func makeCreateVirtualKeyHandler(logger *slog.Logger, creator virtualKeyCreator)
 			"key_prefix", result.KeyPrefix,
 			"created_at", result.CreatedAt.UTC().Format(time.RFC3339),
 		)
+
+		audit.SetAction(r.Context(), "create_virtual_key")
+		audit.SetResource(r.Context(), "virtual_key", result.APIKeyID.String())
+		audit.SetBefore(r.Context(), nil)
+		audit.SetAfter(r.Context(), map[string]string{
+			"api_key_id":      result.APIKeyID.String(),
+			"organization_id": result.OrganizationID.String(),
+			"user_id":         result.UserID.String(),
+			"key_prefix":      result.KeyPrefix,
+		})
 
 		httpx.WriteJSON(w, http.StatusCreated, createVirtualKeyResponse{
 			DevOnly:        true,

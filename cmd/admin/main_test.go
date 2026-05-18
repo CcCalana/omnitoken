@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/omnitoken/omnitoken/internal/audit"
 	"github.com/omnitoken/omnitoken/internal/config"
 )
 
@@ -748,6 +749,102 @@ func TestDevVirtualKeyEndpointCreatesKey(t *testing.T) {
 	}
 }
 
+func TestDevVirtualKeyEndpointCreatesAuditRecord(t *testing.T) {
+	t.Parallel()
+
+	orgID := uuid.New()
+	userID := uuid.New()
+	apiKeyID := uuid.New()
+	creator := &fakeVirtualKeyCreator{
+		result: createVirtualKeyResult{
+			APIKeyID:       apiKeyID,
+			OrganizationID: orgID,
+			UserID:         userID,
+			KeyPrefix:      "abcdefghijkl",
+			VirtualKey:     "omt_abcdefghijkl_secret",
+			CreatedAt:      time.Date(2026, 5, 11, 10, 0, 0, 0, time.UTC),
+		},
+	}
+	recorder := newAdminAuditRecorder()
+	cfg := testAdminConfig()
+	cfg.BootstrapToken = "dev-bootstrap"
+	body := `{"organization_id":"` + orgID.String() + `","user_id":"` + userID.String() + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/dev/virtual-keys", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer dev-bootstrap")
+	req.Header.Set("User-Agent", "admin-test")
+	rec := httptest.NewRecorder()
+
+	newMux(testLogger(), cfg, nil, creator, recorder).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+	entry := recorder.wait(t)
+	if entry.Action != "create_virtual_key" || entry.ResourceType != "virtual_key" || entry.ResourceID != apiKeyID.String() {
+		t.Fatalf("unexpected audit resource: %+v", entry)
+	}
+	if entry.Actor.ID != "bootstrap" || entry.Actor.Type != audit.ActorTypeBootstrap {
+		t.Fatalf("unexpected audit actor: %+v", entry.Actor)
+	}
+	if entry.StatusCode != http.StatusCreated || entry.UserAgent != "admin-test" {
+		t.Fatalf("unexpected audit status/user agent: %+v", entry)
+	}
+	if entry.Before != nil {
+		t.Fatalf("expected nil before snapshot, got %#v", entry.Before)
+	}
+	after, ok := entry.After.(map[string]string)
+	if !ok {
+		t.Fatalf("unexpected after snapshot type: %T", entry.After)
+	}
+	if after["key_prefix"] != "abcdefghijkl" || after["api_key_id"] != apiKeyID.String() {
+		t.Fatalf("unexpected after snapshot: %#v", after)
+	}
+	if _, leaked := after["virtual_key"]; leaked || strings.Contains(strings.Join(mapValues(after), " "), "secret") {
+		t.Fatalf("audit after snapshot leaked secret: %#v", after)
+	}
+}
+
+func TestDevVirtualKeyUnauthorizedSkipsAudit(t *testing.T) {
+	t.Parallel()
+
+	cfg := testAdminConfig()
+	cfg.BootstrapToken = "dev-bootstrap"
+	recorder := newAdminAuditRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/dev/virtual-keys", strings.NewReader(`{}`))
+	rec := httptest.NewRecorder()
+
+	newMux(testLogger(), cfg, nil, &fakeVirtualKeyCreator{}, recorder).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
+	}
+	recorder.expectNoRecord(t)
+}
+
+func TestDevVirtualKeyInvalidBodyCreatesFailedAuditAttempt(t *testing.T) {
+	t.Parallel()
+
+	cfg := testAdminConfig()
+	cfg.BootstrapToken = "dev-bootstrap"
+	recorder := newAdminAuditRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/dev/virtual-keys", strings.NewReader(`{`))
+	req.Header.Set("Authorization", "Bearer dev-bootstrap")
+	rec := httptest.NewRecorder()
+
+	newMux(testLogger(), cfg, nil, &fakeVirtualKeyCreator{}, recorder).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
+	}
+	entry := recorder.wait(t)
+	if entry.Action != "" || entry.ResourceType != "" {
+		t.Fatalf("handler should not set action/resource before invalid body: %+v", entry)
+	}
+	if entry.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected failed audit status %d, got %d", http.StatusBadRequest, entry.StatusCode)
+	}
+}
+
 func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, want string) {
 	t.Helper()
 
@@ -762,6 +859,14 @@ func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, want string) 
 
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func mapValues(values map[string]string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		out = append(out, value)
+	}
+	return out
 }
 
 func testAdminConfig() config.AdminConfig {
@@ -781,6 +886,45 @@ type fakeVirtualKeyCreator struct {
 func (f *fakeVirtualKeyCreator) CreateVirtualKey(_ context.Context, params createVirtualKeyParams) (createVirtualKeyResult, error) {
 	f.params = params
 	return f.result, f.err
+}
+
+type adminAuditRecorder struct {
+	entries chan audit.Entry
+	err     error
+}
+
+func newAdminAuditRecorder() *adminAuditRecorder {
+	return &adminAuditRecorder{entries: make(chan audit.Entry, 1)}
+}
+
+func (r *adminAuditRecorder) Record(_ context.Context, entry audit.Entry) error {
+	if r.err != nil {
+		return r.err
+	}
+	r.entries <- entry
+	return nil
+}
+
+func (r *adminAuditRecorder) wait(t *testing.T) audit.Entry {
+	t.Helper()
+
+	select {
+	case entry := <-r.entries:
+		return entry
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for audit entry")
+		return audit.Entry{}
+	}
+}
+
+func (r *adminAuditRecorder) expectNoRecord(t *testing.T) {
+	t.Helper()
+
+	select {
+	case entry := <-r.entries:
+		t.Fatalf("unexpected audit entry: %+v", entry)
+	case <-time.After(50 * time.Millisecond):
+	}
 }
 
 type fakeOverviewStore struct {
