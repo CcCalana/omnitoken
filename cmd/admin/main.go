@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -196,15 +197,17 @@ func newVirtualKeyCreator(logger *slog.Logger, cfg config.Config, db *sql.DB) vi
 
 func newMux(logger *slog.Logger, cfg config.AdminConfig, overview overviewStore, creator virtualKeyCreator) http.Handler {
 	mux := http.NewServeMux()
+	adminAuth := adminAuthMiddleware(cfg.BootstrapToken)
+
 	mux.HandleFunc("GET /healthz", handleHealthz)
-	mux.HandleFunc("GET /api/admin/overview", makeOverviewHandler(logger, overview, time.Now))
-	mux.HandleFunc("GET /api/admin/users", makeUsersHandler(logger, overview, time.Now))
-	mux.HandleFunc("GET /api/admin/models", makeModelsHandler(logger, overview, time.Now))
+	mux.Handle("GET /api/admin/overview", adminAuth(http.HandlerFunc(makeOverviewHandler(logger, overview, time.Now))))
+	mux.Handle("GET /api/admin/users", adminAuth(http.HandlerFunc(makeUsersHandler(logger, overview, time.Now))))
+	mux.Handle("GET /api/admin/models", adminAuth(http.HandlerFunc(makeModelsHandler(logger, overview, time.Now))))
 	if cfg.BootstrapToken != "" && creator != nil {
 		// Demo-Ready 简化版: this admin-port-only endpoint lives on
 		// 8081, not the gateway data-plane port 8080. Full admin auth/RBAC and
 		// audit_logs writes stay in T-005b.
-		mux.HandleFunc("POST /api/admin/dev/virtual-keys", makeCreateVirtualKeyHandler(logger, cfg.BootstrapToken, creator))
+		mux.Handle("POST /api/admin/dev/virtual-keys", adminAuth(http.HandlerFunc(makeCreateVirtualKeyHandler(logger, creator))))
 	}
 
 	return httpx.RequestID(httpx.RequestLogger(logger)(httpx.CORS(cfg.CORSOrigins, cfg.CORSMethods)(mux)))
@@ -504,13 +507,8 @@ ORDER BY total_tokens DESC, model ASC`
 	return response, nil
 }
 
-func makeCreateVirtualKeyHandler(logger *slog.Logger, bootstrapToken string, creator virtualKeyCreator) http.HandlerFunc {
+func makeCreateVirtualKeyHandler(logger *slog.Logger, creator virtualKeyCreator) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !authorizedBootstrap(r, bootstrapToken) {
-			writeUnauthorized(w)
-			return
-		}
-
 		var body createVirtualKeyRequest
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
 			httpx.WriteJSON(w, http.StatusBadRequest, errorEnvelope("invalid request body", "invalid_request", "invalid_json"))
@@ -549,12 +547,36 @@ func makeCreateVirtualKeyHandler(logger *slog.Logger, bootstrapToken string, cre
 	}
 }
 
+func adminAuthMiddleware(bootstrapToken string) func(http.Handler) http.Handler {
+	bootstrapToken = strings.TrimSpace(bootstrapToken)
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if bootstrapToken == "" {
+				writeAdminAuthNotConfigured(w)
+				return
+			}
+			if !authorizedBootstrap(r, bootstrapToken) {
+				writeUnauthorized(w)
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 func authorizedBootstrap(r *http.Request, bootstrapToken string) bool {
 	header := strings.TrimSpace(r.Header.Get("Authorization"))
 	token, ok := strings.CutPrefix(header, "Bearer ")
-	// Demo-Ready 简化版: ordinary string comparison is enough for this dev-only
-	// bootstrap path; full admin auth stays in T-005b.
-	return ok && token == bootstrapToken
+	if !ok {
+		return false
+	}
+	token = strings.TrimSpace(token)
+	if token == "" || len(token) != len(bootstrapToken) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(token), []byte(bootstrapToken)) == 1
 }
 
 func parseCreateVirtualKeyRequest(body createVirtualKeyRequest) (createVirtualKeyParams, error) {
@@ -648,6 +670,10 @@ RETURNING id`
 
 func writeUnauthorized(w http.ResponseWriter) {
 	httpx.WriteJSON(w, http.StatusUnauthorized, errorEnvelope("unauthorized", "authentication_error", "invalid_api_key"))
+}
+
+func writeAdminAuthNotConfigured(w http.ResponseWriter) {
+	httpx.WriteJSON(w, http.StatusServiceUnavailable, errorEnvelope("admin auth is not configured", "server_error", "admin_auth_not_configured"))
 }
 
 func errorEnvelope(message string, typ string, code string) map[string]any {

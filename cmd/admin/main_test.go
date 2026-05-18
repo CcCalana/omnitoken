@@ -40,6 +40,97 @@ func TestHealthz(t *testing.T) {
 	}
 }
 
+func TestAdminReadRoutesRequireBootstrapToken(t *testing.T) {
+	t.Parallel()
+
+	cfg := testAdminConfig()
+	cfg.BootstrapToken = "dev-bootstrap"
+	paths := []string{
+		"/api/admin/overview",
+		"/api/admin/users",
+		"/api/admin/models",
+	}
+
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			t.Parallel()
+
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			rec := httptest.NewRecorder()
+
+			newMux(testLogger(), cfg, nil, nil).ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
+			}
+			assertErrorCode(t, rec, "invalid_api_key")
+		})
+	}
+}
+
+func TestAdminAuthMiddlewareTokenCases(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		configToken   string
+		requestHeader string
+		wantStatus    int
+		wantCode      string
+	}{
+		{
+			name:          "correct token",
+			configToken:   "dev-bootstrap",
+			requestHeader: "Bearer dev-bootstrap",
+			wantStatus:    http.StatusOK,
+		},
+		{
+			name:          "wrong token",
+			configToken:   "dev-bootstrap",
+			requestHeader: "Bearer wrong-token",
+			wantStatus:    http.StatusUnauthorized,
+			wantCode:      "invalid_api_key",
+		},
+		{
+			name:          "empty bearer token",
+			configToken:   "dev-bootstrap",
+			requestHeader: "Bearer ",
+			wantStatus:    http.StatusUnauthorized,
+			wantCode:      "invalid_api_key",
+		},
+		{
+			name:          "unconfigured bootstrap token",
+			configToken:   "",
+			requestHeader: "Bearer dev-bootstrap",
+			wantStatus:    http.StatusServiceUnavailable,
+			wantCode:      "admin_auth_not_configured",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := testAdminConfig()
+			cfg.BootstrapToken = tt.configToken
+			req := httptest.NewRequest(http.MethodGet, "/api/admin/overview", nil)
+			if tt.requestHeader != "" {
+				req.Header.Set("Authorization", tt.requestHeader)
+			}
+			rec := httptest.NewRecorder()
+
+			newMux(testLogger(), cfg, nil, nil).ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("expected status %d, got %d body=%s", tt.wantStatus, rec.Code, rec.Body.String())
+			}
+			if tt.wantCode != "" {
+				assertErrorCode(t, rec, tt.wantCode)
+			}
+		})
+	}
+}
+
 func TestOverviewFallsBackToZeroWithoutStore(t *testing.T) {
 	t.Parallel()
 
@@ -141,9 +232,12 @@ func TestUsersFallsBackToEmptyWithoutStore(t *testing.T) {
 	t.Parallel()
 
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/users", nil)
+	req.Header.Set("Authorization", "Bearer dev-bootstrap")
 	rec := httptest.NewRecorder()
 
-	newMux(testLogger(), testAdminConfig(), nil, nil).ServeHTTP(rec, req)
+	cfg := testAdminConfig()
+	cfg.BootstrapToken = "dev-bootstrap"
+	newMux(testLogger(), cfg, nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
@@ -216,9 +310,12 @@ func TestModelsFallsBackToEmptyWithoutStore(t *testing.T) {
 	t.Parallel()
 
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/models", nil)
+	req.Header.Set("Authorization", "Bearer dev-bootstrap")
 	rec := httptest.NewRecorder()
 
-	newMux(testLogger(), testAdminConfig(), nil, nil).ServeHTTP(rec, req)
+	cfg := testAdminConfig()
+	cfg.BootstrapToken = "dev-bootstrap"
+	newMux(testLogger(), cfg, nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
@@ -555,9 +652,12 @@ func TestOverviewCORSDeniesUnlistedOrigin(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/overview", nil)
 	req.Header.Set("Origin", "https://evil.example.com")
+	req.Header.Set("Authorization", "Bearer dev-bootstrap")
 	rec := httptest.NewRecorder()
 
-	newMux(testLogger(), testAdminConfig(), nil, nil).ServeHTTP(rec, req)
+	cfg := testAdminConfig()
+	cfg.BootstrapToken = "dev-bootstrap"
+	newMux(testLogger(), cfg, nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
@@ -645,6 +745,18 @@ func TestDevVirtualKeyEndpointCreatesKey(t *testing.T) {
 	}
 	if response.VirtualKey != creator.result.VirtualKey || response.KeyPrefix != creator.result.KeyPrefix {
 		t.Fatalf("unexpected response: %#v", response)
+	}
+}
+
+func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, want string) {
+	t.Helper()
+
+	var body map[string]map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if body["error"]["code"] != want {
+		t.Fatalf("expected error code %q, got %#v", want, body)
 	}
 }
 
