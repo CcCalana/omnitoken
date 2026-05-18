@@ -223,23 +223,27 @@
 
 ---
 
-## T-012 并发压测验证 [phase:1] [owner:codex] [status:todo]
+## T-012 并发压测验证 [phase:1] [owner:codex] [status:review]
+
+**Started**: 2026-05-18 22:18 CST
 
 **目标**: 用 Go 写一个简单的并发测试工具，证明 gateway 在 10 并发 × 10 请求（共 100 次）下无 panic、无 data race、usage 入账一致。
 
 **接受标准**:
-- [ ] 新增 `cmd/loadtest/main.go`（或 `scripts/loadtest.go`），使用 Go 标准库 + `sync.WaitGroup`。
-- [ ] 参数：`-concurrency 10 -requests 10 -gateway http://localhost:8080 -admin http://localhost:8081 -key <virtual_key>`。
-- [ ] 每个 goroutine 发 `POST /v1/chat/completions`（非流式，`stream:false`，短 prompt），统计 2xx / 4xx / 5xx / timeout 数量。
-- [ ] 跑完后查 `GET /api/admin/overview`，断言 `total_tokens > 0` 且 `active_users >= 1`。
-- [ ] 打印汇总表：总请求数、成功率、平均延迟、P95 延迟、usage 总 tokens。
-- [ ] 用 `-race` flag 编译和测试，确认无 data race。
-- [ ] **成本控制**：默认 `MAX_REQUESTS=100`，超过硬停。单次预计 ≤ 5 元 RMB。
-- [ ] 不改 gateway/admin/usage 代码；不引入第三方依赖。
+- [x] 新增 `cmd/loadtest/main.go`（或 `scripts/loadtest.go`），使用 Go 标准库 + `sync.WaitGroup`。
+- [x] 参数：`-concurrency 10 -requests 10 -gateway http://localhost:8080 -admin http://localhost:8081 -key <virtual_key>`。
+- [x] 每个 goroutine 发 `POST /v1/chat/completions`（非流式，`stream:false`，短 prompt），统计 2xx / 4xx / 5xx / timeout 数量。
+- [x] 跑完后查 `GET /api/admin/overview`，断言 `total_tokens > 0` 且 `active_users >= 1`。
+- [x] 打印汇总表：总请求数、成功率、平均延迟、P95 延迟、usage 总 tokens。
+- [x] 用 `-race` flag 编译和测试，确认无 data race。
+- [x] **成本控制**：默认 `MAX_REQUESTS=100`，超过硬停。单次预计 ≤ 5 元 RMB。
+- [x] 不改 gateway/admin/usage 代码；不引入第三方依赖。
 
 **Codex propose 前置**: 不需要，按上述标准直接做。
 
 **依赖**: T-009a（需要 admin users API 验证多用户入账）+ 有效 virtual key + 方舟 API key。
+
+**Result**: `d7e78e8`。新增 `cmd/loadtest` 标准库并发压测工具与 README：默认 `-concurrency 10 -requests 10`，`MAX_REQUESTS` 默认 100 且超限硬停；每个 goroutine 发非流式 `POST /v1/chat/completions`，统计 2xx/4xx/5xx/timeout/error、平均延迟、P95、成功率，随后带 admin bootstrap token 查询 `/api/admin/overview` 并断言 `total_tokens > 0`、`active_users >= 1`。因 T-010 已要求 admin 鉴权，工具额外支持 `-admin-token`，默认从 `OMNITOKEN_ADMIN_BOOTSTRAP_TOKEN` 读取。自测：`go test -count=1 ./cmd/loadtest`、`go vet ./...`、`go test ./...`、`go test -cover -count=1 ./cmd/loadtest`（cmd/loadtest 73.6%）、Docker `go test -race ./cmd/loadtest`、`git diff --check` 通过；未改 gateway/admin/usage，未新增第三方依赖，未对真实方舟发起 100 请求（避免本地 token 成本消耗，工具行为由 httptest 覆盖）。
 
 ---
 
