@@ -17,6 +17,7 @@
 | 05-19 | **R-041-prop approve** (5+/1Q/2N)。Codex 可开实施 |
 | 05-19 | **AGENTS.md §3.3a/§3.3/§7 收紧**: `-race` 统一 Docker/CI 跑；Windows 缺 gcc 是预期，禁汇报。配套 T-MK-RACE |
 | 05-19 | **R-041 approve** (5+/2M/2N + gcc 规则提醒)。`a6d1d09` agent_adapter 81.9%；M-20/M-21 (env 单行 + 非原子写) 不阻塞 v1，并入 T-042 修 |
+| 05-19 | **Codex 下一步队列**: T-MK-RACE (infra, <1h) → T-042 Codex 适配 (含 M-20/M-21 修 + helper 抽出, propose 前置=是) |
 
 ---
 
@@ -230,3 +231,43 @@ Started: 2026-05-19 20:11 +08:00
 **参考**: AGENTS.md §3.3a 第 5 条、§3.3 第 3 条、§7 第 1 条；`docs/reviews/archive.md:308`（既往已知 Windows race 缺 gcc 的归档说明）。
 
 **Result**: `a44f27a` - default test target no-race; Docker race target on `golang:1.25` with named module/build caches; all green.
+
+---
+
+## T-042 Codex 适配（配置 + 凭据写入） [phase:3-A] [owner:codex] [status:in-progress]
+
+Started: 2026-05-19 20:41 +08:00
+Proposal: `docs/proposals/2026-05-19-t042-codex-adapter.md`
+
+**目标**: 让企业员工跑 `omnitoken-adopt adopt codex` 一次，Codex CLI 之后所有调用都走 OmniToken。仿 T-041 的形状（写本地配置 + 备份 + restore），把第二个 Agent 落进 `internal/agent_adapter`，**同时收 R-041 的两条 MEDIUM** —— 这是抽 helper 的天然时机。
+
+**涉及**:
+- `internal/agent_adapter/`（新增 `codex.go` + `codex_test.go`；抽 `fileio.go` helper 同时用在 Claude Code 上）
+- `cmd/omnitoken-adopt/main.go`（加 `adopt codex` / `restore codex` 分支）
+- 现有 `claude_code.go` 要回归 helper（M-20 / M-21 修复）
+
+**接受标准**:
+- [ ] `internal/agent_adapter` 导出 `WriteCodexSettings(opts) (Result, error)` + `RestoreCodexSettingsWithOptions(opts) (Result, error)`。
+- [ ] **抽出文件 I/O helper**: `writeAtomic(path, data)` (tmp + rename) 和缩进保形的 JSON merge 工具，**Claude Code 路径回归使用**——R-041 M-20 / M-21 由此一并解决。Claude Code 现有测试不准退化（覆盖率不降 + indent 保形断言新增）。
+- [ ] 跨平台 `~/.codex/config.toml` 无损编辑 + `~/.codex/auth.json` 无损 merge；备份到 `~/.omnitoken/backups/codex/<filename>.<RFC3339-compact>.bak`。
+- [ ] env / 配置字段集对齐 `docs/references/agent-adapter/agent-adapter-pattern.md` §3.4（Codex 部分）；managed key 白名单常量化，CLI stdout 打印 `managed_env` + `managed_toml` 两行。
+- [ ] CLI 入口 `adopt codex --gateway-url <URL> --token <virtual_key> [--model <name>] [--home <path>]` / `restore codex [--home <path>]`；`flag` 标准库，不引第三方 CLI 框架。
+- [ ] 失败语义对齐 T-041：invalid 现有 config → exit 2 + 单行 stderr + 原文件不改、备份不建（auth.json 走 JSON、config.toml 走所选 TOML lib 的 parse 路径）。
+- [ ] 测试 ≥ 8 case：① 首次写 ② 合并保留用户 toml 注释/字段 ③ 合并保留 auth.json 非 managed key ④ 重复幂等 ⑤ 备份命名唯一 ⑥ restore 同时恢复 toml + json ⑦ `--home` 覆盖 ⑧ invalid existing config 双路径（toml 坏 + auth.json 坏）。
+- [ ] `internal/agent_adapter` 包覆盖率 ≥ 80%（含 Claude Code + Codex 合并后）。
+
+**Codex propose 前置**: **是**。PROPOSAL 答清 3 点：
+1. **TOML 无损编辑方案**: Go 生态没有 Rust `toml_edit` 的直接对等物。`pelletier/go-toml/v2` Marshal 不保注释/空白；可选 (a) 引入它接受"非 managed key 字段值保留 + 注释丢失"的小代价；(b) 手写 minimal TOML patcher，**仅修改 managed key 行**（line-based regex/parser），其他字节不动；(c) 等用户没意见的话直接全文重写。各方案 license / 维护活跃度 / 复杂度对照。**默认推荐 (b)** —— 与 T-041 "管已知白名单、保其他字节" 哲学一致。
+2. **`config.toml` vs `auth.json` 分工**: 哪些字段写 toml、哪些写 json？对照 tingly-box `agent-adapter-pattern.md`，给出最终 managed-keys 清单（两个文件分别列）。
+3. **helper 抽法**: 是否值得现在就抽 `Registry` / `AgentConfig` interface？我的判断 **否** —— Phase 3-A 还要落 T-043 OpenCode 才到"三处重复"，现在抽是过早抽象，违反 AGENTS.md §3.1。**只抽 `fileio.go` 文件级 helper**，interface 等 T-040 后置。
+
+**不在范围**:
+- 协议转换 → T-045
+- OpenCode 适配 → T-043
+- `Registry` / `AgentConfig` interface 抽象 → T-040 后置
+- Codex auth.json 里 OAuth refresh token 自动续期 → 留 Phase 3-B
+- 端到端打通 Codex 走 OmniToken 实际能跑 → 等 T-045
+
+**依赖**: T-041 ✅。T-MK-RACE 优先实施（让 Codex 不再需要在 chat 里解释 race）—— **不阻塞**，T-042 完全可以并行。
+
+**参考**: `docs/references/agent-adapter/agent-adapter-pattern.md` §3.4（Codex Apply 模板）；`agent-adapter-projects-reference.md` §4.1（token_proxy `toml_edit` 无损编辑模式，但是 Rust，Go 需重新调研）；R-041 M-20 / M-21（REVIEW.md）。
