@@ -228,3 +228,13 @@ new internal/proxy package.
 ### 9.4 实测过的最快配方（写进未来代码默认值或 demo 文档）
 
 OpenAI-compat 端点 + 请求体加 `thinking: {"type": "disabled"}` + `stream_options: {"include_usage": true}` → 稳定 1.7–2.0s 完成含 usage 的完整 SSE。Anthropic-compat 端点延迟显著更高且 thinking 默认开启，**Phase 1 内不推荐做主路径**。
+
+### 9.5 Agent 适配 smoke 方法学（2026-05-19 URGENT 后 user-locked）
+
+`omnitoken-adopt adopt <claude-code|codex|opencode>` 这类**会写本机配置 / 凭据文件**的 CLI，dev 验证时按下面规则操作；违反等同 §6.3 触发条件。
+
+1. **实施 / smoke 必须显式 `--home <临时目录>`**。Windows 用 `$env:TEMP\<task-id>-smoke` 或 `C:\tmp\<task-id>-smoke`；类 Unix 用 `$(mktemp -d)`。**禁止**对真 `$HOME` / `%USERPROFILE%` 跑 adopt CLI 验证流程。
+2. **禁止 `cat` / `Get-Content` / `Read` 任何 `auth.json` / `config.toml` / `*.bak` 等可能含 token 的文件** —— 验证只看 ① CLI exit code ② stdout 中的 path / managed key 名 ③ 备份目录的**文件名列表（不读内容）**。需要校验 JSON / TOML 结构时写 Go 测试，让测试用 `t.TempDir()` 跑，**不要**在 chat / shell 里手动 inspect 真实路径下的文件。
+3. **CI / Agent 适配类任务的 unit / integration test** 必须 100% 用 `t.TempDir()` 或 `--home <temp>`，**不能**读 `os.UserHomeDir()` 真返回值。`os.UserHomeDir()` 仅在生产 `cmd/omnitoken-adopt` 二进制里员工真跑时使用。
+4. **生产 CLI 不加 refuse-by-default rail**：员工真跑 `omnitoken-adopt` 时就是要写真 `$HOME`，refuse 会破坏 UX。结构靠"smoke 强制 --home + 禁 cat"这条 process 规则兜底。
+5. **如果 dev / smoke 已经 cat 出了真 key**：按 §6.3 走（顶部 URGENT + REVIEW 🚨 + 不自行轮换），等用户决策。
