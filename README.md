@@ -14,10 +14,10 @@ which key, under which policy, at what cost, without leaking provider keys or
 prompt bodies. Broad provider support is still required, but it should live in
 a provider-adapter layer rather than dilute the governance product.
 
-> Phase 1 status: Demo-Ready. The local flow below works end to end, but the
-> dev virtual-key endpoint is not a production signup system. Full admin auth,
-> RBAC, quota enforcement, and production key lifecycle workflows are tracked in
-> later tasks.
+> V1 status: Phase 2-B integration candidate. The local flow below now uses
+> real seeded admin/viewer logins, RBAC-gated admin writes, monthly user budget
+> enforcement, audit logs, and virtual model routing. The dev virtual-key
+> endpoint is still for local demos and is not a production signup system.
 
 ## Why OmniToken
 
@@ -110,11 +110,14 @@ flowchart LR
 
 - OpenAI-compatible `GET /v1/models`
 - OpenAI-compatible `POST /v1/chat/completions`
+- Seeded admin/viewer login through the admin service
 - Demo virtual-key creation through the admin service
 - Postgres migrations and seed data through Docker Compose
 - Usage and cost ledger writes after chat completions
-- Admin APIs for overview, users, and models
+- Monthly user budget enforcement with 402 quota envelopes
+- Admin APIs for overview, users, models, virtual models, and audit logs
 - Static admin console in `web/`
+- Virtual model aliases such as `chat-fast` routed to real Ark model names
 - Current provider adapter: Volcano Ark through an OpenAI-compatible endpoint
 
 ## Prerequisites
@@ -146,13 +149,19 @@ ${EDITOR:-vi} .env
 Fill in at least these values for the current Ark demo:
 
 ```dotenv
-OMNITOKEN_ADMIN_BOOTSTRAP_TOKEN=dev-bootstrap-token-change-me
+OMNITOKEN_ADMIN_BOOTSTRAP_TOKEN=
+OMNITOKEN_ADMIN_SESSION_TTL=24h
+OMNITOKEN_ADMIN_KEY_ANOMALY_RPM_5M=60
 OMNITOKEN_ARK_API_KEY=<your-volcano-ark-dev-key>
 OMNITOKEN_ARK_DEFAULT_MODEL=ark-code-latest
 OMNITOKEN_ADMIN_CORS_ORIGINS=http://localhost:3000
 ```
 
 Do not commit `.env`. It is intentionally ignored by git.
+
+Leave `OMNITOKEN_ADMIN_BOOTSTRAP_TOKEN` empty for the normal v1 flow. Setting
+it only enables a legacy local fallback bearer token; session login remains the
+primary admin path.
 
 ### 2. Start the local stack
 
@@ -197,16 +206,26 @@ Use the demo admin user for the first trial:
 | Project ID | `00000000-0000-0000-0000-000000000101` |
 | Demo Admin | `admin@democorp.local` |
 | Demo Admin User ID | `00000000-0000-0000-0000-000000000201` |
+| Demo Admin Password | `password` |
+| Demo Viewer | `user01@democorp.local` |
+| Demo Viewer User ID | `00000000-0000-0000-0000-000000000202` |
+| Demo Viewer Password | `password` |
 
 There is no public signup endpoint yet. For local demos, "registration" means
 using the seeded tenant or inserting another user into Postgres.
 
-### 4. Create a virtual key for the user
+### 4. Log in and create a virtual key
 
 PowerShell:
 
 ```powershell
-$AdminToken = "dev-bootstrap-token-change-me"
+$Login = Invoke-RestMethod `
+  -Method Post `
+  -Uri "http://localhost:8081/api/admin/login" `
+  -ContentType "application/json" `
+  -Body (@{ email = "admin@democorp.local"; password = "password" } | ConvertTo-Json)
+
+$AdminToken = $Login.token
 $Body = @{
   organization_id = "00000000-0000-0000-0000-000000000001"
   user_id = "00000000-0000-0000-0000-000000000201"
@@ -226,8 +245,13 @@ $KeyResponse | ConvertTo-Json
 Bash:
 
 ```bash
+ADMIN_TOKEN="$(curl -sS -X POST http://localhost:8081/api/admin/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@democorp.local","password":"password"}' \
+  | jq -r '.token')"
+
 curl -sS -X POST http://localhost:8081/api/admin/dev/virtual-keys \
-  -H "Authorization: Bearer dev-bootstrap-token-change-me" \
+  -H "Authorization: Bearer ${ADMIN_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{"organization_id":"00000000-0000-0000-0000-000000000001","user_id":"00000000-0000-0000-0000-000000000201"}'
 ```
@@ -250,7 +274,7 @@ Send a non-streaming chat completion:
 curl.exe -X POST http://localhost:8080/v1/chat/completions `
   -H "Authorization: Bearer $VirtualKey" `
   -H "Content-Type: application/json" `
-  -d '{"model":"ark-code-latest","messages":[{"role":"user","content":"Output exactly: pong"}],"stream":false,"max_tokens":32}'
+  -d '{"model":"chat-fast","messages":[{"role":"user","content":"Output exactly: pong"}],"stream":false,"max_tokens":32}'
 ```
 
 Streaming SSE example:
@@ -259,11 +283,12 @@ Streaming SSE example:
 curl.exe --no-buffer -X POST http://localhost:8080/v1/chat/completions `
   -H "Authorization: Bearer $VirtualKey" `
   -H "Content-Type: application/json" `
-  -d '{"model":"ark-code-latest","messages":[{"role":"user","content":"Count from 1 to 5."}],"stream":true,"max_tokens":64}'
+  -d '{"model":"chat-fast","messages":[{"role":"user","content":"Count from 1 to 5."}],"stream":true,"max_tokens":64}'
 ```
 
-The gateway keeps the virtual key local, injects the real Ark key upstream, and
-records usage after the response.
+The gateway keeps the virtual key local, resolves `chat-fast` to the seeded Ark
+model mapping, injects the real Ark key upstream, and records usage after the
+response.
 
 ### 6. Verify usage
 
@@ -271,9 +296,11 @@ Wait a moment for the deferred ledger write, then query admin APIs:
 
 ```powershell
 Start-Sleep -Seconds 2
-curl.exe http://localhost:8081/api/admin/overview
-curl.exe http://localhost:8081/api/admin/users
-curl.exe http://localhost:8081/api/admin/models
+curl.exe http://localhost:8081/api/admin/overview -H "Authorization: Bearer $AdminToken"
+curl.exe http://localhost:8081/api/admin/users -H "Authorization: Bearer $AdminToken"
+curl.exe http://localhost:8081/api/admin/models -H "Authorization: Bearer $AdminToken"
+curl.exe http://localhost:8081/api/admin/virtual-models -H "Authorization: Bearer $AdminToken"
+curl.exe http://localhost:8081/api/admin/audit-logs -H "Authorization: Bearer $AdminToken"
 ```
 
 Expected signals:
@@ -282,10 +309,8 @@ Expected signals:
 - `active_users >= 1`
 - `model_usage` includes the Ark-backed model
 - `users` shows the demo admin user with non-zero usage
-
-Current Phase 1 note: only the dev key-creation endpoint requires the bootstrap
-token today. Admin read endpoints are intentionally simple until the T-010 admin
-auth hardening task lands.
+- `virtual-models` includes `chat-fast -> kimi-k2.6`
+- `audit-logs` includes `login` and `create_virtual_key`
 
 ### 7. Open the web console
 
@@ -303,11 +328,37 @@ Open:
 http://localhost:3000/?admin=http://localhost:8081
 ```
 
-The console has three views:
+Sign in with `admin@democorp.local / password` for write access, or
+`user01@democorp.local / password` for read-only viewer access.
+
+The console has five views:
 
 - Overview: monthly tokens, estimated cost, active users, trend, model share
-- Users: per-user token usage and quota placeholder
+- Users: per-user token usage and monthly budget editing for admins
 - Models: prompt/completion token split, cost, and call count
+- Virtual Models: seeded aliases and real Ark model mappings
+- Audit: admin login and write-operation trail
+
+### 8. Run the v1 smoke
+
+The control-plane smoke does not spend tokens by default:
+
+```powershell
+python scripts\v1_integration.py
+```
+
+If Windows has the Python launcher instead:
+
+```powershell
+py -3 scripts\v1_integration.py
+```
+
+To include the real Ark non-streaming/streaming chat and quota 402 check:
+
+```powershell
+$env:OMNITOKEN_RUN_REAL_UPSTREAM="1"
+python scripts\v1_integration.py
+```
 
 ## Adding Another Local Demo User
 

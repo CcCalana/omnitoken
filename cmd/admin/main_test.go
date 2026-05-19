@@ -20,6 +20,7 @@ import (
 	"github.com/omnitoken/omnitoken/internal/audit"
 	"github.com/omnitoken/omnitoken/internal/auth"
 	"github.com/omnitoken/omnitoken/internal/config"
+	"github.com/omnitoken/omnitoken/internal/rbac"
 	usageanomaly "github.com/omnitoken/omnitoken/internal/usage/anomaly"
 )
 
@@ -1048,7 +1049,7 @@ func TestOverviewCORSDeniesUnlistedOrigin(t *testing.T) {
 	}
 }
 
-func TestDevVirtualKeyEndpointDisabledWithoutBootstrapToken(t *testing.T) {
+func TestDevVirtualKeyEndpointRequiresAuthWithoutBootstrapToken(t *testing.T) {
 	t.Parallel()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/dev/virtual-keys", nil)
@@ -1056,8 +1057,8 @@ func TestDevVirtualKeyEndpointDisabledWithoutBootstrapToken(t *testing.T) {
 
 	newMux(testLogger(), testAdminConfig(), nil, &fakeVirtualKeyCreator{}, nil).ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("expected status %d, got %d", http.StatusNotFound, rec.Code)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
 	}
 }
 
@@ -1384,11 +1385,16 @@ type fakeOverviewStore struct {
 	updateAt          time.Time
 	authUserID        uuid.UUID
 	authOrgID         uuid.UUID
+	authRole          string
 	authErr           error
 }
 
-func (f *fakeOverviewStore) Authenticate(ctx context.Context, email, password string) (uuid.UUID, uuid.UUID, error) {
-	return f.authUserID, f.authOrgID, f.authErr
+func (f *fakeOverviewStore) Authenticate(ctx context.Context, email, password string) (uuid.UUID, uuid.UUID, string, error) {
+	role := f.authRole
+	if role == "" {
+		role = "admin"
+	}
+	return f.authUserID, f.authOrgID, role, f.authErr
 }
 
 func (f *fakeOverviewStore) LoadVirtualModels(ctx context.Context) (virtualModelsResponse, error) {
@@ -1667,7 +1673,7 @@ func TestAdminSessionExpired(t *testing.T) {
 	t.Parallel()
 
 	sessionStore := auth.NewSessionStore(-time.Hour) // immediate expiration
-	token, _ := sessionStore.Create(uuid.New(), uuid.New())
+	token, _ := sessionStore.Create(uuid.New(), uuid.New(), "admin")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/me", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -1684,7 +1690,7 @@ func TestAdminSessionRevoked(t *testing.T) {
 	t.Parallel()
 
 	sessionStore := auth.NewSessionStore(time.Hour)
-	token, _ := sessionStore.Create(uuid.New(), uuid.New())
+	token, _ := sessionStore.Create(uuid.New(), uuid.New(), "admin")
 
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/logout", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -1704,6 +1710,30 @@ func TestAdminSessionRevoked(t *testing.T) {
 
 	if rec2.Code != http.StatusUnauthorized {
 		t.Fatalf("expected status 401, got %d", rec2.Code)
+	}
+}
+
+func TestAdminViewerWriteDeniedAndAudited(t *testing.T) {
+	t.Parallel()
+
+	sessionStore := auth.NewSessionStore(time.Hour)
+	token, _ := sessionStore.Create(uuid.New(), uuid.New(), "viewer")
+	recorder := newAdminAuditRecorder()
+	cfg := testAdminConfig()
+	userID := uuid.New()
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/admin/users/"+userID.String()+"/quota", strings.NewReader(`{"budget_cents":50}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	newMux(testLogger(), cfg, &fakeOverviewStore{}, nil, sessionStore, recorder).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected status 403, got %d", rec.Code)
+	}
+	entry := recorder.wait(t)
+	if entry.Action != rbac.ActionUpdateQuota || entry.StatusCode != http.StatusForbidden {
+		t.Fatalf("unexpected audit entry: %+v", entry)
 	}
 }
 

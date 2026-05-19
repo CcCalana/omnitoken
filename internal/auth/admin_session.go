@@ -12,6 +12,7 @@ import (
 type Session struct {
 	UserID    uuid.UUID
 	OrgID     uuid.UUID
+	Role      string
 	ExpiresAt time.Time
 }
 
@@ -28,18 +29,19 @@ func NewSessionStore(ttl time.Duration) *SessionStore {
 	}
 }
 
-func (s *SessionStore) Create(userID, orgID uuid.UUID) (string, error) {
+func (s *SessionStore) Create(userID, orgID uuid.UUID, role string) (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
 	token := hex.EncodeToString(b)
-	
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sessions[token] = Session{
 		UserID:    userID,
 		OrgID:     orgID,
+		Role:      role,
 		ExpiresAt: time.Now().UTC().Add(s.ttl),
 	}
 	return token, nil

@@ -90,6 +90,7 @@ SELECT
 FROM users
 JOIN roles ON roles.canonical_name = CASE
   WHEN users.email = 'admin@democorp.local' THEN 'admin'
+  WHEN users.email = 'user01@democorp.local' THEN 'viewer'
   ELSE 'member'
 END
 WHERE users.organization_id = '00000000-0000-0000-0000-000000000001'
@@ -122,8 +123,8 @@ SET
   description = excluded.description,
   updated_at = now();
 
--- Set password for admin@democorp.local to 'password' (bcrypt cost 10)
+-- Set passwords for local admin/viewer login to 'password' (bcrypt cost 10).
 UPDATE users
-SET password_hash = '$2a$10$vI8aWBnW3fID.ZQ4/zo1G.q1lRps.9cGLcZEiGDMVr5yUP1KUOYTa',
+SET password_hash = '$2a$10$Q1GeBLzIJ9SfDlkO2nyHIOfwSWlU6wNvpKU4YRfDV1i.UE3CxSJu2',
     updated_at = now()
-WHERE email = 'admin@democorp.local';
+WHERE email IN ('admin@democorp.local', 'user01@democorp.local');

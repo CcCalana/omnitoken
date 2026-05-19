@@ -44,6 +44,7 @@ function createAdminAPI(baseURL = resolveAdminBaseURL()) {
     getOverview: () => fetchJSON(`${base}/api/admin/overview`),
     getUsers: () => fetchJSON(`${base}/api/admin/users`),
     getModels: () => fetchJSON(`${base}/api/admin/models`),
+    getMe: () => fetchJSON(`${base}/api/admin/me`),
     getVirtualModels: () => fetchJSON(`${base}/api/admin/virtual-models`),
     getAuditLogs: (filters = {}) => fetchJSON(`${base}/api/admin/audit-logs${toQueryString(filters)}`),
     updateUserQuota: (userID, budgetCents) => fetchJSON(`${base}/api/admin/users/${encodeURIComponent(userID)}/quota`, {
@@ -75,15 +76,13 @@ function toQueryString(filters) {
 async function fetchJSON(url, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
-  // Dev-only token injection until T-005b ships real login.
-  // Set via: localStorage.setItem("omnitokenAdminToken", "<bootstrap>") or ?token=<bootstrap>
-  const devToken =
+  const sessionToken =
     (typeof localStorage !== "undefined" && localStorage.getItem("omnitokenAdminToken")) ||
     new URLSearchParams(window.location.search).get("token") ||
     "";
   const headers = {
     Accept: "application/json",
-    ...(devToken ? { Authorization: `Bearer ${devToken}` } : {}),
+    ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
     ...(options.body ? { "Content-Type": "application/json" } : {}),
     ...(options.headers || {}),
   };

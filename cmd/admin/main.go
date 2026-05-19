@@ -18,16 +18,20 @@ import (
 
 	"github.com/google/uuid"
 	_ "github.com/lib/pq"
-	"golang.org/x/crypto/bcrypt"
 	"github.com/omnitoken/omnitoken/internal/audit"
 	"github.com/omnitoken/omnitoken/internal/auth"
 	"github.com/omnitoken/omnitoken/internal/config"
 	"github.com/omnitoken/omnitoken/internal/httpx"
 	"github.com/omnitoken/omnitoken/internal/rbac"
 	usageanomaly "github.com/omnitoken/omnitoken/internal/usage/anomaly"
+	"golang.org/x/crypto/bcrypt"
 )
 
-const keyAnomalyThresholdEnv = "OMNITOKEN_ADMIN_KEY_ANOMALY_RPM_5M"
+const (
+	keyAnomalyThresholdEnv = "OMNITOKEN_ADMIN_KEY_ANOMALY_RPM_5M"
+	adminSessionTTLEnv     = "OMNITOKEN_ADMIN_SESSION_TTL"
+	defaultAdminSessionTTL = 24 * time.Hour
+)
 
 var errAdminUserNotFound = errors.New("admin user not found")
 
@@ -187,7 +191,7 @@ type overviewStore interface {
 	LoadAuditLogs(context.Context, auditLogFilters) ([]adminAuditLog, error)
 	UpdateUserBudget(context.Context, uuid.UUID, *int64, time.Time) (updateUserBudgetResult, error)
 	LoadVirtualModels(context.Context) (virtualModelsResponse, error)
-	Authenticate(ctx context.Context, email, password string) (uuid.UUID, uuid.UUID, error)
+	Authenticate(ctx context.Context, email, password string) (uuid.UUID, uuid.UUID, string, error)
 }
 
 type postgresVirtualKeyCreator struct {
@@ -217,7 +221,7 @@ func main() {
 	defer stopBackground()
 	startKeyAnomalyMonitor(runCtx, logger, db)
 
-	sessionStore := auth.NewSessionStore(24 * time.Hour)
+	sessionStore := auth.NewSessionStore(adminSessionTTL(logger))
 
 	server := &http.Server{
 		Addr:              cfg.Admin.Addr,
@@ -295,11 +299,24 @@ func keyAnomalyThreshold(logger *slog.Logger) int {
 	return threshold
 }
 
-func newVirtualKeyCreator(logger *slog.Logger, cfg config.Config, db *sql.DB) virtualKeyCreator {
-	if cfg.Admin.BootstrapToken == "" {
-		logger.Info("admin dev virtual key endpoint disabled", "reason", "bootstrap_token_empty", "port", cfg.Admin.Addr)
-		return nil
+func adminSessionTTL(logger *slog.Logger) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(adminSessionTTLEnv))
+	if raw == "" {
+		return defaultAdminSessionTTL
 	}
+	ttl, err := time.ParseDuration(raw)
+	if err != nil || ttl <= 0 {
+		logger.Warn("invalid admin session ttl",
+			"env", adminSessionTTLEnv,
+			"value", raw,
+			"default", defaultAdminSessionTTL.String(),
+		)
+		return defaultAdminSessionTTL
+	}
+	return ttl
+}
+
+func newVirtualKeyCreator(logger *slog.Logger, _ config.Config, db *sql.DB) virtualKeyCreator {
 	if db == nil {
 		logger.Error("admin dev virtual key endpoint requires OMNITOKEN_DATABASE_URL")
 		os.Exit(1)
@@ -310,13 +327,13 @@ func newVirtualKeyCreator(logger *slog.Logger, cfg config.Config, db *sql.DB) vi
 
 func newMux(logger *slog.Logger, cfg config.AdminConfig, overview overviewStore, creator virtualKeyCreator, sessionStore *auth.SessionStore, auditRecorders ...audit.Recorder) http.Handler {
 	mux := http.NewServeMux()
-	
+
 	// Legacy dev-only bootstrap token authentication
 	adminAuthBootstrap := adminAuthMiddleware(cfg.BootstrapToken)
-	
+
 	// New robust session-based authentication
 	adminAuthSession := adminSessionMiddleware(sessionStore)
-	
+
 	var auditRecorder audit.Recorder
 	if len(auditRecorders) > 0 {
 		auditRecorder = auditRecorders[0]
@@ -337,14 +354,14 @@ func newMux(logger *slog.Logger, cfg config.AdminConfig, overview overviewStore,
 				Type: "anonymous",
 			}
 		},
-		Logger:        logger,
+		Logger: logger,
 	})
-	
-	protectedWrite := func(handler http.Handler) http.Handler {
+
+	protectedWrite := func(action string, handler http.Handler) http.Handler {
 		// Try session auth first, fallback to bootstrap (for tests/dev)
-		return authChain(adminAuthSession, adminAuthBootstrap)(adminAudit(handler))
+		return authChain(adminAuthSession, adminAuthBootstrap)(adminAudit(authorizeAdminWrite(cfg.BootstrapToken, action, handler)))
 	}
-	
+
 	protectedRead := func(handler http.Handler) http.Handler {
 		return authChain(adminAuthSession, adminAuthBootstrap)(handler)
 	}
@@ -357,18 +374,18 @@ func newMux(logger *slog.Logger, cfg config.AdminConfig, overview overviewStore,
 	mux.Handle("POST /api/admin/login", adminAuditOnly(http.HandlerFunc(makeLoginHandler(logger, overview, sessionStore))))
 	mux.Handle("POST /api/admin/logout", protectedRead(http.HandlerFunc(makeLogoutHandler(sessionStore))))
 	mux.Handle("GET /api/admin/me", protectedRead(http.HandlerFunc(makeMeHandler())))
-	
+
 	mux.Handle("GET /api/admin/overview", protectedRead(http.HandlerFunc(makeOverviewHandler(logger, overview, time.Now))))
 	mux.Handle("GET /api/admin/users", protectedRead(http.HandlerFunc(makeUsersHandler(logger, overview, time.Now))))
 	mux.Handle("GET /api/admin/models", protectedRead(http.HandlerFunc(makeModelsHandler(logger, overview, time.Now))))
 	mux.Handle("GET /api/admin/virtual-models", protectedRead(http.HandlerFunc(makeVirtualModelsHandler(logger, overview))))
 	mux.Handle("GET /api/admin/audit-logs", protectedRead(http.HandlerFunc(makeAuditLogsHandler(logger, overview))))
-	mux.Handle("PATCH /api/admin/users/{id}/quota", protectedWrite(http.HandlerFunc(makeUpdateUserQuotaHandler(logger, overview))))
-	if cfg.BootstrapToken != "" && creator != nil {
+	mux.Handle("PATCH /api/admin/users/{id}/quota", protectedWrite(rbac.ActionUpdateQuota, http.HandlerFunc(makeUpdateUserQuotaHandler(logger, overview))))
+	if creator != nil {
 		// Demo-Ready 简化版: this admin-port-only endpoint lives on
-		// 8081, not the gateway data-plane port 8080. Full admin auth/RBAC stays
-		// in T-005b.
-		mux.Handle("POST /api/admin/dev/virtual-keys", protectedWrite(http.HandlerFunc(makeCreateVirtualKeyHandler(logger, creator))))
+		// 8081, not the gateway data-plane port 8080. Session auth is primary;
+		// bootstrap is only a local fallback when configured.
+		mux.Handle("POST /api/admin/dev/virtual-keys", protectedWrite(rbac.ActionCreateVirtualKey, http.HandlerFunc(makeCreateVirtualKeyHandler(logger, creator))))
 	}
 
 	return httpx.RequestID(httpx.RequestLogger(logger)(httpx.CORS(cfg.CORSOrigins, cfg.CORSMethods)(mux)))
@@ -820,37 +837,54 @@ var (
 	ErrUserDisabled       = errors.New("user disabled")
 )
 
-func (s *postgresOverviewStore) Authenticate(ctx context.Context, email, password string) (uuid.UUID, uuid.UUID, error) {
+func (s *postgresOverviewStore) Authenticate(ctx context.Context, email, password string) (uuid.UUID, uuid.UUID, string, error) {
 	const query = `
-SELECT u.id, u.organization_id, u.password_hash, u.status
+SELECT
+  u.id,
+  u.organization_id,
+  u.password_hash,
+  u.status,
+  COALESCE(
+    (array_agg(r.canonical_name ORDER BY CASE r.canonical_name
+      WHEN 'admin' THEN 1
+      WHEN 'viewer' THEN 2
+      WHEN 'member' THEN 3
+      ELSE 4
+    END))[1],
+    ''
+  ) AS role
 FROM users u
-JOIN role_assignments ra ON ra.user_id = u.id
-JOIN roles r ON r.id = ra.role_id
-WHERE u.email = $1 AND r.canonical_name = 'admin'`
+LEFT JOIN role_assignments ra
+  ON ra.organization_id = u.organization_id
+ AND ra.user_id = u.id
+LEFT JOIN roles r ON r.id = ra.role_id
+WHERE u.email = $1
+GROUP BY u.id, u.organization_id, u.password_hash, u.status`
 
 	var userID, orgID uuid.UUID
 	var hash sql.NullString
 	var status string
-	if err := s.db.QueryRowContext(ctx, query, email).Scan(&userID, &orgID, &hash, &status); err != nil {
+	var role string
+	if err := s.db.QueryRowContext(ctx, query, email).Scan(&userID, &orgID, &hash, &status, &role); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return uuid.Nil, uuid.Nil, ErrInvalidCredentials
+			return uuid.Nil, uuid.Nil, "", ErrInvalidCredentials
 		}
-		return uuid.Nil, uuid.Nil, fmt.Errorf("query admin user: %w", err)
+		return uuid.Nil, uuid.Nil, "", fmt.Errorf("query admin user: %w", err)
 	}
 
 	if status != "active" {
-		return uuid.Nil, uuid.Nil, ErrUserDisabled
+		return uuid.Nil, uuid.Nil, "", ErrUserDisabled
 	}
 
-	if !hash.Valid {
-		return uuid.Nil, uuid.Nil, ErrInvalidCredentials
+	if !hash.Valid || strings.TrimSpace(role) == "" {
+		return uuid.Nil, uuid.Nil, "", ErrInvalidCredentials
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(hash.String), []byte(password)); err != nil {
-		return uuid.Nil, uuid.Nil, ErrInvalidCredentials
+		return uuid.Nil, uuid.Nil, "", ErrInvalidCredentials
 	}
 
-	return userID, orgID, nil
+	return userID, orgID, role, nil
 }
 
 func (s *postgresOverviewStore) LoadVirtualModels(ctx context.Context) (virtualModelsResponse, error) {
@@ -1136,6 +1170,9 @@ func adminAuthMiddleware(bootstrapToken string) func(http.Handler) http.Handler 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if bootstrapToken == "" || !authorizedBootstrap(r, bootstrapToken) {
+				// In the session-primary admin architecture, an empty bootstrap
+				// token means the dev fallback is disabled, not that admin auth is
+				// globally unconfigured.
 				writeUnauthorized(w)
 				return
 			}
@@ -1143,6 +1180,26 @@ func adminAuthMiddleware(bootstrapToken string) func(http.Handler) http.Handler 
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func authorizeAdminWrite(bootstrapToken string, action string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if subject, ok := auth.SubjectFromContext(r.Context()); ok {
+			if subject.Role == string(rbac.RoleAdmin) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			audit.SetAction(r.Context(), action)
+			audit.SetAfter(r.Context(), map[string]string{"reason": rbac.ReasonActionNotPermitted})
+			httpx.WriteJSON(w, http.StatusForbidden, errorEnvelope("forbidden", "authorization_error", "rbac_denied"))
+			return
+		}
+		if strings.TrimSpace(bootstrapToken) != "" && authorizedBootstrap(r, bootstrapToken) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		writeUnauthorized(w)
+	})
 }
 
 type authResponseWriter struct {
@@ -1175,15 +1232,15 @@ func authChain(primary, fallback func(http.Handler) http.Handler) func(http.Hand
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			pw := &authResponseWriter{ResponseWriter: w}
-			
+
 			passed := false
 			primaryHandler := primary(http.HandlerFunc(func(innerW http.ResponseWriter, innerR *http.Request) {
 				passed = true
 				next.ServeHTTP(w, innerR)
 			}))
-			
+
 			primaryHandler.ServeHTTP(pw, r)
-			
+
 			if !passed && pw.unauthorized {
 				fallback(next).ServeHTTP(w, r)
 			}
@@ -1211,6 +1268,7 @@ func adminSessionMiddleware(store *auth.SessionStore) func(http.Handler) http.Ha
 			ctx := auth.WithSubject(r.Context(), auth.Subject{
 				UserID: session.UserID,
 				OrgID:  session.OrgID,
+				Role:   session.Role,
 			})
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
@@ -1234,13 +1292,13 @@ func makeLoginHandler(logger *slog.Logger, store overviewStore, sessionStore *au
 			return
 		}
 
-		userID, orgID, err := store.Authenticate(r.Context(), req.Email, req.Password)
+		userID, orgID, role, err := store.Authenticate(r.Context(), req.Email, req.Password)
 		if err != nil {
 			// Record failed login audit log
 			audit.SetAction(r.Context(), "login_failed")
 			audit.SetAfter(r.Context(), map[string]string{"email": req.Email, "reason": err.Error()})
 			logger.Warn("admin login failed", "email", req.Email, "error", err)
-			
+
 			if errors.Is(err, ErrInvalidCredentials) {
 				httpx.WriteJSON(w, http.StatusUnauthorized, errorEnvelope("invalid credentials", "authentication_error", "invalid_credentials"))
 			} else if errors.Is(err, ErrUserDisabled) {
@@ -1251,7 +1309,7 @@ func makeLoginHandler(logger *slog.Logger, store overviewStore, sessionStore *au
 			return
 		}
 
-		token, err := sessionStore.Create(userID, orgID)
+		token, err := sessionStore.Create(userID, orgID, role)
 		if err != nil {
 			logger.Error("create session failed", "error", err)
 			httpx.WriteJSON(w, http.StatusInternalServerError, errorEnvelope("internal error", "server_error", "internal_error"))
@@ -1290,7 +1348,7 @@ func makeMeHandler() http.HandlerFunc {
 		}
 		httpx.WriteJSON(w, http.StatusOK, map[string]string{
 			"user_id": subject.UserID.String(),
-			"role":    "admin", // Implicit since only admins can login here
+			"role":    subject.Role,
 		})
 	}
 }

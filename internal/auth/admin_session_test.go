@@ -13,7 +13,7 @@ func TestSessionStore(t *testing.T) {
 	userID := uuid.New()
 	orgID := uuid.New()
 
-	token, err := store.Create(userID, orgID)
+	token, err := store.Create(userID, orgID, "admin")
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -32,7 +32,7 @@ func TestSessionStore(t *testing.T) {
 		t.Errorf("Validate succeeded after revoke")
 	}
 
-	token2, _ := store.Create(userID, orgID)
+	token2, _ := store.Create(userID, orgID, "admin")
 	time.Sleep(150 * time.Millisecond)
 	_, ok = store.Validate(token2)
 	if ok {

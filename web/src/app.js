@@ -3,9 +3,12 @@ const { createAdminAPI } = window.OmniTokenAPI;
 const { createAuditView, createModelsView, createOverviewView, createUsersView, createVirtualModelsView, createLoginView } = window.OmniTokenViews;
 
 const api = createAdminAPI();
+const state = {
+  role: "viewer",
+};
 const views = {
   overview: createOverviewView(api),
-  users: createUsersView(api),
+  users: createUsersView(api, { getRole: () => state.role }),
   models: createModelsView(api),
   virtualModels: createVirtualModelsView ? createVirtualModelsView(api) : null,
   audit: createAuditView(api),
@@ -14,24 +17,28 @@ const views = {
 
 const titles = {
   overview: {
-    title: "组织消耗概览",
-    subtitle: "实时查看网关请求、Token 消耗和成本账本。",
+    title: "Organization Overview",
+    subtitle: "Live gateway requests, token consumption, and cost ledger signals.",
   },
   users: {
-    title: "用户额度分配与管控",
-    subtitle: "展示组织成员本月模型使用情况；配额系统未接入时显示无限额。",
+    title: "Users And Budgets",
+    subtitle: "Review user usage and manage monthly budgets when your role allows it.",
   },
   models: {
-    title: "模型调用分析",
-    subtitle: "按模型聚合 Prompt、Completion、成本和调用次数。",
+    title: "Model Usage",
+    subtitle: "Tokens, cost, and call counts grouped by actual upstream model.",
   },
   virtualModels: {
-    title: "虚拟模型映射",
-    subtitle: "网关层的虚拟模型与真实 Ark 模型映射表。",
+    title: "Virtual Models",
+    subtitle: "Gateway routing aliases mapped to real Ark model identifiers.",
   },
   audit: {
-    title: "审计日志",
-    subtitle: "按 actor、资源与时间窗口查看 admin 写操作记录。",
+    title: "Audit Logs",
+    subtitle: "Trace admin actions by actor, resource, status, and time window.",
+  },
+  login: {
+    title: "Sign In",
+    subtitle: "Use a seeded local admin or viewer account.",
   },
 };
 
@@ -51,20 +58,35 @@ if (logoutBtn) {
   logoutBtn.addEventListener("click", () => api.logout());
 }
 
-window.addEventListener('omnitoken:unauthorized', () => {
+window.addEventListener("omnitoken:unauthorized", () => {
+  showAuthenticatedShell(false);
   switchTab("login");
-  document.querySelector('.sidebar').style.display = 'none';
-  document.querySelector('.topbar-actions').style.display = 'none';
-  document.getElementById("page-title").textContent = "访问受限";
-  document.getElementById("page-subtitle").textContent = "请登录以继续。";
 });
 
-// Check if we already have a token or ?token= in URL, otherwise show login
-const urlParams = new URLSearchParams(window.location.search);
-if (!localStorage.getItem("omnitokenAdminToken") && !urlParams.get("token")) {
-  window.dispatchEvent(new Event('omnitoken:unauthorized'));
-} else {
-  switchTab("overview");
+init();
+
+async function init() {
+  const urlParams = new URLSearchParams(window.location.search);
+  if (!localStorage.getItem("omnitokenAdminToken") && !urlParams.get("token")) {
+    window.dispatchEvent(new Event("omnitoken:unauthorized"));
+    return;
+  }
+
+  try {
+    const me = await api.getMe();
+    state.role = me.role || "viewer";
+    showAuthenticatedShell(true);
+    switchTab("overview");
+  } catch (_) {
+    window.dispatchEvent(new Event("omnitoken:unauthorized"));
+  }
+}
+
+function showAuthenticatedShell(isAuthenticated) {
+  const sidebar = document.querySelector(".sidebar");
+  const actions = document.querySelector(".topbar-actions");
+  if (sidebar) sidebar.style.display = isAuthenticated ? "" : "none";
+  if (actions) actions.style.display = isAuthenticated ? "" : "none";
 }
 
 function switchTab(tab) {

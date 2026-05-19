@@ -10,6 +10,7 @@ type Subject struct {
 	UserID   uuid.UUID
 	OrgID    uuid.UUID
 	APIKeyID uuid.UUID
+	Role     string
 }
 
 type subjectContextKey struct{}
