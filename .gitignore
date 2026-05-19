@@ -20,3 +20,6 @@ Thumbs.db
 # Runtime data
 tmp/
 data/
+
+# Codex local Go cache (use `go env GOCACHE` defaults instead)
+tmp-go-cache/
