@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/omnitoken/omnitoken/internal/audit"
+	"github.com/omnitoken/omnitoken/internal/auth"
 	"github.com/omnitoken/omnitoken/internal/config"
 	usageanomaly "github.com/omnitoken/omnitoken/internal/usage/anomaly"
 )
@@ -106,8 +107,8 @@ func TestAdminAuthMiddlewareTokenCases(t *testing.T) {
 			name:          "unconfigured bootstrap token",
 			configToken:   "",
 			requestHeader: "Bearer dev-bootstrap",
-			wantStatus:    http.StatusServiceUnavailable,
-			wantCode:      "admin_auth_not_configured",
+			wantStatus:    http.StatusUnauthorized,
+			wantCode:      "invalid_api_key",
 		},
 	}
 
@@ -1381,10 +1382,13 @@ type fakeOverviewStore struct {
 	updateUserID      uuid.UUID
 	updateBudgetCents *int64
 	updateAt          time.Time
+	authUserID        uuid.UUID
+	authOrgID         uuid.UUID
+	authErr           error
 }
 
 func (f *fakeOverviewStore) Authenticate(ctx context.Context, email, password string) (uuid.UUID, uuid.UUID, error) {
-	return uuid.Nil, uuid.Nil, errors.New("not implemented")
+	return f.authUserID, f.authOrgID, f.authErr
 }
 
 func (f *fakeOverviewStore) LoadVirtualModels(ctx context.Context) (virtualModelsResponse, error) {
@@ -1561,4 +1565,173 @@ func (r *adminFakeRows) Next(dest []driver.Value) error {
 	copy(dest, r.rows[r.index])
 	r.index++
 	return nil
+}
+
+func TestAdminLoginSuccess(t *testing.T) {
+	t.Parallel()
+
+	userID := uuid.New()
+	orgID := uuid.New()
+	store := &fakeOverviewStore{
+		authUserID: userID,
+		authOrgID:  orgID,
+	}
+	sessionStore := auth.NewSessionStore(time.Hour)
+	recorder := newAdminAuditRecorder()
+	cfg := testAdminConfig()
+
+	body := `{"email":"admin@example.com","password":"password123"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/login", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	newMux(testLogger(), cfg, store, nil, sessionStore, recorder).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	var resp loginResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Token == "" {
+		t.Fatal("expected token, got empty")
+	}
+
+	session, ok := sessionStore.Validate(resp.Token)
+	if !ok {
+		t.Fatal("session not validated")
+	}
+	if session.UserID != userID || session.OrgID != orgID {
+		t.Fatalf("session mismatch: %+v", session)
+	}
+
+	entry := recorder.wait(t)
+	if entry.Action != "login" || entry.Actor.Type != "anonymous" {
+		t.Fatalf("unexpected audit entry: %+v", entry)
+	}
+}
+
+func TestAdminLoginWrongPwd(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeOverviewStore{
+		authErr: ErrInvalidCredentials,
+	}
+	sessionStore := auth.NewSessionStore(time.Hour)
+	recorder := newAdminAuditRecorder()
+	cfg := testAdminConfig()
+
+	body := `{"email":"admin@example.com","password":"wrong"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/login", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	newMux(testLogger(), cfg, store, nil, sessionStore, recorder).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status 401, got %d", rec.Code)
+	}
+
+	entry := recorder.wait(t)
+	if entry.Action != "login_failed" || entry.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unexpected audit entry: %+v", entry)
+	}
+}
+
+func TestAdminLoginDisabled(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeOverviewStore{
+		authErr: ErrUserDisabled,
+	}
+	sessionStore := auth.NewSessionStore(time.Hour)
+	recorder := newAdminAuditRecorder()
+	cfg := testAdminConfig()
+
+	body := `{"email":"admin@example.com","password":"password123"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/login", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	newMux(testLogger(), cfg, store, nil, sessionStore, recorder).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected status 403, got %d", rec.Code)
+	}
+
+	entry := recorder.wait(t)
+	if entry.Action != "login_failed" || entry.StatusCode != http.StatusForbidden {
+		t.Fatalf("unexpected audit entry: %+v", entry)
+	}
+}
+
+func TestAdminSessionExpired(t *testing.T) {
+	t.Parallel()
+
+	sessionStore := auth.NewSessionStore(-time.Hour) // immediate expiration
+	token, _ := sessionStore.Create(uuid.New(), uuid.New())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/me", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	newMux(testLogger(), testAdminConfig(), nil, nil, sessionStore).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status 401, got %d", rec.Code)
+	}
+}
+
+func TestAdminSessionRevoked(t *testing.T) {
+	t.Parallel()
+
+	sessionStore := auth.NewSessionStore(time.Hour)
+	token, _ := sessionStore.Create(uuid.New(), uuid.New())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/logout", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	newMux(testLogger(), testAdminConfig(), nil, nil, sessionStore).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected status 204, got %d", rec.Code)
+	}
+
+	req2 := httptest.NewRequest(http.MethodGet, "/api/admin/me", nil)
+	req2.Header.Set("Authorization", "Bearer "+token)
+	rec2 := httptest.NewRecorder()
+
+	newMux(testLogger(), testAdminConfig(), nil, nil, sessionStore).ServeHTTP(rec2, req2)
+
+	if rec2.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status 401, got %d", rec2.Code)
+	}
+}
+
+func TestAdminLoginAuditLogs(t *testing.T) {
+	t.Parallel()
+
+	userID := uuid.New()
+	store := &fakeOverviewStore{
+		authUserID: userID,
+		authOrgID:  uuid.New(),
+	}
+	sessionStore := auth.NewSessionStore(time.Hour)
+	recorder := newAdminAuditRecorder()
+	cfg := testAdminConfig()
+
+	body := `{"email":"admin@example.com","password":"password123"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/login", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	newMux(testLogger(), cfg, store, nil, sessionStore, recorder).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+
+	entry := recorder.wait(t)
+	after, ok := entry.After.(map[string]string)
+	if !ok || after["user_id"] != userID.String() {
+		t.Fatalf("unexpected after snapshot: %#v", entry.After)
+	}
 }

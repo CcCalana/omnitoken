@@ -349,8 +349,12 @@ func newMux(logger *slog.Logger, cfg config.AdminConfig, overview overviewStore,
 		return authChain(adminAuthSession, adminAuthBootstrap)(handler)
 	}
 
+	adminAuditOnly := func(handler http.Handler) http.Handler {
+		return adminAudit(handler)
+	}
+
 	mux.HandleFunc("GET /healthz", handleHealthz)
-	mux.Handle("POST /api/admin/login", http.HandlerFunc(makeLoginHandler(logger, overview, sessionStore)))
+	mux.Handle("POST /api/admin/login", adminAuditOnly(http.HandlerFunc(makeLoginHandler(logger, overview, sessionStore))))
 	mux.Handle("POST /api/admin/logout", protectedRead(http.HandlerFunc(makeLogoutHandler(sessionStore))))
 	mux.Handle("GET /api/admin/me", protectedRead(http.HandlerFunc(makeMeHandler())))
 	
@@ -811,6 +815,11 @@ ORDER BY total_tokens DESC, model ASC`
 	return response, nil
 }
 
+var (
+	ErrInvalidCredentials = errors.New("invalid credentials")
+	ErrUserDisabled       = errors.New("user disabled")
+)
+
 func (s *postgresOverviewStore) Authenticate(ctx context.Context, email, password string) (uuid.UUID, uuid.UUID, error) {
 	const query = `
 SELECT u.id, u.organization_id, u.password_hash, u.status
@@ -824,21 +833,21 @@ WHERE u.email = $1 AND r.canonical_name = 'admin'`
 	var status string
 	if err := s.db.QueryRowContext(ctx, query, email).Scan(&userID, &orgID, &hash, &status); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return uuid.Nil, uuid.Nil, errors.New("invalid credentials")
+			return uuid.Nil, uuid.Nil, ErrInvalidCredentials
 		}
 		return uuid.Nil, uuid.Nil, fmt.Errorf("query admin user: %w", err)
 	}
 
 	if status != "active" {
-		return uuid.Nil, uuid.Nil, errors.New("user disabled")
+		return uuid.Nil, uuid.Nil, ErrUserDisabled
 	}
 
 	if !hash.Valid {
-		return uuid.Nil, uuid.Nil, errors.New("invalid credentials")
+		return uuid.Nil, uuid.Nil, ErrInvalidCredentials
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(hash.String), []byte(password)); err != nil {
-		return uuid.Nil, uuid.Nil, errors.New("invalid credentials")
+		return uuid.Nil, uuid.Nil, ErrInvalidCredentials
 	}
 
 	return userID, orgID, nil
@@ -1126,11 +1135,7 @@ func adminAuthMiddleware(bootstrapToken string) func(http.Handler) http.Handler 
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if bootstrapToken == "" {
-				writeAdminAuthNotConfigured(w)
-				return
-			}
-			if !authorizedBootstrap(r, bootstrapToken) {
+			if bootstrapToken == "" || !authorizedBootstrap(r, bootstrapToken) {
 				writeUnauthorized(w)
 				return
 			}
@@ -1236,9 +1241,9 @@ func makeLoginHandler(logger *slog.Logger, store overviewStore, sessionStore *au
 			audit.SetAfter(r.Context(), map[string]string{"email": req.Email, "reason": err.Error()})
 			logger.Warn("admin login failed", "email", req.Email, "error", err)
 			
-			if err.Error() == "invalid credentials" {
+			if errors.Is(err, ErrInvalidCredentials) {
 				httpx.WriteJSON(w, http.StatusUnauthorized, errorEnvelope("invalid credentials", "authentication_error", "invalid_credentials"))
-			} else if err.Error() == "user disabled" {
+			} else if errors.Is(err, ErrUserDisabled) {
 				httpx.WriteJSON(w, http.StatusForbidden, errorEnvelope("user disabled", "authentication_error", "user_disabled"))
 			} else {
 				httpx.WriteJSON(w, http.StatusInternalServerError, errorEnvelope("internal error", "server_error", "internal_error"))
