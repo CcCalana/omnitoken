@@ -1,3 +1,3 @@
 # Agent Adapter Package
 
-Owns local Agent CLI configuration writers for OmniToken adoption. T-041 covers Claude Code settings merge, backup, and restore only.
+Owns local Agent CLI configuration writers for OmniToken adoption. Supports Claude Code settings and Codex config/auth merge, backup, and restore.

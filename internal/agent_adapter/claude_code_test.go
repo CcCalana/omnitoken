@@ -92,6 +92,10 @@ func TestWriteClaudeCodeSettingsMergesAndPreservesUserFields(t *testing.T) {
 	if env["ANTHROPIC_MODEL"] != "chat-code" || env["ANTHROPIC_DEFAULT_SONNET_MODEL"] != "chat-code" {
 		t.Fatalf("managed model keys were not overwritten: %+v", env)
 	}
+	settings := readFile(t, settingsPath)
+	if !strings.Contains(settings, "  \"env\": {\n    \"ANTHROPIC_AUTH_TOKEN\"") {
+		t.Fatalf("env block was not indented as a JSON object:\n%s", settings)
+	}
 
 	backup := readFile(t, result.BackupPath)
 	if !strings.Contains(backup, `"ANTHROPIC_MODEL": "old-model"`) {

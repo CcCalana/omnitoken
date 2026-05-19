@@ -1,3 +1,3 @@
 # OmniToken Adopt CLI
 
-Employee-side setup tool that points local Agent CLI configuration at OmniToken. T-041 supports Claude Code adopt and restore.
+Employee-side setup tool that points local Agent CLI configuration at OmniToken. Supports Claude Code and Codex adopt/restore commands.
