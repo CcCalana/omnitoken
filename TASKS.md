@@ -201,7 +201,9 @@ N-1 compact UTC `20060102T150405.000000000Z`; N-2 invalid existing config exits 
 
 ---
 
-## T-MK-RACE Makefile: race 验证移入 Docker [phase:infra] [owner:codex] [status:todo]
+## T-MK-RACE Makefile: race 验证移入 Docker [phase:infra] [owner:codex] [status:in-progress]
+
+Started: 2026-05-19 20:11 +08:00
 
 **目标**: 让 Windows 主机不必装 gcc 也能完成提交前的 race 验证；同时把"本地 `make test` 跑 `-race`"这条隐性要求从默认路径移除（已与 AGENTS.md §3.3a/§3.3/§7 对齐）。
 

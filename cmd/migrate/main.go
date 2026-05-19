@@ -234,14 +234,18 @@ func migrationSourceURL(rawPath string) (string, error) {
 	}
 
 	if isWindowsAbsPath(path) {
-		return "file://" + filepath.ToSlash(path), nil
+		return "file://" + slashPath(path), nil
 	}
 
 	abs, err := filepath.Abs(filepath.FromSlash(path))
 	if err != nil {
 		return "", fmt.Errorf("absolute migration path: %w", err)
 	}
-	return "file://" + filepath.ToSlash(abs), nil
+	return "file://" + slashPath(abs), nil
+}
+
+func slashPath(path string) string {
+	return strings.ReplaceAll(filepath.ToSlash(path), "\\", "/")
 }
 
 func isWindowsAbsPath(path string) bool {
