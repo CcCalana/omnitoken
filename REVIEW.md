@@ -1,6 +1,11 @@
 # REVIEW.md — OmniToken Review Log
 
-> **归档说明**: R-001 ~ R-007 已归档至 `docs/reviews/archive.md`（46KB）。本文件只保留最近 3 次 review + 未解决项摘要。
+> **归档说明**:
+> - R-001 ~ R-007 → `docs/reviews/archive.md`
+> - R-006b-prop / R-006b / R-006c / R-006d → `docs/reviews/archive-2026-05-12.md`
+> - R-008 ~ R-005b-fix (Phase 2-A 收官 + Phase 2-B 全程) → `docs/reviews/archive-2026-05-19.md`
+>
+> 本文件保留最近 review；老的归档到 docs/reviews/。
 
 ## 未解决项摘要（从所有 review 累积）
 
@@ -11,147 +16,67 @@
 | M-16 | R-008 | MEDIUM | body double-read (1MiB) | Informational, Phase 2 优化 |
 | M-17 | R-008 | MEDIUM | SQL fallback 双重防御 | Informational, 设计正确 |
 | M-18 | R-006b | MEDIUM | overview 3 条 query 非事务 | Informational, Phase 2 |
+| M-19 | R-010 | MEDIUM | 503 admin_auth_not_configured 在生产部署中可能成隐患（默认不放行正确，但运行期需 alerting） | Informational, Phase 2 alerting |
 
 ---
 
-## R-008 (T-008, commits `4761671` + `e7f8036`)
+## R-INT (T-INT v1 联调收官, commit `4db5057`)
 
-**结论: `[+] Approved`** — 0C/0H/2M(info)/4N。覆盖率 93.7%。
+**结论: `[+] Approved — v1 release candidate ready`** — 17/17 真方舟 + 14/14 control-plane smoke + 前端 4/4 + `git check-ignore` 验证 .env 不入库。
 
-**核心**: usage middleware 完全解耦 proxy，`context.Background()` deferred goroutine，三表事务原子写入，DB 端 numeric 精确计算，pricing CTE 三级 fallback。PROPOSAL 6 节全部精确落地。
+**正面信号**:
+1. ✅ 密钥纪律到位：`OMNITOKEN_ARK_API_KEY` 仅落本地 `.env`（gitignored），release report 显式贴 `git check-ignore -v .env` 证据；commit diff grep 无 `sk-` / `ARK_API_KEY=<value>` 泄漏。
+2. ✅ `scripts/v1_integration.py` 186 行可重复跑：control-plane smoke 默认跑、`OMNITOKEN_RUN_REAL_UPSTREAM=1` 才打 Ark——成本可控。
+3. ✅ Dockerfile gateway/admin/migrate 统一升 Go 1.25，与 `go.mod` 对齐，避免 compose 内 build mismatch。
+4. ✅ viewer seed 登录 + session role propagation 修补到位（admin/viewer 真实可登录 + RBAC 403 真实触发）；前端 Users tab 按 `/api/admin/me` 读到的 role 显隐编辑按钮——T-015 N-3 留的"viewer 模式没法点"自然 resolved。
+5. ✅ 部署文档闭环：`README.md` 加 v1 部署章节、`.env.example` 补齐 v1 新增 env、`docs/release/v1-integration-2026-05-19.md` 含截图证据 + 17/17 报告。
 
-**M-16**: body double-read (Phase 2 优化) | **M-17**: SQL fallback 双重防御 (设计正确)
-**N-25~N-28**: README 补充 / SQL 注释 / capture WriteHeader / e2e cleanup — 均不阻塞
+**N-1**: T-005b R-005b-fix 那条"503→401 transition"注释仍未落到 `cmd/admin/main.go` `adminAuthMiddleware`；不阻塞 v1，下次涉及该函数顺手加。
 
-> 完整 review 见 R-008 归档前原文，关键表格保留：
-
-| PROPOSAL 节 | 落地 | 接受标准 | 状态 |
-|------------|------|---------|------|
-| §1 middleware | ✅ | 解析点 non-stream/stream | ✅ |
-| §2 包结构 | ✅ | 入账字段 events+breakdown | ✅ |
-| §3 deferred goroutine | ✅ | cost_ledger pricing | ✅ |
-| §4 numeric SQL | ✅ | 缺 pricing → cost=0+failed | ✅ |
-| §5 failed zero-cost | ✅ | 同步入账不阻塞 | ✅ |
-| §6 seed 价格 | ✅ | 失败不影响客户端 | ✅ |
+**Phase 2-B: 5/5 ✅ — v1 release candidate 就绪**。
 
 ---
 
-## R-006b-prop (T-006b PROPOSAL, commit `c9cd5ff`)
+## R-041-prop (T-041 PROPOSAL, commit `3187fb2`)
 
-**结论: `[+] Approved`** — 8 条正面信号，0 问题，2 open questions (Q-7 trend 30天 / Q-8 share 除零)。
+**结论: `[+] Approved`** — 3 决策全采纳推荐方向 + 4 条 implementation notes 都到位。1 个 Q 实施时必须明确，2 个 N 不阻塞。
 
-**核心决策**: 拆小 query / `overviewStore` 接口 / 复用 `*sql.DB` / 降级分两层（启动全零200 / 请求500） / period UTC。
+**正面信号**:
+1. ✅ 决策 1/2/3 全部对齐 R-prop 推荐：独立 `cmd/omnitoken-adopt` / 显式 `--token` / 备份全部保留。CLI 子命令签名（`adopt claude-code` / `restore claude-code`）清晰。
+2. ✅ Windows 文件名安全是真问题——RFC3339 的 `:` 在 NTFS 是 ADS 分隔符，建议格式 `2026-05-19T10-02-00.000000000Z` 保 lex 排序 = 时序，`restore` 取最新备份无歧义。
+3. ✅ "CLI 输出禁回显完整 token" 这条 operational guardrail 自动落到 §11.6 安全基线一致——secret 不进 stdout/stderr/log。
+4. ✅ 防御性细节：root JSON / `env` 字段不是 object 时 fail-without-write、首次写无备份（无原文件可保）、严格不碰 `.claude.json`/状态栏/Codex/OpenCode。
+5. ✅ `ANTHROPIC_BASE_URL` 直接透传 `--gateway-url`，把 Anthropic-format endpoint 行为完全留给 T-045，不在 T-041 偷跑协议层。
 
----
+**Q-1（实施前必须明确）**: PROPOSAL 说"preserve existing unrelated env keys"，但 tingly-box `agent-adapter-pattern.md` §3.3 的 env 字段集除了 `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_MODEL`/`ANTHROPIC_DEFAULT_*_MODEL`/`CLAUDE_CODE_SUBAGENT_MODEL`，还有 `API_TIMEOUT_MS=3000000` / `DISABLE_TELEMETRY=1` / `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` / `CLAUDE_CODE_MAX_OUTPUT_TOKENS=32000` 这些"OmniToken 推荐配置"。请明确"OmniToken 管理 (overwrite) 的 env key 白名单"——建议在代码里写成常量 `omniTokenManagedKeys = []string{...}`，OmniToken 接管的 key 每次都覆盖，其他 key 一律保留。实施 Result 里贴一下这个清单。
 
-## R-006b (T-006b, commits `290a5bb` + `6379ccc`)
+**N-1**: 时间戳格式建议直接用 Go `time.Now().UTC().Format("20060102T150405.000000000Z")`（compact ISO 8601 basic format，无 `:`，22 字符），比 PROPOSAL 中 `2026-05-19T10-02-00.000000000Z` 带 `-` 分隔符更短且 lex 排序仍正确。或更简：`time.Now().UTC().UnixNano()` 纯数字，跨 OS 100% 安全，缺点是不易人眼读。任选其一在实施 commit 里说明。
 
-**结论: `[+] Approved`** — 0C/0H/1M(info)/2N。覆盖率 51.9%。9 个测试，530 行测试代码。
+**N-2**: "fail without writing if root/env 不是 object" — CLI 退出码请用非零（推荐 `2` for invalid existing config），便于 shell 脚本检测。同时 stderr 一行清晰错误，不要 panic stacktrace。
 
-**正面信号 (10条)**: 旧 mock 完全删除 / `overviewStore` 接口精确落地 / DB 连接统一 / 降级双层 / summary 一条 SQL 三值 / trend 30d 只返回有数据天 / share 除零防御 / SQL 参数断言 / CORS 测试 / model COALESCE 三级
-
-**Q-7 resolved**: `now.AddDate(0,0,-30)` 到 `now`，空天不出现。
-**Q-8 resolved**: `if totalTokens > 0 { item.Share = ... }`，测试覆盖 totalTokens=0。
-
-**M-18**: 3 条 query 非事务 (Phase 2) | **N-29**: fake driver 重复模式 | **N-30**: buffer String() 歧义
-
-### 接受标准（全部 ✅）
-
-| 标准 | 状态 |
-|------|------|
-| JSON 兼容 `overviewResponse` | ✅ |
-| 当月聚合 tokens/cost/users | ✅ |
-| trend 30天按日 / model share | ✅ |
-| DB 复用 + 降级 | ✅ |
-| 安全聚合 / 测试 ≥2 case | ✅ |
-| 不改 usage / 不改前端 | ✅ |
-
-**Demo-Ready 75% (6/8)**。下一拍: T-006c → T-006d → push。
+**Codex 可开 T-041 实施**。N-1 / N-2 落实施 Result 即可。
 
 ---
 
-## R-006c (T-006c, commits `51ba90c` + `3f594b1`)
+## R-041 (T-041 Claude Code 适配 实施, commit `a6d1d09`)
 
-**结论: `[+] Approved`** — 0C/0H/0M/2N。
+**结论: `[+] Approved with MEDIUM follow-ups`** — 接受标准 7/7 ✓；R-041-prop 的 Q-1 / N-1 / N-2 全部落地；2 条 MEDIUM 不阻塞 v1 演示，建议并入 T-042 一起修；2 条 NIT 可忽略。
 
-**正面信号 (8条)**:
-1. ✅ mock 数据完全替换为 `fetch('/api/admin/overview')`，KPI/trend/pie 三处全部接真 API
-2. ✅ admin URL 解析链：`?admin=` → `localStorage` → 同 hostname `:8081` → `localhost:8081`，覆盖 file:// 和远程场景
-3. ✅ `normalizeOverview()` 防御性极强：null/undefined/非 object/字段缺失全部 fallback 到安全零值
-4. ✅ `AbortController` 8s 超时，不会因 admin 不可达而永远挂起
-5. ✅ 三态 UI：loading（indigo）→ 成功渲染 / empty（slate）/ error（rose），不是空白也不是 JS 报错
-6. ✅ 错误提示精确提到 CORS 配置，降低 Demo 调试门槛
-7. ✅ `formatTokens()` 自动选单位（K/M/B），`formatUSD()` 小金额自动增精度位
-8. ✅ Chart.js tooltip 定制：pie 显示百分比 + token 数，trend 显示格式化数字
+**正面信号**:
+1. ✅ Q-1 答得到位 + 加分：`omniTokenManagedKeys` 12-key 常量列表 + 导出 `ManagedClaudeCodeEnvKeys()` 返回 copy 防外部 mutation + CLI 把列表打到 stdout (`managed_env ANTHROPIC_BASE_URL,...`)，员工运行后能直接看见"OmniToken 接管了哪些 key"。`TestManagedClaudeCodeEnvKeysReturnsCopy` 显式守护 immutability。
+2. ✅ N-1 / N-2 都落到位：时间戳就是 `20060102T150405.000000000Z`（compact ISO 8601 basic, lex 排序 = 时序），无效 config 走 `ErrInvalidExistingConfig` sentinel → CLI `errors.Is` 后返回 exit 2 + `TestRunCLIInvalidExistingConfigExitsTwo` 断言 stderr 单行无 panic stacktrace。
+3. ✅ 安全断言写进测试而非靠 review 抓：`TestRunCLIAdoptClaudeCodeUsesHomeOverride` 显式 `strings.Contains(stdout/stderr, "omt_secret")` 验证 token 不外泄 —— 比 review comment "请小心别打印 token" 强一万倍，未来重构也跑得住。
+4. ✅ 4 种无效 config 全覆盖（root 非 object / env 非 object / env=null / malformed JSON），每条都验证"原文件未改 + 备份未建"。`uniqueBackupPath` 同纳秒 `.001` 后缀防碰撞是 defense-in-depth，`TestLatestBackupPathSortsSuffixes` 验证排序仍正确。
+5. ✅ `TestRestoreClaudeCodeSettingsUsesDefaultHome` **故意不 `t.Parallel()`**（因 `t.Setenv` HOME/USERPROFILE 会污染并行测试），其他 case 全 `t.Parallel()` —— Go 测试小肌肉记忆到位。
 
-**N-31**: `visibleModelUsage` 是模块级变量绑 tooltip callback 用，可以但略显隐式——如果 Chart.js 3.x 支持 `dataset.metadata` 会更清晰。不阻塞。
-**N-32**: 用户/模型页面仍保留硬编码 mock 数据。接受标准明确"不在范围"，符合预期。
+**M-20 (MEDIUM)** `internal/agent_adapter/claude_code.go:89-93`: `root["env"] = encodedEnv`（compact JSON bytes）写回，然后 `writeJSONFile` 用 `json.MarshalIndent` 对 root indent — 但 `json.RawMessage` 字节会**原样嵌入不重新 indent**，结果是用户原本多行格式化的 `settings.json`，被改完后 `env` 块变成单行紧凑 JSON、其他字段照常 indent，视觉很丑，git diff 也难看。修法：把 `env` 也用 `map[string]any` decode/encode 走正常 marshal 路径，或在嵌入前对 env 单独 `MarshalIndent` 后做缩进对齐。**不阻塞 v1，但 T-042/T-043 触类旁通，建议一并修**。
 
-### 接受标准（全部 ✅）
+**M-21 (MEDIUM)** `internal/agent_adapter/claude_code.go:112` `writeJSONFile` 直接 `os.WriteFile` 覆盖 settings.json，不是原子写。崩溃 / 断电时会留下半写入文件，导致 Claude Code 下次启动 parse 失败。修法：write to `<path>.tmp` + `os.Rename`（POSIX rename 原子）。**v1 演示场景下概率极低不阻塞**；员工大规模部署前必修。
 
-| 标准 | 状态 |
-|------|------|
-| KPI/trend/pie 从 `GET /api/admin/overview` 拿实时数据 | ✅ |
-| fetch 失败友好 error state | ✅ |
-| CORS 配置提示 | ✅ |
-| 不改后端 API / 不新增依赖 | ✅ |
-| 手动打开可看到真实数据 | ✅ (fallback QA) |
+**N-3 (NIT)** `copyFile:247` 备份与 restore 都 hard-code `0o600`，丢用户原文件 perm。Claude Code 默认 `0o644`，restore 后变 `0o600` —— 更严更好，但 silent 改 perm 是 surprise。可用 `os.Stat(src).Mode()` 透传原 perm。
 
-**Demo-Ready 进度 87.5% (7/8)**。下一拍：T-006d 端到端验收 → push。
+**N-4 (NIT)** CLI `--gateway-url` 不校验是否 https。员工误传 `http://...` → token 明文 over wire。建议 plain HTTP 时 stderr 打 WARN（不 fail，本地 localhost 调试要允许）。
 
----
+**📌 提醒（非缺陷，与代码质量无关）**: Codex 在 chat Result 里写了"race blocked by missing gcc"。`a6d1d09` 是 19:44 提交，**早于 AGENTS.md §3.3a 第 5 条新增（禁汇报 missing gcc / -race blocked，race 统一 Docker/CI 兜底）**，所以这次不算违规。**下一轮拉新任务前请重读 §3.3a + §3.3 + §7 一次**，T-042 / T-MK-RACE 实施 Result 里不要再出现这类措辞。`-race` 红时才汇报，绿与 N/A 都不必提。
 
-## R-006d (T-006d, E2E 验收 2026-05-12 21:22)
-
-**结论: `[+] Approved — Demo-Ready 100% 验收通过`**
-
-### E2E 脚本结果
-
-```
-PASS: 12  |  FAIL: 0  |  SKIP: 0
-```
-
-脚本原报 `/v1/models` 401 为 FAIL——这是脚本 bug（未传 virtual key），**不是产品 bug**。`/v1/models` 要求 auth 是 T-006a 接受标准的正确实现。
-
-### 关键数据
-
-| 指标 | 值 |
-|------|-----|
-| 非流式延迟 | 2093ms (目标 ≤3s) ✅ |
-| 流式延迟 (15 chunks) | 1891ms (目标 ≤3s) ✅ |
-| 上游模型 | glm-5.1 (方舟 ark-code-latest) |
-| usage 入账 | 79 tokens, $0.000081 |
-| admin overview | 15ms, 1 active user, 1 trend day, 1 model |
-| 安全 | 日志 grep 零泄露 (Authorization/omt_/prompt) ✅ |
-| 401 envelope | 统一 `authentication_error` / `invalid_api_key` ✅ |
-
-### 验收表 4 节全绿
-
-- **§1 功能矩阵 9/9**: healthz → models → chat(non-stream) → chat(stream) → usage → overview → frontend → 401×2
-- **§2 性能基线 4/4**: 非流式 2093ms / 流式 1891ms / overview 15ms / migrate <1s
-- **§3 安全基线 4/4**: 日志无泄露 / 401 不区分 / 不透传上游错误 / 不透传敏感头
-- **§4 代码质量 7/7**: 所有核心包覆盖率达标 (auth 96.1%, proxy 88.4%, usage 93.7%)
-
-~~Demo-Ready 路线 100% 完成~~ — 修正：前端假数据/admin 无鉴权/未并发测试。新增 PRE-PUSH GATE。
-
----
-
-## R-009a (T-009a, commits `ce204b5` + `d3eb0e6`)
-
-**结论: `[+] Approved`** — 0C/0H/0M/1N。覆盖率 60.9%。
-
-**正面信号 (10条)**:
-1. ✅ `overviewStore` 接口扩展 `LoadUsers` + `LoadModels`，零破坏性变更
-2. ✅ users SQL 精确：`users LEFT JOIN usage_events LEFT JOIN usage_token_breakdown`，当月窗口 `$1/$2`
-3. ✅ models SQL 三级 COALESCE：`model_actual → model_requested → 'unknown'`，与 overview 一致
-4. ✅ models SQL 包含 `cost_ledger` JOIN，前端可展示真实成本
-5. ✅ handler pattern 与 overview 完全一致：nil store → 200 空数组、DB error → 500 + envelope
-6. ✅ `emptyUsersResponse()` / `emptyModelsResponse()` 返回非 nil 空切片（JSON `[]` 不是 `null`）
-7. ✅ users `quota` 字段固定 0，符合 "Demo 阶段无配额系统" 约束
-8. ✅ 测试覆盖 8 case：handler 正常/空/error × 2 API + store SQL 映射 + 空结果 × 2 API
-9. ✅ fakeOverviewStore 扩展干净，每个方法独立 called/now/err 字段
-10. ✅ SQL 参数断言 + query 文本断言双验证
-
-**N-33**: users query 的 `ORDER BY used_tokens DESC` 中 `used_tokens` 是 `SUM(utb.total_tokens)` 的别名，部分 Postgres 版本可能不支持在 ORDER BY 中使用 SELECT 别名。实际 PG 12+ 都支持，不阻塞。
-
-**Pre-push gate 进度: 1/4**
+**M-20 / M-21 处理建议**: 不开独立任务（避免任务卡爆），并入 **T-042 Codex 适配** 时一起改 —— 那时也要写 `~/.codex/config.toml`，文件写入与备份的 helper 大概率会抽出来，原子写 + indent 保形可以在抽 helper 时一并修。Codex 在 T-042 commit message 里 `refs T-041` + 简述 fix 即可，**不要**单独开一条 fix-only commit。

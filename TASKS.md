@@ -1,48 +1,22 @@
 # TASKS.md — OmniToken Task Board
 
-## CHANGELOG (压缩版 — 详见 git log + docs/reviews/archive.md)
+## CHANGELOG (压缩版 — 详见 git log + docs/reviews/)
 
 | 时间 | 事件 |
 |------|------|
-| 05-11 | R-001 approve. T-001→T-004 拆分。方舟实测→golden语料 |
-| 05-11 14:30 | R-002 approve. M-6/7/8 不阻塞 T-003 |
-| 05-11 15:00 | 用户决策: L2优先+真方舟+完整RBAC. 授权方舟dev key |
-| 05-11 15:40 | R-002.1+R-003-prop approve. Q-1~Q-4 |
-| 05-11 16:10 | R-003-license: MPL-2.0 间接依赖 approve. 分级许可证政策 |
-| 05-11 17:30 | Demo-Ready 路线锁定. push 等 Demo-Ready 全过 |
-| 05-11 18:00 | R-003 approve (8+/1M/4N). T-006-nit+T-006a 拆出 |
-| 05-11 18:30 | R-006-nit+R-006a-prop approve |
-| 05-11 19:00 | R-006a approve (12+/0H/2M/3N). auth 96.1% |
-| 05-11 19:30 | R-007-prop approve (10+/1Q) |
-| 05-11 22:15 | R-007 approve (14+/0M/3N). proxy 88.4%. **首次真方舟e2e通过** |
-| 05-12 09:40 | R-008 approve (13+/2M/4N). usage 93.7%. 账本闭环 |
-| 05-12 11:45 | R-006b approve (10+/1M/2N). admin 51.9%. **进度75%** |
-| 05-12 12:55 | R-006c approve (8+/0M/2N). 前端接真API. **进度87.5%** |
-| 05-12 21:22 | **T-006d E2E 验收通过**. 真方舟 chat + usage + cost + overview 全链路绿 ✅ |
-| 05-18 22:14 | T-010 admin auth + ConstantTimeCompare 实施 (`760020f`) |
-| 05-18 22:29 | T-012 cmd/loadtest 实施 (`d7e78e8`, 73.6%) |
-| 05-18 23:xx | **R-010 / R-012 approve. Pre-push gate 4/4 ✅** 可 first push |
-| 05-18 23:xx | **设计理念锁定**: 性价比 / 权限额度 / 安全审计 三角；定位"先搭底座再叠应用"。Phase 2 重组为 2-A/2-B/2-C |
-| 05-18 23:56 | T-013 PROPOSAL by Codex (`f444ba2`) — JSONB 演进 + ActorResolver DI + expvar metric |
-| 05-19 | **R-013-prop approve** (10+ / 0C / 0H / 1M-Q / 2L-Q / 4N)。Codex 可开实施 commit |
-| 05-19 00:24 | T-013 实施 (`d5b379d`, audit 95.9%) — migration 000007 + internal/audit + cmd/admin 接线 |
-| 05-19 | **R-013 approve** (5+/0C/0H/0M/3N)。Phase 2-A 进度 1/2，T-014 可起 |
-| 05-19 00:38 | T-014 告警段 PROPOSAL by Codex (`e2a9d98`) |
-| 05-19 00:58 | T-014 audit 查询 API + 前端 Audit tab 实施 (`ff2b7a6`, cmd/admin 71.4%) |
-| 05-19 | **R-014-prop approve** (5+/2N) + **R-014a approve partial** (5+/3N)。告警段待实施 |
-| 05-19 10:04 | T-014 告警段实施 (`db425c7`, anomaly 82.1%) — Monitor + PostgresStore + admin 接线 |
-| 05-19 | **R-014b approve** (5+/0C/0H/0M/2N)。**Phase 2-A 完成 2/2 ✅**，T-005a 可起 |
-| 05-19 10:25 | T-005a PROPOSAL by Codex (`519086e`) — 硬编码 map / 单 action key / 不 cache / 低基数 reason |
-| 05-19 | **R-005a-prop approve** (5+/2N)。Codex 可开实施 |
-| 05-19 10:46 | T-005a 实施 (`89ef188`, rbac 89.9%) — Engine + 硬编码 policy + PostgresStore + fall-through 测试 |
-| 05-19 | **R-005a approve** (5+/0C/0H/0M/2N)。Phase 2-B 进度 1/3，T-015 / T-005b 可起 |
-| 05-19 | **路线重排**: 上线优先 + 一次联调。Phase 2-B = T-015 + T-005b + T-INT 三卡；Phase 2-C 推 vNext。v1 ETA ~1w |
-| 05-19 11:05 | T-015 PROPOSAL by Codex (`7462418`) — USD cents / DB SUM / 402 envelope / inline 编辑 + role provider |
-| 05-19 | **R-015-prop approve** (5+/3N)。Codex 可开实施 |
-| 05-19 | T-015 实施 commit `0041c11` (`feat: enforce monthly user budget`). tmp-go-cache 已清 |
-| 05-19 | **R-015 approve** (5+/0C/0H/0M/3N)。联调手册落 `docs/release/v1-t015-quota-walkthrough.md`。**Phase 2-B 进度: 2/5** |
+| 05-11 ~ 05-12 | Phase 0/1 全部 ✅: T-001~T-008 + T-006a~T-006d (Demo-Ready E2E 通过)。详见 `docs/reviews/archive.md` + `archive-2026-05-12.md` |
+| 05-18 | T-010 / T-012 实施 + R-010/R-012 approve. **Pre-push gate 4/4 ✅** |
+| 05-18 | **设计理念锁定**: 性价比 / 权限额度 / 安全审计 三角；定位"先搭底座再叠应用"。Phase 2 重组为 2-A/2-B/2-C |
+| 05-19 | **Phase 2-A 完成**: T-013 (audit 95.9%) + T-014 (anomaly 82.1%) approve |
+| 05-19 | **路线重排**: 上线优先 + 一次联调。Phase 2-C 推 vNext，v1 ETA ~1w |
 | 05-19 | **AGENTS.md §3.3 新增**: 测试环境强制 docker-compose；禁本地装 PG/Redis/NATS |
-| 05-19 | **Ark coding plan 洞察**: 单 key 5 模型（doubao/deepseek/glm/kimi/minimax）。T-016 多 key 加密推迟至第二家 provider；**T-017a 虚拟模型解析**抽出加进 v1 |
+| 05-19 | **Ark coding plan 洞察**: 单 key 5 模型（doubao/deepseek/glm/kimi/minimax）。T-016 多 key 加密推迟；T-017a 虚拟模型解析抽出加进 v1 |
+| 05-19 | **Phase 2-B 完成 5/5 ✅**: T-005a (rbac 89.9%) + T-015 (`0041c11`) + T-017a (`0021e37`) + T-005b (`62504b9` + 修复 `670dc60`) + **T-INT (`4db5057`) v1 release candidate 就绪** |
+| 05-19 | **REVIEW 归档**: R-008~R-005b-fix 全部沉到 `docs/reviews/archive-2026-05-19.md`；REVIEW.md 仅留 R-INT |
+| 05-19 18:02 | T-041 PROPOSAL `3187fb2` — 独立 CLI / 显式 token / 全备份保留 + Windows-safe 时间戳 |
+| 05-19 | **R-041-prop approve** (5+/1Q/2N)。Codex 可开实施 |
+| 05-19 | **AGENTS.md §3.3a/§3.3/§7 收紧**: `-race` 统一 Docker/CI 跑；Windows 缺 gcc 是预期，禁汇报。配套 T-MK-RACE |
+| 05-19 | **R-041 approve** (5+/2M/2N + gcc 规则提醒)。`a6d1d09` agent_adapter 81.9%；M-20/M-21 (env 单行 + 非原子写) 不阻塞 v1，并入 T-042 修 |
 
 ---
 
@@ -141,141 +115,114 @@ E2E 验收通过，但**前端假数据 + admin 无鉴权 + 未验证并发**。
 
 ---
 
-<!-- T-013 / T-014 / T-005a 已 approved 并迁出至速查表。Phase 2-A 完成 2/2 ✅；Phase 2-B 进度 1/5，下一棒 T-015 (review) / T-005b / T-017a（三条并行）→ T-INT 联调。 -->
+<!-- Phase 2-B 5/5 ✅。T-013~T-INT 任务体全部 approved 后迁出；详见速查表 + git log + R-INT。 -->
 
 ---
 
-## T-015 用户月度 budget + quota 编辑（全栈） [phase:2-B] [owner:codex] [status:review]
+## 🎯 Phase 3-A Agent 适配 Epic (2026-05-19 user-locked)
 
-**Started**: 2026-05-19 11:05 +08:00 by Codex.
+> **路径决策**: 先写具体（Claude Code）后抽抽象（T-040 后置），符合 AGENTS.md §3.1 "三处重复再抽象"。tingly-box 参考文档实现节奏一致。**跳过 Phase 2-C vNext** 直接开 Phase 3-A：Agent 接入是产品演示价值更高的下一步，下游单 provider Ark 仍可工作，不强依赖 fallback。
 
-**目标**: 给 v1 加上"管理员能给员工划线"的能力——usage 入账前 budget 校验、超额硬拦截 + 402、admin Users 页可看可改 quota。这是底座三角"权限/额度"一角的兑现。
+| # | 任务 | 一句话 | 估时 | 依赖 |
+|---|---|---|---|---|
+| 1 | **T-041 Claude Code 适配（配置写入）** | `omnitoken adopt claude-code` 改 `~/.claude/settings.json` 指向 OmniToken；带备份 | 2d | — |
+| 2 | T-042 Codex 适配 | `~/.codex/config.toml` + `auth.json` 无损 toml_edit | 2d | T-041 |
+| 3 | T-043 OpenCode 适配 | `~/.config/opencode/opencode.json` 加 XDG 路径解析 | 1d | T-042 |
+| 4 | **T-040 抽象层提取（后置）** | 三处重复后抽 `Registry` + `AgentConfig` interface | 1d | T-043 |
+| 5 | T-045 Anthropic → OpenAI 协议转换 | gateway 多挂 `/v1/messages`；让 Claude Code 真正能跑 | 4d | T-041 |
+| 6 | T-044 路由规则联动 | apply 配置 = 同步生成 OmniToken 内部 `virtual_models` + admin 端可视化 | 2d | T-040 |
+| 7 | T-046 一键 onboard CLI 收口 | `omnitoken adopt <agent>` 统一入口 + 退出 / restore | 1d | T-044 |
 
-**接受标准**:
-- [ ] 用户表新增月度 budget 字段（单位由 PROPOSAL §1 定：USD 美分整型 vs token 数）；migration 编号 `000008`。
-- [ ] gateway 路径在 usage 入账逻辑前查当前用户当月已用量 + budget；超额返回 402 envelope（与 401 同 shape，code 由 PROPOSAL §2 定）。
-- [ ] admin API: `GET /api/admin/users` 返回字段增加 `budget` + `used`；新增 `PATCH /api/admin/users/:id/quota` 写动作，走 `auditMiddleware` + 落 `update_quota` action。
-- [ ] 前端 Users tab：每行展示 used / budget 进度条；admin 角色看到编辑按钮（小弹窗 / inline input），保存后 fetch 刷新；viewer 不显示编辑。
-- [ ] 测试 ≥ 6 case：budget 充足放行 / budget 不足 402 / budget 字段 nil 视为无限制 / quota update SQL 断言 / 前端 admin/viewer 渲染差异 / 超额 audit 落库（action=`update_quota`）。
-- [ ] gateway / admin 覆盖率不下降；新增逻辑覆盖率 ≥ 80%。
+**Phase 3-A ETA**: **2–2.5 周**（顺序）；T-045 是真正 demoable 时刻。
 
-**Codex propose 前置**: **是**。PROPOSAL 4 点：
+**实施前必读**: `docs/references/agent-adapter/agent-adapter-pattern.md` §3.3（Claude Code 完整源码模板）+ `agent-adapter-projects-reference.md` §4.1（token_proxy 无损 JSON 编辑模式）。
 
-1. **budget 字段单位**: USD 美分（`bigint`，与 cost_ledger 对齐）vs token 数（`bigint`）。给推荐 + 与现有 cost_ledger / usage_token_breakdown 的对齐成本。
-2. **检查时机 / 一致性**: usage middleware 落库前查 vs gateway 入口预查 vs Redis Lua 原子扣减（规划 §三.2 建议 Redis，但 v1 是否引入 Redis？）。给推荐——v1 倾向无 Redis（用 DB 当月 SUM，接受小并发竞态）。
-3. **402 envelope 形状**: 与 401 一致 `{error: {message, type, code}}`，`type=quota_exceeded`，code 命名（`monthly_budget_exhausted`?）。
-4. **前端编辑形态**: inline cell edit vs 弹窗。考虑 viewer 角色不显示按钮的实现：前端读 `/api/admin/me` 角色 vs 后端按角色返回不同字段集。给推荐。
-
-**不在范围**:
-- per-key RPM/TPM 限流（T-019 / vNext）
-- 周/日级 budget、组织级 budget、跨月结转（vNext）
-- budget 超额后的"宽限期 / 软告警"（vNext）
-- 多币种（Phase 3）
-
-**依赖**: T-005a approved ✅（用 RBAC vocabulary `update_quota`，前端按角色显隐）。可与 T-005b 并行（前端编辑按钮的角色判断暂时通过 bootstrap token 假定 admin；T-005b 完成后会自然替换）。
-
-**参考**: `internal/usage` (commit `4761671`) usage 入账 + cost_ledger 模式；`web/src/views/users.js` 是 Users tab 改动起点。
-
-**Result**: `0041c11` (feat: enforce monthly user budget)。清理了本地暂存区和缓存，测试了 quota update 和 budget 限流机制。`grep "monthly_budget_usd"` 结果为 no matches，确认为孤儿遗留字段。前端暂留手动指定角色的口子，在 T-005b 中完整接入。
-
----
-
-## T-005b admin auth 升级 + 登录页 + RBAC 落地（全栈） [phase:2-B] [owner:codex] [status:todo]
-
-**目标**: 把 admin 从"全局 bootstrap token"换成"用户登录态"。后端: 用户密码 + session/JWT + RBAC engine 落 admin 写路由 + audit `actor_id` 切到真实 user UUID。前端: 登录页 / 退出 / 401 拦截重定向 / Authorization header 自动注入。
-
-**接受标准**:
-- [ ] users 表新增 `password_hash`（bcrypt cost ≥ 10）；migration 编号 `000009`；seed 至少 1 个 admin + 1 个 viewer 账号供联调。
-- [ ] `POST /api/admin/login` 接收 email + password；成功返回 session token（PROPOSAL §1 决方案：cookie session vs JWT bearer）。
-- [ ] `POST /api/admin/logout` 失效当前 session。
-- [ ] `adminAuthMiddleware` 改为解析 session/JWT → 解析出 `Actor{OrgID, UserID}` → 注入 ctx；`BootstrapActorResolver` 替换为真实 resolver。
-- [ ] admin 所有写路由（当前 `POST /api/admin/dev/virtual-keys` + T-015 加的 `PATCH /api/admin/users/:id/quota`）调 `rbac.Engine.Authorize`；拒绝时返回 403 envelope + 落 audit（`status_code=403, after={reason}`）。
-- [ ] 审计 actor 来源切换: `actor_id = user UUID 字符串`，`actor_type = "user"`；audit middleware 不动，只替换 resolver。
-- [ ] 前端: 新增 `/login` 路由；token 存 localStorage（如 JWT 方案）或浏览器自带 cookie（如 session 方案）；所有 fetch 自动带 token；401/403 跳登录页或显示错误。
-- [ ] 旧 bootstrap token 路径保留为可选 dev fallback（env 开关 `OMNITOKEN_ALLOW_BOOTSTRAP_TOKEN=1`），默认关；T-INT 联调时只用真实账号。
-- [ ] 测试 ≥ 6 case：登录成功 / 密码错 / disabled 用户拒登 / RBAC deny admin 写 → 403 + audit / 真实 actor_id 落 audit / 前端 401 自动跳登录。
-
-**Codex propose 前置**: **是**。PROPOSAL 5 点：
-
-1. **session vs JWT**: 单 admin 实例 + 简单部署 → 倾向 server-side session（HTTP-only cookie，SameSite=Lax，store in DB or in-memory）；JWT 加复杂度但 stateless。给推荐 + 部署假设。
-2. **密码存储**: bcrypt（`golang.org/x/crypto/bcrypt`）确认；cost 选 10 还是 12（v1 用户量小，可选 12）。
-3. **session 存哪**: in-memory map (重启失效，需重新登录) vs 新 `admin_sessions` 表。给推荐（v1 倾向 in-memory + 短 TTL）。
-4. **登录端点是否自审计**: 登录成功 / 失败是否落 audit_logs？审计 actor 在登录前还无身份——可用 `actor_type=anonymous` + IP 标识。给推荐。
-5. **前端 token 管理形态**: localStorage（JWT）vs cookie（session）。是否需要 refresh 机制 / 长 TTL（v1 倾向 24h session，过期重新登录）。
-
-**不在范围**:
-- 找回密码 / 邮箱验证 / 2FA / 第三方 IdP（vNext）
-- 用户自助注册（v1 全部 seed + admin 创建）
-- 跨域 admin（v1 同源部署）
-- session revoke 主动失效列表（v1 靠 TTL 自然过期）
-
-**依赖**: T-005a approved ✅（RBAC engine 接进路由）+ T-013 approved ✅（audit middleware 已就位）。可与 T-015 并行；前端登录页交付后 T-015 的"按角色显隐编辑按钮"自然生效。
-
-**参考**: 现有 `adminAuthMiddleware` 在 `cmd/admin/main.go`（commit `760020f`）；`internal/audit.ActorResolver` 替换点（commit `d5b379d`）；前端 fetch 封装在 `web/src/api.js`。
-
----
-
-## T-017a 虚拟模型解析（单 key 5 模型） [phase:2-B] [owner:codex] [status:todo]
-
-**目标**: 让 gateway 接受虚拟模型名（如 `chat-fast` / `chat-balanced`），后台解析为真实 Ark 模型名后转发上游，并把 `model_requested` / `model_actual` 双字段都落 `usage_events`。**不做** retry/fallback（留 T-017b vNext）。此任务兑现底座三角"性价比"一角的最简演示。
-
-**接受标准**:
-- [ ] 新 migration `000009_virtual_models.up/down.sql`：`virtual_models(name PK text, real_model text NOT NULL, status text DEFAULT 'active', description text, created_at, updated_at)`；CHECK 非空非空串。
-- [ ] seed 至少 5 条映射到 `deploy/postgres/002_seed.sql`：`chat-fast → kimi-k2.6` / `chat-balanced → glm-5.1` / `chat-quality → deepseek-v3.2` / `chat-code → doubao-seed-code` / `chat-experimental → minimax-m2.7`（具体真实 model 名以方舟 API 文档为准；PROPOSAL 锁定时一并核实）。
-- [ ] 新增 `internal/router` 包，提供 `Resolver.Resolve(ctx, requested) (Resolution, error)`；`Resolution` 含 `RealModel string`、`IsVirtual bool`。请求模型不在 `virtual_models` 表中 → 透传不报错（视为真实模型直发，向后兼容）；表中标记 `status != 'active'` → 400 `virtual_model_disabled`。
-- [ ] gateway middleware 在 `enforceMonthlyBudget` 之后、reverse proxy 之前插入解析步骤；解析成功后改写请求 body 的 `model` 字段并把虚拟原名注入 ctx 供 usage middleware 读。
-- [ ] `usage_events.model_requested` 落虚拟名（用户传入的）；`model_actual` 落真实 Ark 模型名。两字段都已存在（T-008 commit `4761671`），本任务只确保填对。
-- [ ] admin `GET /api/admin/virtual-models` 走 `adminAuthMiddleware`，返回 `{virtual_models: [{name, real_model, status, description}, ...]}`；空数组降级与 overview 一致。
-- [ ] 前端在左导航第 5 项加 "Virtual Models" 视图（或在 Models tab 顶部插一块），只读表格展示映射。loading/empty/error 三态齐备。
-- [ ] 测试 ≥ 6 case：unit (resolver 命中/未命中/disabled/db error) + admin handler (success/db nil) + gateway 集成 (body model 重写正确、ctx 注入虚拟原名) + 真实模型透传不破坏现有 e2e。
-- [ ] `internal/router` 覆盖率 ≥ 80%；`cmd/gateway` 不下降。
-
-**Codex propose 前置**: **是**。PROPOSAL 答清 3 点:
-
-1. **Schema 弹性**: v1 用单列 `real_model text` vs 用 `real_models text[]` 数组为 T-017b retry 提前留位。给推荐 + 数据迁移成本估计。建议：先单列；T-017b 时加一列 `fallback_models text[]` 不破坏。
-2. **解析失败语义**: 未在表中的模型名透传上游 vs 400 `unknown_virtual_model`。推荐**透传**（向后兼容、`/v1/chat/completions` 现有调用方继续工作）；`disabled` 状态才报错。
-3. **请求 body 重写位置**: 在 gateway 自己重写 vs 在 `internal/proxy` 的 reverse-proxy `Director` 重写。推荐前者——保留 `internal/proxy` 的协议无感性，重写在 router 层完成。
-
-**不在范围**:
-- retry / fallback / 主模型失败切备用 → **T-017b vNext**（含 SSE 中途切换状态机）
-- 加权路由 / cost-aware / latency-based 策略 → vNext
-- admin 可改虚拟模型映射的 CRUD → vNext（v1 用 seed 写死，配合 migration 增减）
-- 跨 provider 路由（OpenAI / Anthropic）→ T-016 触发后再启
-- 客户端通过 `/v1/models` 看到虚拟模型清单 → 本任务不动 `/v1/models`，仅在 admin 端暴露
-
-**依赖**: T-008 ✅（`usage_events.model_actual` 字段已就位）+ T-007 ✅（chat proxy）。**与 T-015 / T-005b 完全独立**，三条线可并行。
-
-**参考**:
-- `internal/proxy`（commit `34a5b6a`）— gateway middleware 链插入位置
-- `internal/usage` middleware（commit `4761671`）— 怎么从 ctx 拿虚拟原名落 `model_requested`
-- `规划.md` §零A "性价比" 一角 + `docs/proposals/2026-05-13-smart-key-pool-routing.md`（智能路由长线方向，T-017a 是其最简前哨）
-
----
-
-## T-INT 前后端联调 + v1 release prep [phase:2-B 收官] [owner:codex] [status:todo]
-
-**目标**: 把 T-013 / T-014 / T-005a / T-015 / T-005b / **T-017a** 所有改动拼起来，做一次真账号 + 真 DB + 真方舟 的端到端走查；同时把部署相关的零碎落地（env、docker-compose、README）。重点演示：admin 登录 → 改员工 budget → 员工用 `chat-fast` 虚拟模型发请求 → 后台路由到 `kimi-k2.6` → audit 全程留痕。
-
-**接受标准**:
-- [ ] 联调脚本：用 admin 账号登录 → Overview 看到真实数据 → Users 看 budget / 改 quota → Models 看 → Audit 筛过滤 → 退出。再用 viewer 账号登录，确认编辑按钮不可见、PATCH 直接 403、audit 看得见但不能改。脚本可用 Playwright 也可 `node --test fetch mock`，但**至少一次手动走查截图存档**。
-- [ ] 真方舟链路：用 admin 账号建一个 virtual key → 用该 key 发非流式 + 流式 chat → admin Users 看到 used 增加 → 把该 user budget 改成已用量之下 → 再发 chat 收到 402 → 看 audit 完整记录 `update_quota` + `create_virtual_key` 两条。
-- [ ] 部署落地：`deploy/docker-compose.yml` 起 pg + admin + gateway 一次成功；`.env.example` 补齐 v1 新增 env（admin secret / session TTL / budget 默认值 / anomaly 阈值）；`README.md` 加"v1 部署 30 分钟走完"章节。
-- [ ] 修联调中发现的 bug；如果 bug 超过一个 commit 能改的范围，开 sub-task 而非塞进 T-INT。
-- [ ] 联调报告：单独 markdown `docs/release/v1-integration-2026-05-XX.md`，含验证清单 + 截图 + 已知问题（如 race test 在本机缺 gcc 跑不了 — 已是历史问题）。
-- [ ] CI 不阻塞：`go vet`、`go test -count=1 ./...`、`make lint`（如果环境支持）全绿；race test 在能跑的环境跑一次。
-
-**Codex propose 前置**: **否**——联调按上述清单走，发现新问题再 propose。
-
-**不在范围**:
-- 性能压测（vNext T-100）
-- 多实例 / Kubernetes 部署（v1 单实例 docker-compose 够用）
-- 监控告警接 webhook（v1 留 expvar + WARN log）
-
-**依赖**: T-015 + T-005b approved。
-
-**参考**: `cmd/loadtest`（commit `d7e78e8`）有 e2e 调用 pattern；`scripts/e2e_verify.py`（T-006d 用过）可作为真方舟链路脚本起点。
+### 提案（Phase 2 候选，不阻塞当前 gate）
 
 - 智能 Key 池与配额感知模型路由（2026-05-13）→ [`docs/proposals/2026-05-13-smart-key-pool-routing.md`](docs/proposals/2026-05-13-smart-key-pool-routing.md)
 - 智能路由 + 性能指标 + Elastic 远景（2026-05-14）→ [`docs/proposals/2026-05-14-smart-routing-elastic-cache.md`](docs/proposals/2026-05-14-smart-routing-elastic-cache.md)
 
+---
 
+## T-041 Claude Code 适配（配置写入） [phase:3-A] [owner:codex] [status:done]
+
+Started: 2026-05-19 18:02 +08:00
+Proposal: `docs/proposals/2026-05-19-t041-claude-code-adapter.md`
+
+**目标**: 让企业员工跑 `omnitoken adopt claude-code` 一次，Claude Code 之后所有调用都走 OmniToken。本任务只做**配置文件写入 + CLI 入口 + 备份/恢复**，**不做协议转换**（留 T-045）；run 后用户的 Claude Code 此时还跑不通端到端（因 OmniToken 尚不接 Anthropic 格式），但配置层完整，给 T-045 留好接口。
+
+**接受标准**:
+- [ ] 新增包 `internal/agent_adapter`（暂不抽 Registry，三个 Agent 都写完再抽——见 T-040）。导出 `WriteClaudeCodeSettings(opts) (Result, error)` + `RestoreClaudeCodeSettings() (Result, error)`。
+- [ ] `~/.claude/settings.json` 用**无损 JSON merge**（读取 → patch `env` 字段 → 写回），保留用户既有非 `env` 字段；写之前备份到 `~/.omnitoken/backups/claude-code/settings.json.<RFC3339>.bak`。
+- [ ] env 字段集对齐 tingly-box `agent-adapter-pattern.md` §3.3：`ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_MODEL` / `ANTHROPIC_DEFAULT_*_MODEL` / `CLAUDE_CODE_SUBAGENT_MODEL`；默认 model 填 `chat-balanced`（T-017a 已 seed → `glm-5.1`）。
+- [ ] 新增独立 CLI `cmd/omnitoken-adopt`。子命令 `adopt claude-code --gateway-url <URL> --token <virtual_key>` / `restore claude-code`。CLI 用 `flag` 标准库，**不引第三方 CLI 框架**（cobra / urfave 都 propose 拒）。
+- [ ] 跨平台路径: `$HOME` / Windows `%USERPROFILE%` / 显式 `--home` 覆盖。
+- [ ] 测试 ≥ 6 case：首次写 / 合并保留用户字段 / 重复幂等 / 备份命名时间戳唯一 / restore 最新备份 / `--home` 覆盖生效。
+- [ ] `internal/agent_adapter` 覆盖率 ≥ 80%。
+
+**Codex propose 前置**: **是**。PROPOSAL 答清 3 点：
+1. **CLI 二进制布局**: 独立 `cmd/omnitoken-adopt` vs 挂在 `cmd/admin-cli`（若有）。推荐独立——员工机器只装这一个工具。
+2. **`virtual_key` 来源**: CLI `--token` 显式传 vs 自动从 admin URL 拉。v1 推荐显式，admin 创建 key 后给员工。
+3. **备份保留策略**: 全部保留 vs 只留最新 N 个。v1 推荐全部保留（磁盘成本低，可回溯）。
+
+**不在范围**:
+- 协议转换 Anthropic ↔ OpenAI → **T-045**
+- Codex / OpenCode 写入 → T-042 / T-043
+- 实际端到端调通 → T-045 闭环
+- 抽象层 `Registry` / `AgentConfig` → **T-040 后置**
+
+**依赖**: 无。T-005b 已可创 virtual_key，CLI 接 `--token` 即可。
+
+**参考**: `docs/references/agent-adapter/agent-adapter-pattern.md` §3.3（Apply 完整源码模板）+ `agent-adapter-projects-reference.md` §4.1（token_proxy 无损 JSON 模式）。
+
+**Result**: `a6d1d09` — agent_adapter 81.9%; Q-1 keys: ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_MODEL, ANTHROPIC_DEFAULT_HAIKU_MODEL, ANTHROPIC_DEFAULT_OPUS_MODEL, ANTHROPIC_DEFAULT_SONNET_MODEL, CLAUDE_CODE_SUBAGENT_MODEL, API_TIMEOUT_MS, DISABLE_TELEMETRY, DISABLE_ERROR_REPORTING, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, CLAUDE_CODE_MAX_OUTPUT_TOKENS.
+N-1 compact UTC `20060102T150405.000000000Z`; N-2 invalid existing config exits 2 with one-line stderr; all green except race blocked by missing gcc.
+
+---
+
+## T-CONC-CHECK v1 并发摸底（不修代码）[phase:2-B 后置] [owner:codex] [status:todo]
+
+**目标**: Phase 3-A 启动前用半天测 v1 真实并发上限，**只测量不修**。发现红线再开 T-019 / DB 调优。
+
+**接受标准**:
+- [ ] 用现有 `cmd/loadtest` 跑 **50 并发 × 50 请求 = 2500 次**（成本约 12 元 RMB，先 confirm；用 `chat-fast → kimi-k2.6` 走便宜模型）。记录 P50/P95/P99/错误率/usage 总 tokens。
+- [ ] 用 vegeta 跑 **1000 RPS 非流式 60s**，**打 `/healthz` 或 mock-upstream 而非真方舟**——验 gateway 自身瓶颈，不烧 token。记 P95 / error rate / DB 连接曲线。
+- [ ] 跑测试同时 admin 端 `SELECT count(*) FROM pg_stat_activity WHERE application_name LIKE 'omnitoken%'` 每秒采样，记录峰值连接数。
+- [ ] 输出 `docs/release/v1-concurrency-baseline-2026-05-XX.md`，含三组数据 + 一段结论"v1 验证支持 ~N 并发，DB 连接峰值 M，主要瓶颈是 X"。
+- [ ] **不修任何代码**。发现 panic / data race / DB 耗尽 → 单独在报告里列 "v2 candidate fixes" 清单交 Claude。
+
+**Codex propose 前置**: **否**（按上述清单跑即可）。
+
+**不在范围**: 修代码 / 调 DB 连接池 / 加 Redis。结果出来后单独开 T-019。
+
+**依赖**: T-INT ✅（`cmd/loadtest` + admin 鉴权已就位）。
+
+**参考**: `规划.md` §十.L3（1000 RPS / P95<80ms 验收门）+ `cmd/loadtest/README.md`。
+
+---
+
+## T-MK-RACE Makefile: race 验证移入 Docker [phase:infra] [owner:codex] [status:todo]
+
+**目标**: 让 Windows 主机不必装 gcc 也能完成提交前的 race 验证；同时把"本地 `make test` 跑 `-race`"这条隐性要求从默认路径移除（已与 AGENTS.md §3.3a/§3.3/§7 对齐）。
+
+**涉及**:
+- `Makefile` (现 `test` target 含 `-race`)
+- 可能新增 `make test-race` target
+
+**接受标准**:
+- [ ] `make test`（默认）在 Windows 主机不带 `-race` 跑通，不依赖 gcc。
+- [ ] 新增 `make test-race`：在 `golang:1.23`（或与 CI 一致的版本）容器里跑 `go test -race ./...`，挂载工作树 + Go module cache，**不要**把缓存目录写进工作树（参考 AGENTS.md §3.3 末条）。
+- [ ] `make help` 文案同步更新。
+- [ ] CI（`.github/workflows/ci.yml:21`）保持 `go test -race ./...`，**不动**——CI 是 Ubuntu，本来就能跑 race。
+- [ ] 在新 target 的实现里，Docker 镜像版本/缓存挂载路径要在 commit message 写清楚（便于以后升 Go 版本时 grep）。
+
+**不在范围**:
+- 改 CI workflow（已经覆盖 race）。
+- 在 Windows 装 MinGW/TDM-GCC（明确不做）。
+- 改 Dockerfile.* 生产镜像（与测试无关）。
+
+**Codex propose 前置**: **否**。直接做即可，方案空间很小（一条 docker run 命令）。
+
+**依赖**: 无。
+
+**参考**: AGENTS.md §3.3a 第 5 条、§3.3 第 3 条、§7 第 1 条；`docs/reviews/archive.md:308`（既往已知 Windows race 缺 gcc 的归档说明）。

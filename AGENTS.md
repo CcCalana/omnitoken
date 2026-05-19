@@ -83,6 +83,32 @@
 - ❌ 不使用 `git push --force` / `git rebase -i` / `git commit --amend`（已推送的）。如分支需要整理，先在 `TASKS.md` 备注。
 - ❌ 不跳过 pre-commit / CI（禁用 `--no-verify`）。
 
+### 3.3a 输出纪律（2026-05-19 user-locked，控制 token 成本）
+
+Codex 给 Claude / 用户的所有文字交付都受这条约束：
+
+- **聊天回复 ≤ 5 行**。不要逐项复述"实施完成 / 测试通过 / 覆盖率 X%" — 这些放 commit message。
+- **TASKS.md Result 段 ≤ 2 行**：`Result: <commit hash> — 一句话覆盖率/偏差 + R-prop N-x 答复（如有）`。完整自测命令清单**不要进** Result，commit message 里写。
+- **不要在 chat 里重复 commit message 内容**。Claude 会读 `git show <hash>`，不需要你转述。
+- **PROPOSAL 文件**放 `docs/proposals/2026-MM-DD-tNNN-*.md`，**不要** inline 进 TASKS.md。
+- **chat 里只报四件事**: ① commit hash ② 是否有未声明的偏差 ③ 测试是否绿（"all green" 或具体哪条没绿） ④ 需要 Claude 注意的 1 件事（如有）。
+- **已知 Windows 主机无 gcc — `-race` 本地跑不动是预期行为，不算偏差**。统一在 Docker / CI 验证（见 §3.3）。**不要**在 chat / Result / 偏差说明里再提"missing gcc"/"-race blocked"/"race 受限于 Windows 工具链"等措辞；race 只在 `make test-race`（Docker）或 CI 红时才需要汇报。
+
+反例（不要这样写）:
+> "我已经完成了 T-XXX，包括 A/B/C/D/E 五个改动，自测跑了 `go test -count=1 ./...` / `go vet ./...` / `go test -race ./...`，覆盖率 89.9% 满足 ≥85% 要求..."
+
+正例:
+> "T-XXX done: `89ef188`. rbac 89.9%. R-prop N-1 fall-through 测试已落. all green."
+
+### 3.3 测试环境（2026-05-19 user-locked）
+
+- ✅ **真 Postgres / Redis / NATS 测试一律用 `deploy/docker-compose.yml`**。`docker compose up -d postgres` 起完，跑 `make migrate-up`，所有集成测试连 `localhost:5432`。
+- ❌ **不要在用户机器上装本地 Postgres / Redis / NATS**。不要 brew install / apt install / 自建 systemd service / pg_ctl 启动本机服务。
+- ✅ **`-race` 一律在 Docker / CI 跑**。Windows 主机无 gcc 是已知约束，本地 `make test` 默认 **不带** `-race`；需要 race 验证时跑 `make test-race`（Docker 里的 `golang:1.23`）或推 CI。**不要**为了跑 race 在 Windows 装 MinGW/TDM-GCC。
+- ✅ 单元测试用 fake SQL driver（参考 `internal/usage` / `internal/audit` / `internal/quota` 现有模式），默认 `go test ./...` 不依赖任何外部服务。
+- ✅ 真 PG 集成测试走 `//go:build e2e` 构建 tag + 环境变量 `OMNITOKEN_TEST_DATABASE_URL`，默认不跑，明确启用时连 docker compose 起的容器。
+- ❌ 不要把本地 GOCACHE 输出到工作树（如 `tmp-go-cache/`）。如果需要离线缓存，设置 `GOCACHE` 到 `$HOME` 之下，不要污染仓库。
+
 ---
 
 ## 4. 测试义务
@@ -155,7 +181,7 @@ new internal/proxy package.
 
 ## 7. 自检清单（每次提交前）
 
-- [ ] `make lint` / `make test` 全绿，含 `-race`。
+- [ ] `make lint` / `make test` 全绿。`-race` 由 CI（Ubuntu）+ `make test-race`（Docker）兜底；Windows 主机跳过 `-race`，不算偏差、不必汇报。
 - [ ] 新增依赖在 `go.mod` 中只引入一次，已在 `TASKS.md` 备案。
 - [ ] 没有 leak 任何 Key/Token 到日志/错误信息/metric label。
 - [ ] DB 迁移可逆。
