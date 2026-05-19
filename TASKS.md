@@ -201,7 +201,7 @@ N-1 compact UTC `20060102T150405.000000000Z`; N-2 invalid existing config exits 
 
 ---
 
-## T-MK-RACE Makefile: race 验证移入 Docker [phase:infra] [owner:codex] [status:in-progress]
+## T-MK-RACE Makefile: race 验证移入 Docker [phase:infra] [owner:codex] [status:review]
 
 Started: 2026-05-19 20:11 +08:00
 
@@ -228,3 +228,5 @@ Started: 2026-05-19 20:11 +08:00
 **依赖**: 无。
 
 **参考**: AGENTS.md §3.3a 第 5 条、§3.3 第 3 条、§7 第 1 条；`docs/reviews/archive.md:308`（既往已知 Windows race 缺 gcc 的归档说明）。
+
+**Result**: `a44f27a` - default test target no-race; Docker race target on `golang:1.25` with named module/build caches; all green.
