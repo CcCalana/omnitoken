@@ -106,5 +106,11 @@ func snapshotRequestMetadata(r *http.Request) (string, bool) {
 	if err := decoder.Decode(&payload); err != nil {
 		return "", false
 	}
-	return payload.Model, payload.Stream
+	
+	model := payload.Model
+	if vm := httpx.VirtualModelFromContext(r.Context()); vm != "" {
+		model = vm
+	}
+	
+	return model, payload.Stream
 }

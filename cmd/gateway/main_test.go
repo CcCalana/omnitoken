@@ -24,7 +24,7 @@ func TestHealthz(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()
 
-	newMux(testLogger(), fakeGatewayStore{}, nil, unavailableChatHandler()).ServeHTTP(rec, req)
+	newMux(testLogger(), fakeGatewayStore{}, nil, nil, unavailableChatHandler()).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
@@ -47,7 +47,7 @@ func TestModels(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+key.Token)
 	rec := httptest.NewRecorder()
 
-	newMux(testLogger(), store, nil, unavailableChatHandler()).ServeHTTP(rec, req)
+	newMux(testLogger(), store, nil, nil, unavailableChatHandler()).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
@@ -74,7 +74,7 @@ func TestChatCompletionsRequiresConfiguredArk(t *testing.T) {
 	req.Header.Set("X-Request-Id", "req-chat")
 	rec := httptest.NewRecorder()
 
-	newMux(testLogger(), store, nil, unavailableChatHandler()).ServeHTTP(rec, req)
+	newMux(testLogger(), store, nil, nil, unavailableChatHandler()).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected status %d, got %d", http.StatusServiceUnavailable, rec.Code)
@@ -104,7 +104,7 @@ func TestModelsRequiresVirtualKey(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	rec := httptest.NewRecorder()
 
-	newMux(testLogger(), validGatewayStore(t), nil, unavailableChatHandler()).ServeHTTP(rec, req)
+	newMux(testLogger(), validGatewayStore(t), nil, nil, unavailableChatHandler()).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
@@ -133,7 +133,7 @@ func TestChatCompletionsRejectsExhaustedBudget(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+key.Token)
 	rec := httptest.NewRecorder()
 
-	newMux(testLogger(), store, checker, unavailableChatHandler()).ServeHTTP(rec, req)
+	newMux(testLogger(), store, checker, nil, unavailableChatHandler()).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusPaymentRequired {
 		t.Fatalf("expected status %d, got %d", http.StatusPaymentRequired, rec.Code)
@@ -162,7 +162,7 @@ func TestChatCompletionsQuotaCheckErrorFailsClosed(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+key.Token)
 	rec := httptest.NewRecorder()
 
-	newMux(testLogger(), store, checker, unavailableChatHandler()).ServeHTTP(rec, req)
+	newMux(testLogger(), store, checker, nil, unavailableChatHandler()).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, rec.Code)

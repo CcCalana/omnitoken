@@ -1,12 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -15,6 +19,7 @@ import (
 	"github.com/omnitoken/omnitoken/internal/httpx"
 	"github.com/omnitoken/omnitoken/internal/proxy"
 	"github.com/omnitoken/omnitoken/internal/quota"
+	"github.com/omnitoken/omnitoken/internal/router"
 	"github.com/omnitoken/omnitoken/internal/usage"
 )
 
@@ -69,9 +74,11 @@ func main() {
 		}
 	}()
 
+	resolver := router.NewPostgresStore(db)
+
 	server := &http.Server{
 		Addr:              cfg.Gateway.Addr,
-		Handler:           newMux(logger, auth.NewPostgresStore(db), quota.NewChecker(quota.NewPostgresStore(db)), newChatHandler(cfg, logger, db)),
+		Handler:           newMux(logger, auth.NewPostgresStore(db), quota.NewChecker(quota.NewPostgresStore(db)), resolver, newChatHandler(cfg, logger, db)),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -82,11 +89,11 @@ func main() {
 	}
 }
 
-func newMux(logger *slog.Logger, store auth.VirtualKeyStore, budgetChecker quota.BudgetChecker, chatHandler http.Handler) http.Handler {
+func newMux(logger *slog.Logger, store auth.VirtualKeyStore, budgetChecker quota.BudgetChecker, resolver router.Resolver, chatHandler http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
 	mux.Handle("GET /v1/models", protectGatewayRoute(store, http.HandlerFunc(handleModels)))
-	mux.Handle("POST /v1/chat/completions", protectGatewayRoute(store, enforceMonthlyBudget(logger, budgetChecker)(chatHandler)))
+	mux.Handle("POST /v1/chat/completions", protectGatewayRoute(store, enforceMonthlyBudget(logger, budgetChecker)(resolveVirtualModel(resolver)(chatHandler))))
 
 	return httpx.RequestID(httpx.RequestLogger(logger)(mux))
 }
@@ -157,6 +164,86 @@ func enforceMonthlyBudget(logger *slog.Logger, checker quota.BudgetChecker) func
 				return
 			}
 
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func resolveVirtualModel(resolver router.Resolver) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		if resolver == nil {
+			return next
+		}
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Body == nil {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				httpx.WriteJSON(w, http.StatusBadRequest, errorEnvelope{
+					Error: errorDetail{
+						Message: "invalid request body",
+						Type:    "invalid_request",
+						Code:    "invalid_request",
+					},
+				})
+				return
+			}
+			r.Body.Close()
+
+			var payload map[string]any
+			decoder := json.NewDecoder(bytes.NewReader(body))
+			decoder.UseNumber()
+			if err := decoder.Decode(&payload); err != nil {
+				r.Body = io.NopCloser(bytes.NewReader(body))
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			modelRequested, ok := payload["model"].(string)
+			if !ok || modelRequested == "" {
+				r.Body = io.NopCloser(bytes.NewReader(body))
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			res, err := resolver.Resolve(r.Context(), modelRequested)
+			if err != nil {
+				if errors.Is(err, router.ErrVirtualModelDisabled) {
+					httpx.WriteJSON(w, http.StatusBadRequest, errorEnvelope{
+						Error: errorDetail{
+							Message: "virtual model is disabled",
+							Type:    "invalid_request",
+							Code:    "virtual_model_disabled",
+						},
+					})
+					return
+				}
+				httpx.WriteJSON(w, http.StatusInternalServerError, errorEnvelope{
+					Error: errorDetail{
+						Message: "failed to resolve virtual model",
+						Type:    "server_error",
+						Code:    "internal_error",
+					},
+				})
+				return
+			}
+
+			if res.IsVirtual {
+				payload["model"] = res.RealModel
+				newBody, err := json.Marshal(payload)
+				if err == nil {
+					body = newBody
+					r.ContentLength = int64(len(body))
+					r.Header.Set("Content-Length", strconv.Itoa(len(body)))
+				}
+				ctx := httpx.WithVirtualModel(r.Context(), modelRequested)
+				r = r.WithContext(ctx)
+			}
+
+			r.Body = io.NopCloser(bytes.NewReader(body))
 			next.ServeHTTP(w, r)
 		})
 	}
