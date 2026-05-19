@@ -22,10 +22,13 @@ import (
 	"github.com/omnitoken/omnitoken/internal/auth"
 	"github.com/omnitoken/omnitoken/internal/config"
 	"github.com/omnitoken/omnitoken/internal/httpx"
+	"github.com/omnitoken/omnitoken/internal/rbac"
 	usageanomaly "github.com/omnitoken/omnitoken/internal/usage/anomaly"
 )
 
 const keyAnomalyThresholdEnv = "OMNITOKEN_ADMIN_KEY_ANOMALY_RPM_5M"
+
+var errAdminUserNotFound = errors.New("admin user not found")
 
 type healthResponse struct {
 	Status  string `json:"status"`
@@ -61,12 +64,14 @@ type usersResponse struct {
 }
 
 type adminUserUsage struct {
-	UserID      string `json:"user_id"`
-	Email       string `json:"email"`
-	DisplayName string `json:"display_name"`
-	UsedTokens  int64  `json:"used_tokens"`
-	Quota       int64  `json:"quota"`
-	Status      string `json:"status"`
+	UserID          string `json:"user_id"`
+	Email           string `json:"email"`
+	DisplayName     string `json:"display_name"`
+	UsedTokens      int64  `json:"used_tokens"`
+	UsedBudgetCents int64  `json:"used_budget_cents"`
+	BudgetCents     *int64 `json:"budget_cents"`
+	Quota           int64  `json:"quota"`
+	Status          string `json:"status"`
 }
 
 type modelsResponse struct {
@@ -124,6 +129,11 @@ type createVirtualKeyResponse struct {
 	CreatedAt      string `json:"created_at"`
 }
 
+type updateUserQuotaResponse struct {
+	UserID      string `json:"user_id"`
+	BudgetCents *int64 `json:"budget_cents"`
+}
+
 type createVirtualKeyParams struct {
 	OrganizationID uuid.UUID
 	UserID         uuid.UUID
@@ -140,6 +150,11 @@ type createVirtualKeyResult struct {
 	CreatedAt      time.Time
 }
 
+type updateUserBudgetResult struct {
+	BeforeBudgetCents *int64
+	AfterBudgetCents  *int64
+}
+
 type virtualKeyCreator interface {
 	CreateVirtualKey(context.Context, createVirtualKeyParams) (createVirtualKeyResult, error)
 }
@@ -149,6 +164,7 @@ type overviewStore interface {
 	LoadUsers(context.Context, time.Time) (usersResponse, error)
 	LoadModels(context.Context, time.Time) (modelsResponse, error)
 	LoadAuditLogs(context.Context, auditLogFilters) ([]adminAuditLog, error)
+	UpdateUserBudget(context.Context, uuid.UUID, *int64, time.Time) (updateUserBudgetResult, error)
 }
 
 type postgresVirtualKeyCreator struct {
@@ -287,6 +303,7 @@ func newMux(logger *slog.Logger, cfg config.AdminConfig, overview overviewStore,
 	mux.Handle("GET /api/admin/users", adminAuth(http.HandlerFunc(makeUsersHandler(logger, overview, time.Now))))
 	mux.Handle("GET /api/admin/models", adminAuth(http.HandlerFunc(makeModelsHandler(logger, overview, time.Now))))
 	mux.Handle("GET /api/admin/audit-logs", adminAuth(http.HandlerFunc(makeAuditLogsHandler(logger, overview))))
+	mux.Handle("PATCH /api/admin/users/{id}/quota", protectedWrite(http.HandlerFunc(makeUpdateUserQuotaHandler(logger, overview))))
 	if cfg.BootstrapToken != "" && creator != nil {
 		// Demo-Ready 简化版: this admin-port-only endpoint lives on
 		// 8081, not the gateway data-plane port 8080. Full admin auth/RBAC stays
@@ -593,6 +610,10 @@ SELECT
   u.email,
   u.display_name,
   COALESCE(SUM(utb.total_tokens), 0)::bigint AS used_tokens,
+  -- Display value only: round sub-cent cost upward so UI never understates use.
+  -- Gateway enforcement compares exact cost_usd against budget cents.
+  COALESCE(CEIL(COALESCE(SUM(cl.cost_usd), 0) * 100), 0)::bigint AS used_budget_cents,
+  u.monthly_budget_cents,
   u.status
 FROM users u
 LEFT JOIN usage_events ue
@@ -600,7 +621,8 @@ LEFT JOIN usage_events ue
   AND ue.created_at >= $1
   AND ue.created_at < $2
 LEFT JOIN usage_token_breakdown utb ON utb.usage_event_id = ue.id
-GROUP BY u.id, u.email, u.display_name, u.status
+LEFT JOIN cost_ledger cl ON cl.usage_event_id = ue.id
+GROUP BY u.id, u.email, u.display_name, u.monthly_budget_cents, u.status
 ORDER BY used_tokens DESC, u.display_name ASC, u.email ASC`
 
 	rows, err := s.db.QueryContext(ctx, usersQuery, monthStart, monthEnd)
@@ -612,8 +634,13 @@ ORDER BY used_tokens DESC, u.display_name ASC, u.email ASC`
 	response := emptyUsersResponse()
 	for rows.Next() {
 		var item adminUserUsage
-		if err := rows.Scan(&item.UserID, &item.Email, &item.DisplayName, &item.UsedTokens, &item.Status); err != nil {
+		var budgetCents sql.NullInt64
+		if err := rows.Scan(&item.UserID, &item.Email, &item.DisplayName, &item.UsedTokens, &item.UsedBudgetCents, &budgetCents, &item.Status); err != nil {
 			return usersResponse{}, fmt.Errorf("scan admin users: %w", err)
+		}
+		item.BudgetCents = nullableInt64Ptr(budgetCents)
+		if item.BudgetCents != nil {
+			item.Quota = *item.BudgetCents
 		}
 		response.Users = append(response.Users, item)
 	}
@@ -621,6 +648,45 @@ ORDER BY used_tokens DESC, u.display_name ASC, u.email ASC`
 		return usersResponse{}, fmt.Errorf("iterate admin users: %w", err)
 	}
 	return response, nil
+}
+
+func (s *postgresOverviewStore) UpdateUserBudget(ctx context.Context, userID uuid.UUID, budgetCents *int64, updatedAt time.Time) (updateUserBudgetResult, error) {
+	var budget any
+	if budgetCents != nil {
+		budget = *budgetCents
+	}
+
+	const updateQuery = `
+WITH target AS (
+  SELECT id, monthly_budget_cents
+  FROM users
+  WHERE id = $1
+),
+updated AS (
+  UPDATE users
+  SET monthly_budget_cents = $2,
+      updated_at = $3
+  WHERE id = $1
+  RETURNING id, monthly_budget_cents
+)
+SELECT
+  target.monthly_budget_cents AS before_budget_cents,
+  updated.monthly_budget_cents AS after_budget_cents
+FROM target
+JOIN updated ON updated.id = target.id`
+
+	var before sql.NullInt64
+	var after sql.NullInt64
+	if err := s.db.QueryRowContext(ctx, updateQuery, userID, budget, updatedAt.UTC()).Scan(&before, &after); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return updateUserBudgetResult{}, errAdminUserNotFound
+		}
+		return updateUserBudgetResult{}, fmt.Errorf("update user budget: %w", err)
+	}
+	return updateUserBudgetResult{
+		BeforeBudgetCents: nullableInt64Ptr(before),
+		AfterBudgetCents:  nullableInt64Ptr(after),
+	}, nil
 }
 
 func (s *postgresOverviewStore) LoadModels(ctx context.Context, now time.Time) (modelsResponse, error) {
@@ -792,11 +858,84 @@ func nullableStringPtr(value sql.NullString) *string {
 	return &out
 }
 
+func nullableInt64Ptr(value sql.NullInt64) *int64 {
+	if !value.Valid {
+		return nil
+	}
+	out := value.Int64
+	return &out
+}
+
 func nullableRawJSON(value sql.NullString) json.RawMessage {
 	if !value.Valid {
 		return nil
 	}
 	return json.RawMessage(value.String)
+}
+
+func makeUpdateUserQuotaHandler(logger *slog.Logger, store overviewStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, err := uuid.Parse(strings.TrimSpace(r.PathValue("id")))
+		if err != nil {
+			httpx.WriteJSON(w, http.StatusBadRequest, errorEnvelope("user id must be a valid UUID", "invalid_request", "invalid_user_id"))
+			return
+		}
+
+		audit.SetAction(r.Context(), rbac.ActionUpdateQuota)
+		audit.SetResource(r.Context(), "user_quota", userID.String())
+
+		budgetCents, err := parseUpdateUserQuotaRequest(w, r)
+		if err != nil {
+			httpx.WriteJSON(w, http.StatusBadRequest, errorEnvelope(err.Error(), "invalid_request", "invalid_quota"))
+			return
+		}
+		if store == nil {
+			logger.Error("update user quota without admin store", "user_id", userID.String())
+			httpx.WriteJSON(w, http.StatusServiceUnavailable, errorEnvelope("admin store is not configured", "server_error", "admin_store_not_configured"))
+			return
+		}
+
+		result, err := store.UpdateUserBudget(r.Context(), userID, budgetCents, time.Now().UTC())
+		if err != nil {
+			if errors.Is(err, errAdminUserNotFound) {
+				httpx.WriteJSON(w, http.StatusNotFound, errorEnvelope("user not found", "invalid_request", "user_not_found"))
+				return
+			}
+			logger.Error("update user quota", "user_id", userID.String(), "error", err)
+			httpx.WriteJSON(w, http.StatusInternalServerError, errorEnvelope("failed to update quota", "server_error", "update_quota_failed"))
+			return
+		}
+
+		audit.SetBefore(r.Context(), map[string]any{"budget_cents": result.BeforeBudgetCents})
+		audit.SetAfter(r.Context(), map[string]any{"budget_cents": result.AfterBudgetCents})
+
+		httpx.WriteJSON(w, http.StatusOK, updateUserQuotaResponse{
+			UserID:      userID.String(),
+			BudgetCents: result.AfterBudgetCents,
+		})
+	}
+}
+
+func parseUpdateUserQuotaRequest(w http.ResponseWriter, r *http.Request) (*int64, error) {
+	var raw map[string]json.RawMessage
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&raw); err != nil {
+		return nil, fmt.Errorf("invalid request body")
+	}
+	value, ok := raw["budget_cents"]
+	if !ok {
+		return nil, fmt.Errorf("budget_cents is required")
+	}
+	if strings.TrimSpace(string(value)) == "null" {
+		return nil, nil
+	}
+	var budget int64
+	if err := json.Unmarshal(value, &budget); err != nil {
+		return nil, fmt.Errorf("budget_cents must be an integer")
+	}
+	if budget < 0 {
+		return nil, fmt.Errorf("budget_cents must be non-negative")
+	}
+	return &budget, nil
 }
 
 func makeCreateVirtualKeyHandler(logger *slog.Logger, creator virtualKeyCreator) http.HandlerFunc {

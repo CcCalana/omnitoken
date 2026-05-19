@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -258,12 +259,14 @@ func TestUsersReturnsStoreData(t *testing.T) {
 		users: usersResponse{
 			Users: []adminUserUsage{
 				{
-					UserID:      "00000000-0000-0000-0000-000000000201",
-					Email:       "admin@democorp.local",
-					DisplayName: "Demo Admin",
-					UsedTokens:  42,
-					Quota:       0,
-					Status:      "active",
+					UserID:          "00000000-0000-0000-0000-000000000201",
+					Email:           "admin@democorp.local",
+					DisplayName:     "Demo Admin",
+					UsedTokens:      42,
+					UsedBudgetCents: 2,
+					BudgetCents:     int64Ptr(100),
+					Quota:           100,
+					Status:          "active",
 				},
 			},
 		},
@@ -283,7 +286,8 @@ func TestUsersReturnsStoreData(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("decode users response: %v", err)
 	}
-	if len(body.Users) != 1 || body.Users[0].UsedTokens != 42 || body.Users[0].Quota != 0 {
+	if len(body.Users) != 1 || body.Users[0].UsedTokens != 42 || body.Users[0].Quota != 100 ||
+		body.Users[0].BudgetCents == nil || *body.Users[0].BudgetCents != 100 || body.Users[0].UsedBudgetCents != 2 {
 		t.Fatalf("unexpected users response: %+v", body)
 	}
 }
@@ -306,6 +310,111 @@ func TestUsersStoreErrorReturns500(t *testing.T) {
 	}
 	if body["error"]["code"] != "users_query_failed" {
 		t.Fatalf("unexpected error body: %#v", body)
+	}
+}
+
+func TestUpdateUserQuotaCreatesAuditRecord(t *testing.T) {
+	t.Parallel()
+
+	userID := uuid.New()
+	beforeBudget := int64(100)
+	afterBudget := int64(50)
+	store := &fakeOverviewStore{
+		updateResult: updateUserBudgetResult{
+			BeforeBudgetCents: &beforeBudget,
+			AfterBudgetCents:  &afterBudget,
+		},
+	}
+	recorder := newAdminAuditRecorder()
+	cfg := testAdminConfig()
+	cfg.BootstrapToken = "dev-bootstrap"
+	req := httptest.NewRequest(http.MethodPatch, "/api/admin/users/"+userID.String()+"/quota", strings.NewReader(`{"budget_cents":50}`))
+	req.Header.Set("Authorization", "Bearer dev-bootstrap")
+	rec := httptest.NewRecorder()
+
+	newMux(testLogger(), cfg, store, nil, recorder).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	if !store.updateCalled || store.updateUserID != userID || store.updateBudgetCents == nil || *store.updateBudgetCents != 50 {
+		t.Fatalf("unexpected update call: called=%v user=%s budget=%v", store.updateCalled, store.updateUserID, store.updateBudgetCents)
+	}
+	var body updateUserQuotaResponse
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode update response: %v", err)
+	}
+	if body.UserID != userID.String() || body.BudgetCents == nil || *body.BudgetCents != 50 {
+		t.Fatalf("unexpected update response: %+v", body)
+	}
+
+	entry := recorder.wait(t)
+	if entry.Action != "update_quota" || entry.ResourceType != "user_quota" || entry.ResourceID != userID.String() {
+		t.Fatalf("unexpected audit resource: %+v", entry)
+	}
+	before := entry.Before.(map[string]any)
+	after := entry.After.(map[string]any)
+	if got := before["budget_cents"].(*int64); *got != 100 {
+		t.Fatalf("unexpected before snapshot: %#v", before)
+	}
+	if got := after["budget_cents"].(*int64); *got != 50 {
+		t.Fatalf("unexpected after snapshot: %#v", after)
+	}
+}
+
+func TestUpdateUserQuotaAllowsClearingBudget(t *testing.T) {
+	t.Parallel()
+
+	userID := uuid.New()
+	beforeBudget := int64(100)
+	store := &fakeOverviewStore{
+		updateResult: updateUserBudgetResult{
+			BeforeBudgetCents: &beforeBudget,
+			AfterBudgetCents:  nil,
+		},
+	}
+	cfg := testAdminConfig()
+	cfg.BootstrapToken = "dev-bootstrap"
+	req := httptest.NewRequest(http.MethodPatch, "/api/admin/users/"+userID.String()+"/quota", strings.NewReader(`{"budget_cents":null}`))
+	req.Header.Set("Authorization", "Bearer dev-bootstrap")
+	rec := httptest.NewRecorder()
+
+	newMux(testLogger(), cfg, store, nil, audit.NewRecorder(nil, testLogger())).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	if store.updateBudgetCents != nil {
+		t.Fatalf("expected nil budget update, got %v", store.updateBudgetCents)
+	}
+	var body updateUserQuotaResponse
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode update response: %v", err)
+	}
+	if body.BudgetCents != nil {
+		t.Fatalf("expected nil budget response, got %+v", body)
+	}
+}
+
+func TestUpdateUserQuotaRejectsInvalidBudget(t *testing.T) {
+	t.Parallel()
+
+	userID := uuid.New()
+	recorder := newAdminAuditRecorder()
+	cfg := testAdminConfig()
+	cfg.BootstrapToken = "dev-bootstrap"
+	req := httptest.NewRequest(http.MethodPatch, "/api/admin/users/"+userID.String()+"/quota", strings.NewReader(`{"budget_cents":-1}`))
+	req.Header.Set("Authorization", "Bearer dev-bootstrap")
+	rec := httptest.NewRecorder()
+
+	newMux(testLogger(), cfg, &fakeOverviewStore{}, nil, recorder).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
+	}
+	entry := recorder.wait(t)
+	if entry.Action != "update_quota" || entry.StatusCode != http.StatusBadRequest {
+		t.Fatalf("unexpected failed audit entry: %+v", entry)
 	}
 }
 
@@ -598,10 +707,10 @@ func TestPostgresOverviewStoreLoadUsersMapsSQLResults(t *testing.T) {
 	now := time.Date(2026, 5, 12, 10, 30, 0, 0, time.UTC)
 	db := openFakeAdminDB(t, []adminFakeSQLResponse{
 		{
-			columns: []string{"user_id", "email", "display_name", "used_tokens", "status"},
+			columns: []string{"user_id", "email", "display_name", "used_tokens", "used_budget_cents", "monthly_budget_cents", "status"},
 			rows: [][]driver.Value{
-				{"00000000-0000-0000-0000-000000000201", "admin@democorp.local", "Demo Admin", int64(300), "active"},
-				{"00000000-0000-0000-0000-000000000202", "user01@democorp.local", "Demo User 01", int64(0), "disabled"},
+				{"00000000-0000-0000-0000-000000000201", "admin@democorp.local", "Demo Admin", int64(300), int64(38), int64(100), "active"},
+				{"00000000-0000-0000-0000-000000000202", "user01@democorp.local", "Demo User 01", int64(0), int64(0), nil, "disabled"},
 			},
 		},
 	})
@@ -615,10 +724,12 @@ func TestPostgresOverviewStoreLoadUsersMapsSQLResults(t *testing.T) {
 	if len(got.Users) != 2 {
 		t.Fatalf("expected two users, got %+v", got.Users)
 	}
-	if got.Users[0].Email != "admin@democorp.local" || got.Users[0].UsedTokens != 300 || got.Users[0].Quota != 0 {
+	if got.Users[0].Email != "admin@democorp.local" || got.Users[0].UsedTokens != 300 ||
+		got.Users[0].UsedBudgetCents != 38 || got.Users[0].BudgetCents == nil ||
+		*got.Users[0].BudgetCents != 100 || got.Users[0].Quota != 100 {
 		t.Fatalf("unexpected first user row: %+v", got.Users[0])
 	}
-	if got.Users[1].Status != "disabled" || got.Users[1].UsedTokens != 0 {
+	if got.Users[1].Status != "disabled" || got.Users[1].UsedTokens != 0 || got.Users[1].BudgetCents != nil {
 		t.Fatalf("unexpected second user row: %+v", got.Users[1])
 	}
 
@@ -635,12 +746,16 @@ func TestPostgresOverviewStoreLoadUsersMapsSQLResults(t *testing.T) {
 	if !strings.Contains(queries[0].query, "ue.created_at >= $1") || !strings.Contains(queries[0].query, "ue.created_at < $2") {
 		t.Fatalf("users query should filter usage rows by month window: %s", queries[0].query)
 	}
+	if !strings.Contains(queries[0].query, "CEIL(COALESCE(SUM(cl.cost_usd), 0) * 100)") ||
+		!strings.Contains(queries[0].query, "Gateway enforcement compares exact cost_usd") {
+		t.Fatalf("users query should expose CEIL display semantics and exact enforcement comment: %s", queries[0].query)
+	}
 }
 
 func TestPostgresOverviewStoreLoadUsersEmptyResults(t *testing.T) {
 	db := openFakeAdminDB(t, []adminFakeSQLResponse{
 		{
-			columns: []string{"user_id", "email", "display_name", "used_tokens", "status"},
+			columns: []string{"user_id", "email", "display_name", "used_tokens", "used_budget_cents", "monthly_budget_cents", "status"},
 			rows:    [][]driver.Value{},
 		},
 	})
@@ -652,6 +767,60 @@ func TestPostgresOverviewStoreLoadUsersEmptyResults(t *testing.T) {
 	}
 	if got.Users == nil || len(got.Users) != 0 {
 		t.Fatalf("expected empty users array, got %+v", got.Users)
+	}
+}
+
+func TestPostgresOverviewStoreUpdateUserBudgetMapsSQL(t *testing.T) {
+	userID := uuid.New()
+	updatedAt := time.Date(2026, 5, 19, 11, 30, 0, 0, time.UTC)
+	budget := int64(50)
+	db := openFakeAdminDB(t, []adminFakeSQLResponse{
+		{
+			columns: []string{"before_budget_cents", "after_budget_cents"},
+			rows:    [][]driver.Value{{int64(100), int64(50)}},
+		},
+	})
+	store := &postgresOverviewStore{db: db}
+
+	got, err := store.UpdateUserBudget(context.Background(), userID, &budget, updatedAt)
+	if err != nil {
+		t.Fatalf("update user budget: %v", err)
+	}
+	if got.BeforeBudgetCents == nil || *got.BeforeBudgetCents != 100 ||
+		got.AfterBudgetCents == nil || *got.AfterBudgetCents != 50 {
+		t.Fatalf("unexpected update result: %+v", got)
+	}
+
+	queries := fakeAdminSQLSnapshot()
+	if len(queries) != 1 {
+		t.Fatalf("expected 1 query, got %d", len(queries))
+	}
+	for _, want := range []string{"WITH target AS", "UPDATE users", "monthly_budget_cents = $2", "updated_at = $3"} {
+		if !strings.Contains(queries[0].query, want) {
+			t.Fatalf("update query missing %q: %s", want, queries[0].query)
+		}
+	}
+	if len(queries[0].args) != 3 || fmt.Sprint(queries[0].args[0]) != userID.String() || queries[0].args[1] != budget {
+		t.Fatalf("unexpected update args: %#v", queries[0].args)
+	}
+	assertTimeArg(t, queries[0].args[2], updatedAt)
+}
+
+func TestPostgresOverviewStoreUpdateUserBudgetNotFound(t *testing.T) {
+	db := openFakeAdminDB(t, []adminFakeSQLResponse{
+		{
+			columns: []string{"before_budget_cents", "after_budget_cents"},
+			rows:    [][]driver.Value{},
+		},
+	})
+	store := &postgresOverviewStore{db: db}
+
+	err := func() error {
+		_, err := store.UpdateUserBudget(context.Background(), uuid.New(), nil, time.Now())
+		return err
+	}()
+	if !errors.Is(err, errAdminUserNotFound) {
+		t.Fatalf("expected not found, got %v", err)
 	}
 }
 
@@ -1190,22 +1359,28 @@ func (r *adminAuditRecorder) expectNoRecord(t *testing.T) {
 }
 
 type fakeOverviewStore struct {
-	response        overviewResponse
-	users           usersResponse
-	models          modelsResponse
-	auditLogs       []adminAuditLog
-	err             error
-	usersErr        error
-	modelsErr       error
-	auditLogsErr    error
-	called          bool
-	usersCalled     bool
-	modelsCalled    bool
-	auditLogsCalled bool
-	now             time.Time
-	usersNow        time.Time
-	modelsNow       time.Time
-	auditLogFilters auditLogFilters
+	response          overviewResponse
+	users             usersResponse
+	models            modelsResponse
+	auditLogs         []adminAuditLog
+	updateResult      updateUserBudgetResult
+	err               error
+	usersErr          error
+	modelsErr         error
+	auditLogsErr      error
+	updateErr         error
+	called            bool
+	usersCalled       bool
+	modelsCalled      bool
+	auditLogsCalled   bool
+	updateCalled      bool
+	now               time.Time
+	usersNow          time.Time
+	modelsNow         time.Time
+	auditLogFilters   auditLogFilters
+	updateUserID      uuid.UUID
+	updateBudgetCents *int64
+	updateAt          time.Time
 }
 
 func (f *fakeOverviewStore) LoadOverview(_ context.Context, now time.Time) (overviewResponse, error) {
@@ -1230,6 +1405,18 @@ func (f *fakeOverviewStore) LoadAuditLogs(_ context.Context, filters auditLogFil
 	f.auditLogsCalled = true
 	f.auditLogFilters = filters
 	return f.auditLogs, f.auditLogsErr
+}
+
+func (f *fakeOverviewStore) UpdateUserBudget(_ context.Context, userID uuid.UUID, budgetCents *int64, updatedAt time.Time) (updateUserBudgetResult, error) {
+	f.updateCalled = true
+	f.updateUserID = userID
+	f.updateBudgetCents = budgetCents
+	f.updateAt = updatedAt
+	return f.updateResult, f.updateErr
+}
+
+func int64Ptr(value int64) *int64 {
+	return &value
 }
 
 func assertTimeArg(t *testing.T, value driver.Value, want time.Time) {

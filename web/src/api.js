@@ -45,6 +45,10 @@ function createAdminAPI(baseURL = resolveAdminBaseURL()) {
     getUsers: () => fetchJSON(`${base}/api/admin/users`),
     getModels: () => fetchJSON(`${base}/api/admin/models`),
     getAuditLogs: (filters = {}) => fetchJSON(`${base}/api/admin/audit-logs${toQueryString(filters)}`),
+    updateUserQuota: (userID, budgetCents) => fetchJSON(`${base}/api/admin/users/${encodeURIComponent(userID)}/quota`, {
+      method: "PATCH",
+      body: JSON.stringify({ budget_cents: budgetCents }),
+    }),
   };
 }
 
@@ -60,12 +64,18 @@ function toQueryString(filters) {
   return query ? `?${query}` : "";
 }
 
-async function fetchJSON(url) {
+async function fetchJSON(url, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+  const headers = {
+    Accept: "application/json",
+    ...(options.body ? { "Content-Type": "application/json" } : {}),
+    ...(options.headers || {}),
+  };
   try {
     const response = await fetch(url, {
-      headers: { Accept: "application/json" },
+      ...options,
+      headers,
       cache: "no-store",
       signal: controller.signal,
     });

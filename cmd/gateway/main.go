@@ -14,6 +14,7 @@ import (
 	"github.com/omnitoken/omnitoken/internal/config"
 	"github.com/omnitoken/omnitoken/internal/httpx"
 	"github.com/omnitoken/omnitoken/internal/proxy"
+	"github.com/omnitoken/omnitoken/internal/quota"
 	"github.com/omnitoken/omnitoken/internal/usage"
 )
 
@@ -70,7 +71,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              cfg.Gateway.Addr,
-		Handler:           newMux(logger, auth.NewPostgresStore(db), newChatHandler(cfg, logger, db)),
+		Handler:           newMux(logger, auth.NewPostgresStore(db), quota.NewChecker(quota.NewPostgresStore(db)), newChatHandler(cfg, logger, db)),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -81,11 +82,11 @@ func main() {
 	}
 }
 
-func newMux(logger *slog.Logger, store auth.VirtualKeyStore, chatHandler http.Handler) http.Handler {
+func newMux(logger *slog.Logger, store auth.VirtualKeyStore, budgetChecker quota.BudgetChecker, chatHandler http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
 	mux.Handle("GET /v1/models", protectGatewayRoute(store, http.HandlerFunc(handleModels)))
-	mux.Handle("POST /v1/chat/completions", protectGatewayRoute(store, chatHandler))
+	mux.Handle("POST /v1/chat/completions", protectGatewayRoute(store, enforceMonthlyBudget(logger, budgetChecker)(chatHandler)))
 
 	return httpx.RequestID(httpx.RequestLogger(logger)(mux))
 }
@@ -112,6 +113,53 @@ func newChatHandler(cfg config.Config, logger *slog.Logger, db *sql.DB) http.Han
 
 func protectGatewayRoute(store auth.VirtualKeyStore, next http.Handler) http.Handler {
 	return auth.RequireVirtualKey(store, writeGatewayUnauthorized)(next)
+}
+
+func enforceMonthlyBudget(logger *slog.Logger, checker quota.BudgetChecker) func(http.Handler) http.Handler {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return func(next http.Handler) http.Handler {
+		if checker == nil {
+			return next
+		}
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			subject, ok := auth.SubjectFromContext(r.Context())
+			if !ok {
+				logger.Error("quota subject missing", "request_id", httpx.RequestIDFromContext(r.Context()))
+				writeGatewayQuotaCheckFailed(w)
+				return
+			}
+			decision, err := checker.Check(r.Context(), subject, time.Now())
+			if err != nil {
+				logger.Error("quota check failed",
+					"request_id", httpx.RequestIDFromContext(r.Context()),
+					"organization_id", subject.OrgID.String(),
+					"user_id", subject.UserID.String(),
+					"err", err,
+				)
+				writeGatewayQuotaCheckFailed(w)
+				return
+			}
+			if !decision.Allowed {
+				var budget any
+				if decision.BudgetCents.Valid {
+					budget = decision.BudgetCents.Int64
+				}
+				logger.Warn("monthly budget exhausted",
+					"request_id", httpx.RequestIDFromContext(r.Context()),
+					"organization_id", subject.OrgID.String(),
+					"user_id", subject.UserID.String(),
+					"used_cents", decision.UsedBudgetCents,
+					"budget_cents", budget,
+				)
+				writeGatewayQuotaExceeded(w)
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 func handleHealthz(w http.ResponseWriter, _ *http.Request) {
@@ -141,6 +189,26 @@ func writeGatewayUnauthorized(w http.ResponseWriter) {
 			Message: "unauthorized",
 			Type:    "authentication_error",
 			Code:    "invalid_api_key",
+		},
+	})
+}
+
+func writeGatewayQuotaExceeded(w http.ResponseWriter) {
+	httpx.WriteJSON(w, http.StatusPaymentRequired, errorEnvelope{
+		Error: errorDetail{
+			Message: "monthly budget exhausted",
+			Type:    "quota_exceeded",
+			Code:    "monthly_budget_exhausted",
+		},
+	})
+}
+
+func writeGatewayQuotaCheckFailed(w http.ResponseWriter) {
+	httpx.WriteJSON(w, http.StatusInternalServerError, errorEnvelope{
+		Error: errorDetail{
+			Message: "quota check failed",
+			Type:    "server_error",
+			Code:    "quota_check_failed",
 		},
 	})
 }

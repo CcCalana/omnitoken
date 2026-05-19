@@ -3,16 +3,19 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/omnitoken/omnitoken/internal/auth"
 	"github.com/omnitoken/omnitoken/internal/proxy"
+	"github.com/omnitoken/omnitoken/internal/quota"
 )
 
 func TestHealthz(t *testing.T) {
@@ -21,7 +24,7 @@ func TestHealthz(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()
 
-	newMux(testLogger(), fakeGatewayStore{}, unavailableChatHandler()).ServeHTTP(rec, req)
+	newMux(testLogger(), fakeGatewayStore{}, nil, unavailableChatHandler()).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
@@ -44,7 +47,7 @@ func TestModels(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+key.Token)
 	rec := httptest.NewRecorder()
 
-	newMux(testLogger(), store, unavailableChatHandler()).ServeHTTP(rec, req)
+	newMux(testLogger(), store, nil, unavailableChatHandler()).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
@@ -71,7 +74,7 @@ func TestChatCompletionsRequiresConfiguredArk(t *testing.T) {
 	req.Header.Set("X-Request-Id", "req-chat")
 	rec := httptest.NewRecorder()
 
-	newMux(testLogger(), store, unavailableChatHandler()).ServeHTTP(rec, req)
+	newMux(testLogger(), store, nil, unavailableChatHandler()).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected status %d, got %d", http.StatusServiceUnavailable, rec.Code)
@@ -101,7 +104,7 @@ func TestModelsRequiresVirtualKey(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	rec := httptest.NewRecorder()
 
-	newMux(testLogger(), validGatewayStore(t), unavailableChatHandler()).ServeHTTP(rec, req)
+	newMux(testLogger(), validGatewayStore(t), nil, unavailableChatHandler()).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
@@ -112,6 +115,63 @@ func TestModelsRequiresVirtualKey(t *testing.T) {
 		t.Fatalf("decode error response: %v", err)
 	}
 	if body.Error.Type != "authentication_error" || body.Error.Code != "invalid_api_key" {
+		t.Fatalf("unexpected error envelope: %#v", body)
+	}
+}
+
+func TestChatCompletionsRejectsExhaustedBudget(t *testing.T) {
+	t.Parallel()
+
+	key, store := validGatewayKey(t)
+	checker := &fakeBudgetChecker{decision: quota.Decision{
+		Allowed:         false,
+		Reason:          quota.ReasonMonthlyBudgetExhausted,
+		BudgetCents:     sql.NullInt64{Int64: 37, Valid: true},
+		UsedBudgetCents: 38,
+	}}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	req.Header.Set("Authorization", "Bearer "+key.Token)
+	rec := httptest.NewRecorder()
+
+	newMux(testLogger(), store, checker, unavailableChatHandler()).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusPaymentRequired {
+		t.Fatalf("expected status %d, got %d", http.StatusPaymentRequired, rec.Code)
+	}
+	if checker.calls != 1 {
+		t.Fatalf("expected quota checker call, got %d", checker.calls)
+	}
+	var body errorEnvelope
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if body.Error.Type != "quota_exceeded" || body.Error.Code != "monthly_budget_exhausted" {
+		t.Fatalf("unexpected error envelope: %#v", body)
+	}
+	if bytes.Contains(rec.Body.Bytes(), []byte("37")) || bytes.Contains(rec.Body.Bytes(), []byte("38")) {
+		t.Fatalf("quota response leaked budget details: %s", rec.Body.String())
+	}
+}
+
+func TestChatCompletionsQuotaCheckErrorFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	key, store := validGatewayKey(t)
+	checker := &fakeBudgetChecker{err: context.Canceled}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	req.Header.Set("Authorization", "Bearer "+key.Token)
+	rec := httptest.NewRecorder()
+
+	newMux(testLogger(), store, checker, unavailableChatHandler()).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, rec.Code)
+	}
+	var body errorEnvelope
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if body.Error.Code != "quota_check_failed" {
 		t.Fatalf("unexpected error envelope: %#v", body)
 	}
 }
@@ -163,4 +223,18 @@ func (s fakeGatewayStore) LookupVirtualKey(context.Context, string) (auth.Virtua
 		return auth.VirtualKeyRecord{}, s.err
 	}
 	return s.record, nil
+}
+
+type fakeBudgetChecker struct {
+	decision quota.Decision
+	err      error
+	calls    int
+}
+
+func (c *fakeBudgetChecker) Check(context.Context, auth.Subject, time.Time) (quota.Decision, error) {
+	c.calls++
+	if c.err != nil {
+		return quota.Decision{}, c.err
+	}
+	return c.decision, nil
 }
