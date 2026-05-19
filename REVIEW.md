@@ -80,3 +80,38 @@
 **📌 提醒（非缺陷，与代码质量无关）**: Codex 在 chat Result 里写了"race blocked by missing gcc"。`a6d1d09` 是 19:44 提交，**早于 AGENTS.md §3.3a 第 5 条新增（禁汇报 missing gcc / -race blocked，race 统一 Docker/CI 兜底）**，所以这次不算违规。**下一轮拉新任务前请重读 §3.3a + §3.3 + §7 一次**，T-042 / T-MK-RACE 实施 Result 里不要再出现这类措辞。`-race` 红时才汇报，绿与 N/A 都不必提。
 
 **M-20 / M-21 处理建议**: 不开独立任务（避免任务卡爆），并入 **T-042 Codex 适配** 时一起改 —— 那时也要写 `~/.codex/config.toml`，文件写入与备份的 helper 大概率会抽出来，原子写 + indent 保形可以在抽 helper 时一并修。Codex 在 T-042 commit message 里 `refs T-041` + 简述 fix 即可，**不要**单独开一条 fix-only commit。
+
+---
+
+## R-MK-RACE (T-MK-RACE Makefile race 移入 Docker, commit `a44f27a`)
+
+**结论: `[+] Approved with 1 NIT`** — 5/5 接受标准满足；新政策的"chat 里不再提 missing gcc"也立刻生效（commit message 干净，TASKS Result 段没出现禁言措辞）。
+
+**正面信号**:
+1. ✅ `golang:1.25` 而不是我说的 `1.23` —— Codex catch 了我的 stale memory（CI / Dockerfile.* / go.mod 现都在 1.25，详见 R-INT 第 3 条）；这是 Codex 主动核对 ground truth 的正面信号，不照搬 spec。
+2. ✅ named volume `omnitoken-go-mod` + `omnitoken-go-build` 挂 `/go/pkg/mod` + `/root/.cache/go-build`，**不污染工作树** —— AGENTS.md §3.3 末条目要求落到位。
+3. ✅ `.PHONY` 列表、`make help` 文案、`make test` / `make test-race` 双 target 一次性同步，没留半成品。
+4. ✅ CI workflow 没动 —— 符合"不在范围"清单。
+
+**N-5 (NIT)** `cmd/migrate/main.go:237-249` 引入 `slashPath` 替 `filepath.ToSlash` —— 解释是"让同一 suite 在 Linux 容器跑通"，但 `filepath.ToSlash` 在 Linux 上对纯 Linux 路径是 no-op，只有混入 `\\` 字符串时新增的 `strings.ReplaceAll` 才生效。可能是 testdata fixture 或 env 注入路径携带反斜杠。下次 commit message 或测试注释里点一句"哪条 migrate 测试在 Linux 容器吃了 `\\`"，便于以后维护。**不阻塞**，逻辑正确。
+
+**T-MK-RACE 验证**: 我没有 Docker daemon 没真跑 `make test-race`，信 Codex 的 "all green"；下次 CI 触发时若 race job 红则反向追查。
+
+---
+
+## R-042-prop (T-042 PROPOSAL, commit `34ea18f`)
+
+**结论: `[+] Approved`** — 3 决策全部对齐我在 T-042 任务体里给的推荐方向。1 Q 实施时必须验证，1 N 落实施 Result 即可。**Codex 可开 T-042 实施**。
+
+**正面信号**:
+1. ✅ Decision 1 选 line-based 最小 patcher 而非引 `pelletier/go-toml/v2` —— 完全对齐"管已知白名单、保其他字节"的 T-041 哲学，省一条依赖 propose、避免 license ledger 改动。
+2. ✅ Decision 1 给了 4 条 fail-fast scanner 规则（unterminated string / malformed header / duplicate managed key / 非 string-bool 值）+ "替换整个 `[model_providers.omnitoken]` table body 但不动其他 provider table"的清晰边界 —— 是真做过 design 不是糊弄。
+3. ✅ Decision 2 把 secret 与 routing 分两文件落（`auth.json` 只放 `OPENAI_API_KEY`，`config.toml` 放路由/auth mode）—— 与 Codex 官方文档以及 §十一 第 6 条"凭据不落代码"一致。
+4. ✅ Decision 3 显式拒绝现在抽 `Registry` / `AgentConfig`，只抽 `writeAtomic` + JSON merge + 备份 helper —— AGENTS.md §3.1 "三处重复再抽象" 信达雅。`writeAtomic` 用 sibling temp + `fsync` best-effort + rename，正是 R-041 M-21 的标准修法。
+5. ✅ `/v1` 后缀解释主动写出来 —— "OmniToken 现在暴露 OpenAI-compat `/v1/models` 和 `/v1/chat/completions`"，给 T-045 时换 Anthropic-format 留好接口。
+
+**Q-1（实施前必须明确）**: Decision 1 "line-based scanner + duplicate managed key 检测" 的精确边界。具体三个 case 请在 implementation Result 里说明处理：① `[foo]\nmodel = "x"`（managed key 出现在非 OmniToken 子 table），scanner 是否会误判为 top-level duplicate？② multi-line string 值 `key = """\n...\n"""` 是否被 "unterminated string" 误报？③ inline-table 写法 `model_providers = { omnitoken = { ... } }` —— 拒绝 / 重写 / 保留？建议 ③ 直接 fail-fast 报 "unsupported config style, run restore first"，员工层不会写这种。
+
+**N-6 (NIT)**: Decision 2 的 `cli_auth_credentials_store = "file"` 覆盖政策。如果员工原来手工设了 `system`（OS keychain），OmniToken 强写为 `file` 是合理但**突然**的安全行为变更。建议 CLI stdout 在写之前一行 WARN："cli_auth_credentials_store: <old> → file (OmniToken-managed)"。同理 `requires_openai_auth = true` 如果不是 Codex 默认值也值得提一句。
+
+**Codex 可开 T-042 实施**。Q-1 答在实施 commit Result 里，N-6 落 stdout WARN 即可。

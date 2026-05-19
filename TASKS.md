@@ -18,6 +18,8 @@
 | 05-19 | **AGENTS.md §3.3a/§3.3/§7 收紧**: `-race` 统一 Docker/CI 跑；Windows 缺 gcc 是预期，禁汇报。配套 T-MK-RACE |
 | 05-19 | **R-041 approve** (5+/2M/2N + gcc 规则提醒)。`a6d1d09` agent_adapter 81.9%；M-20/M-21 (env 单行 + 非原子写) 不阻塞 v1，并入 T-042 修 |
 | 05-19 | **Codex 下一步队列**: T-MK-RACE (infra, <1h) → T-042 Codex 适配 (含 M-20/M-21 修 + helper 抽出, propose 前置=是) |
+| 05-19 | **R-MK-RACE approve** (4+/1N)。`a44f27a` golang:1.25 + named volumes + cmd/migrate slashPath。new race policy 立刻生效（Result 无 gcc 措辞） |
+| 05-19 | **R-042-prop approve** (5+/1Q/1N)。`34ea18f` 决策 1/2/3 全采纳推荐方向；Codex 可开 T-042 实施 |
 
 ---
 
@@ -202,7 +204,7 @@ N-1 compact UTC `20060102T150405.000000000Z`; N-2 invalid existing config exits 
 
 ---
 
-## T-MK-RACE Makefile: race 验证移入 Docker [phase:infra] [owner:codex] [status:review]
+## T-MK-RACE Makefile: race 验证移入 Docker [phase:infra] [owner:codex] [status:done]
 
 Started: 2026-05-19 20:11 +08:00
 
