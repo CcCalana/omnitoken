@@ -22,7 +22,10 @@ import (
 	"github.com/omnitoken/omnitoken/internal/auth"
 	"github.com/omnitoken/omnitoken/internal/config"
 	"github.com/omnitoken/omnitoken/internal/httpx"
+	usageanomaly "github.com/omnitoken/omnitoken/internal/usage/anomaly"
 )
+
+const keyAnomalyThresholdEnv = "OMNITOKEN_ADMIN_KEY_ANOMALY_RPM_5M"
 
 type healthResponse struct {
 	Status  string `json:"status"`
@@ -171,6 +174,9 @@ func main() {
 	creator := newVirtualKeyCreator(logger, cfg, db)
 	overview := newOverviewStore(db)
 	auditRecorder := newAuditRecorder(logger, db)
+	runCtx, stopBackground := context.WithCancel(context.Background())
+	defer stopBackground()
+	startKeyAnomalyMonitor(runCtx, logger, db)
 
 	server := &http.Server{
 		Addr:              cfg.Admin.Addr,
@@ -179,7 +185,7 @@ func main() {
 	}
 
 	logger.Info("admin listening", "addr", cfg.Admin.Addr)
-	if err := httpx.Run(context.Background(), server); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := httpx.Run(runCtx, server); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("admin stopped", "error", err)
 		os.Exit(1)
 	}
@@ -215,6 +221,37 @@ func newAuditRecorder(logger *slog.Logger, db *sql.DB) audit.Recorder {
 		return audit.NewRecorder(nil, logger)
 	}
 	return audit.NewRecorder(audit.NewPostgresStore(db), logger)
+}
+
+func startKeyAnomalyMonitor(ctx context.Context, logger *slog.Logger, db *sql.DB) {
+	if db == nil {
+		return
+	}
+	monitor := usageanomaly.NewMonitor(
+		usageanomaly.NewPostgresStore(db),
+		usageanomaly.Config{
+			Threshold: keyAnomalyThreshold(logger),
+			Logger:    logger,
+		},
+	)
+	monitor.Start(ctx)
+}
+
+func keyAnomalyThreshold(logger *slog.Logger) int {
+	raw := strings.TrimSpace(os.Getenv(keyAnomalyThresholdEnv))
+	if raw == "" {
+		return usageanomaly.DefaultThreshold
+	}
+	threshold, err := strconv.Atoi(raw)
+	if err != nil || threshold <= 0 {
+		logger.Warn("invalid key anomaly threshold",
+			"env", keyAnomalyThresholdEnv,
+			"value", raw,
+			"default", usageanomaly.DefaultThreshold,
+		)
+		return usageanomaly.DefaultThreshold
+	}
+	return threshold
 }
 
 func newVirtualKeyCreator(logger *slog.Logger, cfg config.Config, db *sql.DB) virtualKeyCreator {

@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/omnitoken/omnitoken/internal/audit"
 	"github.com/omnitoken/omnitoken/internal/config"
+	usageanomaly "github.com/omnitoken/omnitoken/internal/usage/anomaly"
 )
 
 func TestHealthz(t *testing.T) {
@@ -475,6 +476,21 @@ func TestAuditLogsHandlerRejectsInvalidFilters(t *testing.T) {
 		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
 	}
 	assertErrorCode(t, rec, "invalid_audit_log_filters")
+}
+
+func TestAuditLogsStoreErrorReturns500(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeOverviewStore{auditLogsErr: errors.New("database unavailable")}
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/audit-logs", nil)
+	rec := httptest.NewRecorder()
+
+	makeAuditLogsHandler(testLogger(), store).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, rec.Code)
+	}
+	assertErrorCode(t, rec, "audit_logs_query_failed")
 }
 
 func TestPostgresOverviewStoreLoadOverviewMapsSQLResults(t *testing.T) {
@@ -1050,6 +1066,44 @@ func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, want string) 
 
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func TestKeyAnomalyThresholdEnvOverride(t *testing.T) {
+	t.Setenv(keyAnomalyThresholdEnv, "42")
+
+	if got := keyAnomalyThreshold(testLogger()); got != 42 {
+		t.Fatalf("expected env threshold 42, got %d", got)
+	}
+}
+
+func TestKeyAnomalyThresholdDefault(t *testing.T) {
+	t.Setenv(keyAnomalyThresholdEnv, "")
+
+	if got := keyAnomalyThreshold(testLogger()); got != usageanomaly.DefaultThreshold {
+		t.Fatalf("expected default threshold %d, got %d", usageanomaly.DefaultThreshold, got)
+	}
+}
+
+func TestKeyAnomalyThresholdInvalidEnvFallsBack(t *testing.T) {
+	t.Setenv(keyAnomalyThresholdEnv, "0")
+
+	if got := keyAnomalyThreshold(testLogger()); got != usageanomaly.DefaultThreshold {
+		t.Fatalf("expected default threshold %d, got %d", usageanomaly.DefaultThreshold, got)
+	}
+}
+
+func TestKeyAnomalyThresholdInvalidStringFallsBack(t *testing.T) {
+	t.Setenv(keyAnomalyThresholdEnv, "abc")
+
+	if got := keyAnomalyThreshold(testLogger()); got != usageanomaly.DefaultThreshold {
+		t.Fatalf("expected default threshold %d, got %d", usageanomaly.DefaultThreshold, got)
+	}
+}
+
+func TestStartKeyAnomalyMonitorNoopsWithoutDB(t *testing.T) {
+	t.Parallel()
+
+	startKeyAnomalyMonitor(context.Background(), testLogger(), nil)
 }
 
 func mapValues(values map[string]string) []string {
