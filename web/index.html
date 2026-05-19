@@ -11,7 +11,9 @@
   <script defer src="./src/views/overview.js"></script>
   <script defer src="./src/views/users.js"></script>
   <script defer src="./src/views/models.js"></script>
+  <script defer src="./src/views/virtual_models.js"></script>
   <script defer src="./src/views/audit.js"></script>
+  <script defer src="./src/views/login.js"></script>
   <script defer src="./src/app.js"></script>
 </head>
 <body>
@@ -37,6 +39,10 @@
         <span class="nav-icon" aria-hidden="true">■</span>
         <span>模型调用分析</span>
       </button>
+      <button class="nav-link" type="button" data-tab="virtualModels">
+        <span class="nav-icon" aria-hidden="true">▤</span>
+        <span>虚拟模型映射</span>
+      </button>
       <button class="nav-link" type="button" data-tab="audit">
         <span class="nav-icon" aria-hidden="true">◇</span>
         <span>审计日志</span>
@@ -58,8 +64,29 @@
       <div class="topbar-actions">
         <span class="period-chip">账期 <strong id="current-period">--</strong></span>
         <button id="refresh-button" class="secondary-button" type="button">刷新</button>
+        <button id="logout-button" class="ghost-button" type="button">退出</button>
       </div>
     </header>
+
+    <section id="view-login" class="view">
+      <article class="panel" style="max-width: 400px; margin: 40px auto;">
+        <div class="panel-header">
+          <h2>管理员登录</h2>
+        </div>
+        <div id="login-alert" class="alert is-hidden"></div>
+        <form id="login-form" style="display: flex; flex-direction: column; gap: 16px;">
+          <label>
+            <span>邮箱</span>
+            <input id="login-email" type="email" placeholder="admin@democorp.local" required style="width: 100%; margin-top: 4px;">
+          </label>
+          <label>
+            <span>密码</span>
+            <input id="login-password" type="password" required style="width: 100%; margin-top: 4px;">
+          </label>
+          <button type="submit" class="primary-button" style="margin-top: 8px;">登录</button>
+        </form>
+      </article>
+    </section>
 
     <section id="view-overview" class="view is-active">
       <div id="overview-alert" class="alert is-hidden"></div>
@@ -166,6 +193,32 @@
           <div id="model-aggregate">等待模型用量数据</div>
         </article>
       </div>
+    </section>
+
+    <section id="view-virtualModels" class="view">
+      <div class="view-intro">
+        <p>虚拟模型映射来自网关解析器，改变此处请调整数据库或 seed 数据。</p>
+        <button class="secondary-button" type="button" data-action="reload-virtual-models">刷新映射</button>
+      </div>
+      <div id="virtual-models-alert" class="alert is-hidden"></div>
+
+      <article class="panel table-panel">
+        <div class="table-wrap">
+          <table class="audit-table">
+            <thead>
+              <tr>
+                <th>虚拟模型 (Virtual)</th>
+                <th>真实模型 (Real)</th>
+                <th>状态</th>
+                <th>描述</th>
+              </tr>
+            </thead>
+            <tbody id="virtual-models-table-body">
+              <tr><td colspan="4" class="table-state">等待加载</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
     </section>
 
     <section id="view-audit" class="view">

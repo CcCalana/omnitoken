@@ -107,3 +107,23 @@ WHERE users.organization_id = '00000000-0000-0000-0000-000000000001'
     'user10@democorp.local'
   )
 ON CONFLICT (organization_id, user_id, role_id) DO NOTHING;
+
+INSERT INTO virtual_models (name, real_model, status, description)
+VALUES
+  ('chat-fast', 'kimi-k2.6', 'active', 'Fast routing mapped to kimi-k2.6'),
+  ('chat-balanced', 'glm-5.1', 'active', 'Balanced routing mapped to glm-5.1'),
+  ('chat-quality', 'deepseek-v3.2', 'active', 'Quality routing mapped to deepseek-v3.2'),
+  ('chat-code', 'doubao-seed-code', 'active', 'Coding specialized routing mapped to doubao-seed-code'),
+  ('chat-experimental', 'minimax-m2.7', 'active', 'Experimental routing mapped to minimax-m2.7')
+ON CONFLICT (name) DO UPDATE
+SET
+  real_model = excluded.real_model,
+  status = excluded.status,
+  description = excluded.description,
+  updated_at = now();
+
+-- Set password for admin@democorp.local to 'password' (bcrypt cost 10)
+UPDATE users
+SET password_hash = '$2a$10$vI8aWBnW3fID.ZQ4/zo1G.q1lRps.9cGLcZEiGDMVr5yUP1KUOYTa',
+    updated_at = now()
+WHERE email = 'admin@democorp.local';

@@ -44,11 +44,19 @@ function createAdminAPI(baseURL = resolveAdminBaseURL()) {
     getOverview: () => fetchJSON(`${base}/api/admin/overview`),
     getUsers: () => fetchJSON(`${base}/api/admin/users`),
     getModels: () => fetchJSON(`${base}/api/admin/models`),
+    getVirtualModels: () => fetchJSON(`${base}/api/admin/virtual-models`),
     getAuditLogs: (filters = {}) => fetchJSON(`${base}/api/admin/audit-logs${toQueryString(filters)}`),
     updateUserQuota: (userID, budgetCents) => fetchJSON(`${base}/api/admin/users/${encodeURIComponent(userID)}/quota`, {
       method: "PATCH",
       body: JSON.stringify({ budget_cents: budgetCents }),
     }),
+    logout: async () => {
+      try {
+        await fetchJSON(`${base}/api/admin/logout`, { method: "POST" });
+      } catch (_) {}
+      localStorage.removeItem("omnitokenAdminToken");
+      window.location.reload();
+    },
   };
 }
 
@@ -67,8 +75,15 @@ function toQueryString(filters) {
 async function fetchJSON(url, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+  // Dev-only token injection until T-005b ships real login.
+  // Set via: localStorage.setItem("omnitokenAdminToken", "<bootstrap>") or ?token=<bootstrap>
+  const devToken =
+    (typeof localStorage !== "undefined" && localStorage.getItem("omnitokenAdminToken")) ||
+    new URLSearchParams(window.location.search).get("token") ||
+    "";
   const headers = {
     Accept: "application/json",
+    ...(devToken ? { Authorization: `Bearer ${devToken}` } : {}),
     ...(options.body ? { "Content-Type": "application/json" } : {}),
     ...(options.headers || {}),
   };
@@ -80,12 +95,19 @@ async function fetchJSON(url, options = {}) {
       signal: controller.signal,
     });
 
-    if (!response.ok) {
+      if (!response.ok) {
       let code = `HTTP ${response.status}`;
       try {
         const body = await response.json();
         code = body?.error?.code || code;
       } catch (_) {}
+      
+      if (response.status === 401 && !url.endsWith("/login")) {
+        // Clear token and reload to trigger login view
+        localStorage.removeItem("omnitokenAdminToken");
+        window.dispatchEvent(new Event('omnitoken:unauthorized'));
+      }
+      
       throw new APIError(code, response.status, code);
     }
 

@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 	_ "github.com/lib/pq"
+	"golang.org/x/crypto/bcrypt"
 	"github.com/omnitoken/omnitoken/internal/audit"
 	"github.com/omnitoken/omnitoken/internal/auth"
 	"github.com/omnitoken/omnitoken/internal/config"
@@ -78,6 +79,17 @@ type modelsResponse struct {
 	Models []adminModelUsage `json:"models"`
 }
 
+type virtualModelsResponse struct {
+	VirtualModels []adminVirtualModel `json:"virtual_models"`
+}
+
+type adminVirtualModel struct {
+	Name        string `json:"name"`
+	RealModel   string `json:"real_model"`
+	Status      string `json:"status"`
+	Description string `json:"description"`
+}
+
 type adminModelUsage struct {
 	Model            string  `json:"model"`
 	Provider         string  `json:"provider"`
@@ -129,6 +141,15 @@ type createVirtualKeyResponse struct {
 	CreatedAt      string `json:"created_at"`
 }
 
+type loginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+type loginResponse struct {
+	Token string `json:"token"`
+}
+
 type updateUserQuotaResponse struct {
 	UserID      string `json:"user_id"`
 	BudgetCents *int64 `json:"budget_cents"`
@@ -165,6 +186,8 @@ type overviewStore interface {
 	LoadModels(context.Context, time.Time) (modelsResponse, error)
 	LoadAuditLogs(context.Context, auditLogFilters) ([]adminAuditLog, error)
 	UpdateUserBudget(context.Context, uuid.UUID, *int64, time.Time) (updateUserBudgetResult, error)
+	LoadVirtualModels(context.Context) (virtualModelsResponse, error)
+	Authenticate(ctx context.Context, email, password string) (uuid.UUID, uuid.UUID, error)
 }
 
 type postgresVirtualKeyCreator struct {
@@ -194,9 +217,11 @@ func main() {
 	defer stopBackground()
 	startKeyAnomalyMonitor(runCtx, logger, db)
 
+	sessionStore := auth.NewSessionStore(24 * time.Hour)
+
 	server := &http.Server{
 		Addr:              cfg.Admin.Addr,
-		Handler:           newMux(logger, cfg.Admin, overview, creator, auditRecorder),
+		Handler:           newMux(logger, cfg.Admin, overview, creator, sessionStore, auditRecorder),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -283,26 +308,57 @@ func newVirtualKeyCreator(logger *slog.Logger, cfg config.Config, db *sql.DB) vi
 	return &postgresVirtualKeyCreator{db: db, random: nil, now: time.Now}
 }
 
-func newMux(logger *slog.Logger, cfg config.AdminConfig, overview overviewStore, creator virtualKeyCreator, auditRecorders ...audit.Recorder) http.Handler {
+func newMux(logger *slog.Logger, cfg config.AdminConfig, overview overviewStore, creator virtualKeyCreator, sessionStore *auth.SessionStore, auditRecorders ...audit.Recorder) http.Handler {
 	mux := http.NewServeMux()
-	adminAuth := adminAuthMiddleware(cfg.BootstrapToken)
+	
+	// Legacy dev-only bootstrap token authentication
+	adminAuthBootstrap := adminAuthMiddleware(cfg.BootstrapToken)
+	
+	// New robust session-based authentication
+	adminAuthSession := adminSessionMiddleware(sessionStore)
+	
 	var auditRecorder audit.Recorder
 	if len(auditRecorders) > 0 {
 		auditRecorder = auditRecorders[0]
 	}
 	adminAudit := audit.Middleware(auditRecorder, audit.MiddlewareConfig{
-		ActorResolver: audit.BootstrapActorResolver,
+		ActorResolver: func(r *http.Request) audit.Actor {
+			if subject, ok := auth.SubjectFromContext(r.Context()); ok {
+				return audit.Actor{
+					ID:   subject.UserID.String(),
+					Type: "user",
+				}
+			}
+			if cfg.BootstrapToken != "" && authorizedBootstrap(r, cfg.BootstrapToken) {
+				return audit.BootstrapActorResolver(r)
+			}
+			return audit.Actor{
+				ID:   "anonymous",
+				Type: "anonymous",
+			}
+		},
 		Logger:        logger,
 	})
+	
 	protectedWrite := func(handler http.Handler) http.Handler {
-		return adminAuth(adminAudit(handler))
+		// Try session auth first, fallback to bootstrap (for tests/dev)
+		return authChain(adminAuthSession, adminAuthBootstrap)(adminAudit(handler))
+	}
+	
+	protectedRead := func(handler http.Handler) http.Handler {
+		return authChain(adminAuthSession, adminAuthBootstrap)(handler)
 	}
 
 	mux.HandleFunc("GET /healthz", handleHealthz)
-	mux.Handle("GET /api/admin/overview", adminAuth(http.HandlerFunc(makeOverviewHandler(logger, overview, time.Now))))
-	mux.Handle("GET /api/admin/users", adminAuth(http.HandlerFunc(makeUsersHandler(logger, overview, time.Now))))
-	mux.Handle("GET /api/admin/models", adminAuth(http.HandlerFunc(makeModelsHandler(logger, overview, time.Now))))
-	mux.Handle("GET /api/admin/audit-logs", adminAuth(http.HandlerFunc(makeAuditLogsHandler(logger, overview))))
+	mux.Handle("POST /api/admin/login", http.HandlerFunc(makeLoginHandler(logger, overview, sessionStore)))
+	mux.Handle("POST /api/admin/logout", protectedRead(http.HandlerFunc(makeLogoutHandler(sessionStore))))
+	mux.Handle("GET /api/admin/me", protectedRead(http.HandlerFunc(makeMeHandler())))
+	
+	mux.Handle("GET /api/admin/overview", protectedRead(http.HandlerFunc(makeOverviewHandler(logger, overview, time.Now))))
+	mux.Handle("GET /api/admin/users", protectedRead(http.HandlerFunc(makeUsersHandler(logger, overview, time.Now))))
+	mux.Handle("GET /api/admin/models", protectedRead(http.HandlerFunc(makeModelsHandler(logger, overview, time.Now))))
+	mux.Handle("GET /api/admin/virtual-models", protectedRead(http.HandlerFunc(makeVirtualModelsHandler(logger, overview))))
+	mux.Handle("GET /api/admin/audit-logs", protectedRead(http.HandlerFunc(makeAuditLogsHandler(logger, overview))))
 	mux.Handle("PATCH /api/admin/users/{id}/quota", protectedWrite(http.HandlerFunc(makeUpdateUserQuotaHandler(logger, overview))))
 	if cfg.BootstrapToken != "" && creator != nil {
 		// Demo-Ready 简化版: this admin-port-only endpoint lives on
@@ -381,6 +437,24 @@ func makeModelsHandler(logger *slog.Logger, store overviewStore, now func() time
 		if err != nil {
 			logger.Error("load admin models", "error", err)
 			httpx.WriteJSON(w, http.StatusInternalServerError, errorEnvelope("failed to load models", "server_error", "models_query_failed"))
+			return
+		}
+
+		httpx.WriteJSON(w, http.StatusOK, models)
+	}
+}
+
+func makeVirtualModelsHandler(logger *slog.Logger, store overviewStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if store == nil {
+			httpx.WriteJSON(w, http.StatusOK, virtualModelsResponse{VirtualModels: []adminVirtualModel{}})
+			return
+		}
+
+		models, err := store.LoadVirtualModels(r.Context())
+		if err != nil {
+			logger.Error("load virtual models", "error", err)
+			httpx.WriteJSON(w, http.StatusInternalServerError, errorEnvelope("failed to load virtual models", "server_error", "virtual_models_query_failed"))
 			return
 		}
 
@@ -737,6 +811,65 @@ ORDER BY total_tokens DESC, model ASC`
 	return response, nil
 }
 
+func (s *postgresOverviewStore) Authenticate(ctx context.Context, email, password string) (uuid.UUID, uuid.UUID, error) {
+	const query = `
+SELECT u.id, u.organization_id, u.password_hash, u.status
+FROM users u
+JOIN role_assignments ra ON ra.user_id = u.id
+JOIN roles r ON r.id = ra.role_id
+WHERE u.email = $1 AND r.canonical_name = 'admin'`
+
+	var userID, orgID uuid.UUID
+	var hash sql.NullString
+	var status string
+	if err := s.db.QueryRowContext(ctx, query, email).Scan(&userID, &orgID, &hash, &status); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return uuid.Nil, uuid.Nil, errors.New("invalid credentials")
+		}
+		return uuid.Nil, uuid.Nil, fmt.Errorf("query admin user: %w", err)
+	}
+
+	if status != "active" {
+		return uuid.Nil, uuid.Nil, errors.New("user disabled")
+	}
+
+	if !hash.Valid {
+		return uuid.Nil, uuid.Nil, errors.New("invalid credentials")
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(hash.String), []byte(password)); err != nil {
+		return uuid.Nil, uuid.Nil, errors.New("invalid credentials")
+	}
+
+	return userID, orgID, nil
+}
+
+func (s *postgresOverviewStore) LoadVirtualModels(ctx context.Context) (virtualModelsResponse, error) {
+	const query = `
+SELECT name, real_model, status, COALESCE(description, '') as description
+FROM virtual_models
+ORDER BY name ASC`
+
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return virtualModelsResponse{}, fmt.Errorf("query virtual models: %w", err)
+	}
+	defer rows.Close()
+
+	response := virtualModelsResponse{VirtualModels: []adminVirtualModel{}}
+	for rows.Next() {
+		var item adminVirtualModel
+		if err := rows.Scan(&item.Name, &item.RealModel, &item.Status, &item.Description); err != nil {
+			return virtualModelsResponse{}, fmt.Errorf("scan virtual models: %w", err)
+		}
+		response.VirtualModels = append(response.VirtualModels, item)
+	}
+	if err := rows.Err(); err != nil {
+		return virtualModelsResponse{}, fmt.Errorf("iterate virtual models: %w", err)
+	}
+	return response, nil
+}
+
 func (s *postgresOverviewStore) LoadAuditLogs(ctx context.Context, filters auditLogFilters) ([]adminAuditLog, error) {
 	if filters.Limit <= 0 {
 		filters.Limit = 100
@@ -1005,6 +1138,165 @@ func adminAuthMiddleware(bootstrapToken string) func(http.Handler) http.Handler 
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+type authResponseWriter struct {
+	http.ResponseWriter
+	unauthorized bool
+	wroteHeader  bool
+}
+
+func (w *authResponseWriter) WriteHeader(code int) {
+	if code == http.StatusUnauthorized {
+		w.unauthorized = true
+		return
+	}
+	w.wroteHeader = true
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *authResponseWriter) Write(b []byte) (int, error) {
+	if w.unauthorized {
+		return len(b), nil
+	}
+	if !w.wroteHeader {
+		w.wroteHeader = true
+		w.ResponseWriter.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(b)
+}
+
+func authChain(primary, fallback func(http.Handler) http.Handler) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			pw := &authResponseWriter{ResponseWriter: w}
+			
+			passed := false
+			primaryHandler := primary(http.HandlerFunc(func(innerW http.ResponseWriter, innerR *http.Request) {
+				passed = true
+				next.ServeHTTP(w, innerR)
+			}))
+			
+			primaryHandler.ServeHTTP(pw, r)
+			
+			if !passed && pw.unauthorized {
+				fallback(next).ServeHTTP(w, r)
+			}
+		})
+	}
+}
+
+func adminSessionMiddleware(store *auth.SessionStore) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if store == nil {
+				writeUnauthorized(w)
+				return
+			}
+			token := extractBearerToken(r)
+			if token == "" {
+				writeUnauthorized(w)
+				return
+			}
+			session, ok := store.Validate(token)
+			if !ok {
+				writeUnauthorized(w)
+				return
+			}
+			ctx := auth.WithSubject(r.Context(), auth.Subject{
+				UserID: session.UserID,
+				OrgID:  session.OrgID,
+			})
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+func makeLoginHandler(logger *slog.Logger, store overviewStore, sessionStore *auth.SessionStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if sessionStore == nil {
+			httpx.WriteJSON(w, http.StatusServiceUnavailable, errorEnvelope("admin session store not configured", "server_error", "session_store_not_configured"))
+			return
+		}
+		var req loginRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			httpx.WriteJSON(w, http.StatusBadRequest, errorEnvelope("invalid request", "invalid_request", "invalid_json"))
+			return
+		}
+
+		if req.Email == "" || req.Password == "" {
+			httpx.WriteJSON(w, http.StatusBadRequest, errorEnvelope("email and password required", "invalid_request", "missing_credentials"))
+			return
+		}
+
+		userID, orgID, err := store.Authenticate(r.Context(), req.Email, req.Password)
+		if err != nil {
+			// Record failed login audit log
+			audit.SetAction(r.Context(), "login_failed")
+			audit.SetAfter(r.Context(), map[string]string{"email": req.Email, "reason": err.Error()})
+			logger.Warn("admin login failed", "email", req.Email, "error", err)
+			
+			if err.Error() == "invalid credentials" {
+				httpx.WriteJSON(w, http.StatusUnauthorized, errorEnvelope("invalid credentials", "authentication_error", "invalid_credentials"))
+			} else if err.Error() == "user disabled" {
+				httpx.WriteJSON(w, http.StatusForbidden, errorEnvelope("user disabled", "authentication_error", "user_disabled"))
+			} else {
+				httpx.WriteJSON(w, http.StatusInternalServerError, errorEnvelope("internal error", "server_error", "internal_error"))
+			}
+			return
+		}
+
+		token, err := sessionStore.Create(userID, orgID)
+		if err != nil {
+			logger.Error("create session failed", "error", err)
+			httpx.WriteJSON(w, http.StatusInternalServerError, errorEnvelope("internal error", "server_error", "internal_error"))
+			return
+		}
+
+		// Record successful login audit log
+		audit.SetAction(r.Context(), "login")
+		audit.SetAfter(r.Context(), map[string]string{"user_id": userID.String()})
+		logger.Info("admin login success", "user_id", userID.String(), "email", req.Email)
+
+		httpx.WriteJSON(w, http.StatusOK, loginResponse{Token: token})
+	}
+}
+
+func makeLogoutHandler(sessionStore *auth.SessionStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if sessionStore == nil {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		token := extractBearerToken(r)
+		if token != "" {
+			sessionStore.Revoke(token)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func makeMeHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		subject, ok := auth.SubjectFromContext(r.Context())
+		if !ok {
+			writeUnauthorized(w)
+			return
+		}
+		httpx.WriteJSON(w, http.StatusOK, map[string]string{
+			"user_id": subject.UserID.String(),
+			"role":    "admin", // Implicit since only admins can login here
+		})
+	}
+}
+
+func extractBearerToken(r *http.Request) string {
+	header := strings.TrimSpace(r.Header.Get("Authorization"))
+	token, ok := strings.CutPrefix(header, "Bearer ")
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(token)
 }
 
 func authorizedBootstrap(r *http.Request, bootstrapToken string) bool {

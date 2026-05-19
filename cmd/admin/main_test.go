@@ -28,7 +28,7 @@ func TestHealthz(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()
 
-	newMux(testLogger(), testAdminConfig(), nil, nil).ServeHTTP(rec, req)
+	newMux(testLogger(), testAdminConfig(), nil, nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
@@ -62,7 +62,7 @@ func TestAdminReadRoutesRequireBootstrapToken(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, path, nil)
 			rec := httptest.NewRecorder()
 
-			newMux(testLogger(), cfg, nil, nil).ServeHTTP(rec, req)
+			newMux(testLogger(), cfg, nil, nil, nil).ServeHTTP(rec, req)
 
 			if rec.Code != http.StatusUnauthorized {
 				t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
@@ -123,7 +123,7 @@ func TestAdminAuthMiddlewareTokenCases(t *testing.T) {
 			}
 			rec := httptest.NewRecorder()
 
-			newMux(testLogger(), cfg, nil, nil).ServeHTTP(rec, req)
+			newMux(testLogger(), cfg, nil, nil, nil).ServeHTTP(rec, req)
 
 			if rec.Code != tt.wantStatus {
 				t.Fatalf("expected status %d, got %d body=%s", tt.wantStatus, rec.Code, rec.Body.String())
@@ -241,7 +241,7 @@ func TestUsersFallsBackToEmptyWithoutStore(t *testing.T) {
 
 	cfg := testAdminConfig()
 	cfg.BootstrapToken = "dev-bootstrap"
-	newMux(testLogger(), cfg, nil, nil).ServeHTTP(rec, req)
+	newMux(testLogger(), cfg, nil, nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
@@ -332,7 +332,7 @@ func TestUpdateUserQuotaCreatesAuditRecord(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer dev-bootstrap")
 	rec := httptest.NewRecorder()
 
-	newMux(testLogger(), cfg, store, nil, recorder).ServeHTTP(rec, req)
+	newMux(testLogger(), cfg, store, nil, nil, recorder).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
@@ -379,7 +379,7 @@ func TestUpdateUserQuotaAllowsClearingBudget(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer dev-bootstrap")
 	rec := httptest.NewRecorder()
 
-	newMux(testLogger(), cfg, store, nil, audit.NewRecorder(nil, testLogger())).ServeHTTP(rec, req)
+	newMux(testLogger(), cfg, store, nil, nil, audit.NewRecorder(nil, testLogger())).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
@@ -407,7 +407,7 @@ func TestUpdateUserQuotaRejectsInvalidBudget(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer dev-bootstrap")
 	rec := httptest.NewRecorder()
 
-	newMux(testLogger(), cfg, &fakeOverviewStore{}, nil, recorder).ServeHTTP(rec, req)
+	newMux(testLogger(), cfg, &fakeOverviewStore{}, nil, nil, recorder).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
@@ -427,7 +427,7 @@ func TestModelsFallsBackToEmptyWithoutStore(t *testing.T) {
 
 	cfg := testAdminConfig()
 	cfg.BootstrapToken = "dev-bootstrap"
-	newMux(testLogger(), cfg, nil, nil).ServeHTTP(rec, req)
+	newMux(testLogger(), cfg, nil, nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
@@ -506,7 +506,7 @@ func TestAuditLogsReturnsEmptyWithoutStore(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer dev-bootstrap")
 	rec := httptest.NewRecorder()
 
-	newMux(testLogger(), cfg, nil, nil).ServeHTTP(rec, req)
+	newMux(testLogger(), cfg, nil, nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
@@ -544,7 +544,7 @@ func TestAuditLogsHandlerParsesFilters(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer dev-bootstrap")
 	rec := httptest.NewRecorder()
 
-	newMux(testLogger(), cfg, store, nil).ServeHTTP(rec, req)
+	newMux(testLogger(), cfg, store, nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
@@ -1011,7 +1011,7 @@ func TestOverviewCORSPreflight(t *testing.T) {
 	req.Header.Set("Origin", "http://localhost:3000")
 	rec := httptest.NewRecorder()
 
-	newMux(testLogger(), testAdminConfig(), nil, nil).ServeHTTP(rec, req)
+	newMux(testLogger(), testAdminConfig(), nil, nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("expected status %d, got %d", http.StatusNoContent, rec.Code)
@@ -1034,7 +1034,7 @@ func TestOverviewCORSDeniesUnlistedOrigin(t *testing.T) {
 
 	cfg := testAdminConfig()
 	cfg.BootstrapToken = "dev-bootstrap"
-	newMux(testLogger(), cfg, nil, nil).ServeHTTP(rec, req)
+	newMux(testLogger(), cfg, nil, nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
@@ -1053,7 +1053,7 @@ func TestDevVirtualKeyEndpointDisabledWithoutBootstrapToken(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/dev/virtual-keys", nil)
 	rec := httptest.NewRecorder()
 
-	newMux(testLogger(), testAdminConfig(), nil, &fakeVirtualKeyCreator{}).ServeHTTP(rec, req)
+	newMux(testLogger(), testAdminConfig(), nil, &fakeVirtualKeyCreator{}, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected status %d, got %d", http.StatusNotFound, rec.Code)
@@ -1068,7 +1068,7 @@ func TestDevVirtualKeyEndpointRequiresBootstrapToken(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/dev/virtual-keys", strings.NewReader(`{}`))
 	rec := httptest.NewRecorder()
 
-	newMux(testLogger(), cfg, nil, &fakeVirtualKeyCreator{}).ServeHTTP(rec, req)
+	newMux(testLogger(), cfg, nil, &fakeVirtualKeyCreator{}, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
@@ -1105,7 +1105,7 @@ func TestDevVirtualKeyEndpointCreatesKey(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer dev-bootstrap")
 	rec := httptest.NewRecorder()
 
-	newMux(testLogger(), cfg, nil, creator).ServeHTTP(rec, req)
+	newMux(testLogger(), cfg, nil, creator, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected status %d, got %d body=%s", http.StatusCreated, rec.Code, rec.Body.String())
@@ -1150,7 +1150,7 @@ func TestDevVirtualKeyEndpointCreatesAuditRecord(t *testing.T) {
 	req.Header.Set("User-Agent", "admin-test")
 	rec := httptest.NewRecorder()
 
-	newMux(testLogger(), cfg, nil, creator, recorder).ServeHTTP(rec, req)
+	newMux(testLogger(), cfg, nil, creator, nil, recorder).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected status %d, got %d body=%s", http.StatusCreated, rec.Code, rec.Body.String())
@@ -1189,7 +1189,7 @@ func TestDevVirtualKeyUnauthorizedSkipsAudit(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/dev/virtual-keys", strings.NewReader(`{}`))
 	rec := httptest.NewRecorder()
 
-	newMux(testLogger(), cfg, nil, &fakeVirtualKeyCreator{}, recorder).ServeHTTP(rec, req)
+	newMux(testLogger(), cfg, nil, &fakeVirtualKeyCreator{}, nil, recorder).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
@@ -1207,7 +1207,7 @@ func TestDevVirtualKeyInvalidBodyCreatesFailedAuditAttempt(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer dev-bootstrap")
 	rec := httptest.NewRecorder()
 
-	newMux(testLogger(), cfg, nil, &fakeVirtualKeyCreator{}, recorder).ServeHTTP(rec, req)
+	newMux(testLogger(), cfg, nil, &fakeVirtualKeyCreator{}, nil, recorder).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
@@ -1381,6 +1381,14 @@ type fakeOverviewStore struct {
 	updateUserID      uuid.UUID
 	updateBudgetCents *int64
 	updateAt          time.Time
+}
+
+func (f *fakeOverviewStore) Authenticate(ctx context.Context, email, password string) (uuid.UUID, uuid.UUID, error) {
+	return uuid.Nil, uuid.Nil, errors.New("not implemented")
+}
+
+func (f *fakeOverviewStore) LoadVirtualModels(ctx context.Context) (virtualModelsResponse, error) {
+	return virtualModelsResponse{}, errors.New("not implemented")
 }
 
 func (f *fakeOverviewStore) LoadOverview(_ context.Context, now time.Time) (overviewResponse, error) {
