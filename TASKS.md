@@ -326,7 +326,10 @@ Proposal: `docs/proposals/2026-05-20-t043-opencode-adapter.md`
 
 ---
 
-## T-040 抽象层提取（Registry + AgentConfig interface） [phase:3-A] [owner:codex] [status:todo]
+## T-040 抽象层提取（Registry + AgentConfig interface） [phase:3-A] [owner:codex] [status:in-progress]
+
+Started: 2026-05-20 12:33 +08:00
+Proposal: `docs/proposals/2026-05-20-t040-agent-registry.md`
 
 **目标**: 三个具象 adapter（Claude Code / Codex / OpenCode）已就位，凑齐 AGENTS.md §3.1 "三处重复再抽象"门槛。本任务**只做内部抽象提取**，外部行为零变化、CLI 入口零变化、所有现有测试零退化。是 T-044（路由规则联动）和 T-046（一键 onboard 收口）的前置基础。
 
