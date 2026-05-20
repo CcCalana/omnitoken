@@ -279,7 +279,10 @@ Proposal: `docs/proposals/2026-05-19-t042-codex-adapter.md`
 
 ---
 
-## T-043 OpenCode 适配（配置写入） [phase:3-A] [owner:codex] [status:todo]
+## T-043 OpenCode 适配（配置写入） [phase:3-A] [owner:codex] [status:in-progress]
+
+Started: 2026-05-20 09:52 +08:00
+Proposal: `docs/proposals/2026-05-20-t043-opencode-adapter.md`
 
 **目标**: 让企业员工跑 `omnitoken-adopt adopt opencode` 一次，OpenCode IDE 插件之后所有调用都走 OmniToken。**第三个 adapter** —— 落地后即满足"三处重复"，T-040 抽象层提取解锁。
 
