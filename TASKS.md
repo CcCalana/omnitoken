@@ -25,6 +25,7 @@
 | 05-20 | **T-043 任务体写好**：OpenCode 适配（第三个 adapter）。XDG 路径解析 + 复用 fileio.go；propose 前置=是（managed 字段集 / Windows XDG / `--home` 旗标）。落地后开 T-040 抽象 |
 | 05-20 | **R-043-prop approve** (5+/1Q/1N)。`d3088d3` Codex 主动纠 spec（`provider` singular，非任务体里的复数）+ XDG 三档清晰。Q-1: 写几个 model 实施时拍板，默认推荐单一 |
 | 05-20 | **R-043 approve** (5+/1N)。`5254c48` agent_adapter 82.2%；Q-1 取单 model + N-8 文件 comment 落地；XDG 三档全测 + plural `providers` 用户数据保留有专测。**T-040 trigger 达成**，可直接开抽象层提取 |
+| 05-20 | **T-040 任务体写好**：Registry + AgentConfig interface 抽象。propose 前置=是（接口签名 3 路线 / Result 收敛 / 注册时机）。CLI 零改动，留 T-046；nonEmptyStrings 顺手收 R-043 N-9 |
 
 ---
 
@@ -322,3 +323,40 @@ Proposal: `docs/proposals/2026-05-20-t043-opencode-adapter.md`
 **参考**: `docs/references/agent-adapter/agent-adapter-pattern.md` §3.4（含 OpenCode 完整模板，但 tingly-box 把 Config 留作 opaque `map[string]any`，managed 字段需 propose 自定）；`agent-adapter-projects-reference.md` 第 233 / 329-352 行（token_proxy Rust 写 opencode.json + `resolve_opencode_config_dir` XDG 解析模式 —— Go 等价实现是本任务核心参考）；R-042 N-7（`firstString` BackupPath 语义可顺手改名 / 删除，**可选**，不强求）。
 
 **Result**: `5254c48` — agent_adapter 82.2%; Q-1 选单一 `--model`，多模型留 T-044；N-8 文件注释已落. all green.
+
+---
+
+## T-040 抽象层提取（Registry + AgentConfig interface） [phase:3-A] [owner:codex] [status:todo]
+
+**目标**: 三个具象 adapter（Claude Code / Codex / OpenCode）已就位，凑齐 AGENTS.md §3.1 "三处重复再抽象"门槛。本任务**只做内部抽象提取**，外部行为零变化、CLI 入口零变化、所有现有测试零退化。是 T-044（路由规则联动）和 T-046（一键 onboard 收口）的前置基础。
+
+**涉及**:
+- `internal/agent_adapter/`（新增 `registry.go` + `interface.go` 或合一；refactor `claude_code.go` / `codex.go` / `opencode.go` 让 `*XxxConfig` 实现 interface）
+- 现有 `WriteXxxSettings(opts XxxOptions) (Result, error)` / `RestoreXxxSettingsWithOptions(opts) (Result, error)` 函数**保留**作为 thin wrapper，**不动 CLI** `cmd/omnitoken-adopt/main.go`（CLI 切到 registry 是 T-046 的事）。
+- `nonEmptyStrings` 从 `claude_code.go:193` 挪到 `fileio.go` 或新 helper 模块（**收 R-043 N-9**）。
+
+**接受标准**:
+- [ ] 定义 `AgentConfig` interface，导出 `Write(opts) (Result, error)` 和 `Restore(opts) (Result, error)` 两个方法；签名由 propose 拍板（type-safe 路线还是 `interface{}` 路线，见 propose 第 1 条）。
+- [ ] 定义 `Registry`：注册 / 查询 / 枚举三个能力。**默认 Registry 实例**包级可访问；同时支持 `NewRegistry()` 构造私有实例（便于测试）。
+- [ ] `*ClaudeCodeConfig` / `*CodexConfig` / `*OpenCodeConfig` 三个类型实现 interface，在 `init()` 里注册到 default registry，agent type 常量 `AgentTypeClaudeCode` / `AgentTypeCodex` / `AgentTypeOpenCode` 导出。
+- [ ] **现有 `WriteXxxSettings` / `RestoreXxxSettingsWithOptions` 导出函数保留**，内部 delegate 到 `(&XxxConfig{}).Write(opts)` —— 零 backward-compat 破坏，CLI 不需要改。
+- [ ] **`Result` struct 收敛**：当前 9 字段（`SettingsPath`/`ConfigPath`/`AuthPath`/`BackupPath`/`BackupPaths`/`RestoredFrom`/`RestoredFromPaths`/`ManagedKeys`/`ManagedEnvKeys`/`ManagedTomlKeys`/`Warnings`）冗余明显。propose 给瘦身方案（建议方向：保 `BackupPaths`/`RestoredFromPaths`/`ManagedKeys`/`Warnings`，弃单值 `BackupPath`/`RestoredFrom`，路径角色用 `Paths map[string]string` 或保 `ConfigPath`+`AuthPath` 两个具名字段）。CLI 同步收敛，**测试断言相应更新但语义不变**。
+- [ ] `nonEmptyStrings` 挪到 `fileio.go`（R-043 N-9 收口）；不引入新的工具文件。
+- [ ] 测试：① interface 三实现各自单测可通过（沿用现有测试，仅签名挪位） ② 新增 `registry_test.go`：注册 / 查询 / 枚举 / 重复注册行为 ③ end-to-end 检查 `Registry.Get(AgentTypeClaudeCode).Write(...)` 与现有 `WriteClaudeCodeSettings(...)` 路径**结果完全一致**（建议表驱动）。
+- [ ] `internal/agent_adapter` 包覆盖率**不降**（当前 82.2%，目标 ≥80%）。
+- [ ] `cmd/omnitoken-adopt/main.go` **零修改**（CLI 切 registry 留 T-046）。如果 propose 觉得本任务顺手把 CLI 切了更合算，**先 propose 说服 Claude**，不要单边决定。
+
+**Codex propose 前置**: **是**。PROPOSAL 答清 3 点：
+1. **interface 方法签名**: 三个路线对比：(a) tingly-box `Apply(paramsInterface interface{}) (*Result, error)` —— 动态类型，每个实现内部 type-assert；(b) Go 1.21+ 泛型 `type AgentConfig[Opts any] interface { Write(Opts) (Result, error) }` —— 类型安全但 Registry 没法 homogeneous（无法 `map[AgentType]AgentConfig`）；(c) **base options struct**（`type BaseOptions struct { Home, GatewayURL, Token, Model string; Now func()time.Time }`），interface 用 `Write(BaseOptions) (Result, error)`，每个具象 Options 类型嵌入 BaseOptions 但目前三个 adapter 字段一致没差异。**默认推荐 (c)** —— 类型安全且 Registry 同构。
+2. **Result 收敛方案**: 给最终 struct，包括哪些字段保哪些删；测试中 `BackupPath` 单值断言怎么平迁到 `BackupPaths[0]`；OmniToken adopt CLI 输出格式是否变（建议**不变**，单值字段在 CLI 层从 Paths[0] 现取）。
+3. **Registry 注册时机**: package `init()` 隐式注册 vs 显式 `RegisterDefaults()` 函数调用。**默认推荐 init()**——零样板代码，但测试要能 `NewRegistry()` 拿到空 registry（用于 isolated test）。
+
+**不在范围**:
+- CLI 切 registry 入口 → **T-046**
+- 路由规则联动（adopt 配置 = 同步生成 admin 端 virtual_models）→ **T-044**
+- 协议转换（Anthropic ↔ OpenAI）→ **T-045**
+- 新的 adapter（第四个 agent）→ 出现具体需求再开
+
+**依赖**: T-043 ✅（三个 adapter 齐了）。
+
+**参考**: `docs/references/agent-adapter/agent-adapter-pattern.md` §1（Registry 接口模板，但 Go 用 `interface{}` params 不够 idiomatic，自定签名）+ §3.3/§3.4（三个 Apply/Restore 实现模板对照）；R-043 N-9（`nonEmptyStrings` 归并）。
