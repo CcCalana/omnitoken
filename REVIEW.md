@@ -155,3 +155,20 @@
 **N-8**: Token 明文落 `opencode.json` 是 OpenCode 设计限制（无外置 secret store），proposal 已直面这点。建议在 `internal/agent_adapter/opencode.go` 文件级 comment 里写一行"OpenCode does not expose a separate secret store; apiKey lives in opencode.json by design. CLI output MUST never echo this field's value." —— 给后来读代码的人一个明确锚点，避免未来误以为是 bug。
 
 **Codex 可开 T-043 实施**。Q-1 答在实施 commit Result（建议方向 (a)），N-8 落文件注释即可。
+
+---
+
+## R-043 (T-043 OpenCode 适配 实施, commit `5254c48`)
+
+**结论: `[+] Approved`** — 8/8 接受标准过；Q-1 取 (a) 单 model（与 T-041/T-042 一致）；N-8 文件 comment 落 opencode.go 顶部；XDG 三档全测；plural `providers` 用户数据保留有专测。**T-040 抽象层提取可以启动**。1 NIT 不阻塞。
+
+**正面信号**:
+1. ✅ N-8 + Decision 1 双重落地：`opencode.go:1-2` 文件级 comment 写明"OpenCode does not expose a separate secret store; options.apiKey lives in opencode.json by design. CLI output must never echo this field's value."；写入用 singular `provider`（line 76-77 + `providerObject:150`），且 `TestWriteOpenCodeSettingsPreservesSchemaOtherProviderAndPluralProviders` 显式断言 `root["providers"]`（旧复数用户数据）和 `provider.other`（其他 provider）双双保留——proposal 承诺兑现。
+2. ✅ XDG 三档完整覆盖、各有专测：① `TestWriteOpenCodeSettingsHomeOverrideBeatsXDGConfigHome` 验 `--home` 强于 XDG（且 line 247 反向断言 XDG 路径未被建出）；② `TestWriteOpenCodeSettingsUsesXDGConfigHome` 验 XDG_CONFIG_HOME 走 XDG 路径；③ `TestWriteOpenCodeSettingsFallsBackToHomeConfig` 验未设 XDG 时走 `<home>/.config/opencode/`。proposal Decision 2 的三档全部有专属断言。
+3. ✅ CLI 安全断言移植：`TestRunCLIAdoptOpenCodeUsesHomeOverride:241` 显式 `strings.Contains(stdout/stderr, "omt_secret")` —— 即使 OpenCode 设计上 token **必须**落 opencode.json 明文，CLI 输出层依然有 grep-proof assertion 守护，未来重构改 stdout 也跑得住。T-041/T-042 模式一致。
+4. ✅ 双路径 invalid config 全覆盖：`TestWriteOpenCodeSettingsRejectsInvalidRootWithoutBackupOrWrite` + `TestWriteOpenCodeSettingsRejectsInvalidProviderWithoutBackupOrWrite`，sentinel error `ErrInvalidExistingOpenCodeConfig` 经 CLI `errors.Is` → exit 2（`TestRunCLIAdoptOpenCodeInvalidConfigExitsTwo`）。原文件不改、备份不建——失败语义与 T-041/T-042 完全对齐。
+5. ✅ **T-040 trigger 主动点出**：commit message 末尾"leaves Registry/AgentConfig extraction to T-040 now that the three adapters are present"——纪律到位，没顺手抽抽象但显式提示下一拍。agent_adapter 包覆盖率 82.2%（达标 ≥80%）；cmd/omnitoken-adopt 70.0%（cmd/* 不要求）。
+
+**N-9 (NIT)**: `nonEmptyStrings` 助手定义在 `internal/agent_adapter/claude_code.go:193`，但实际是跨 adapter 的通用工具（OpenCode 也用了，line 101）。逻辑上应该在 `fileio.go` 或 T-040 抽象层提取时归并。**不阻塞**，T-040 抽 Registry 时顺手挪即可。
+
+**T-040 启动信号**: 三个具象 adapter（Claude Code / Codex / OpenCode）+ 共享 fileio helper 凑齐"三处重复"，AGENTS.md §3.1 触发条件达成。**建议下一步直接 T-040**——`Registry` + `AgentConfig` interface 抽象 + `nonEmptyStrings` 归并 + Result struct 收敛（当前 `SettingsPath`/`ConfigPath`/`AuthPath`/`BackupPath`/`BackupPaths`/`ManagedKeys`/`ManagedEnvKeys`/`ManagedTomlKeys`/`Warnings` 字段冗余可借机重构）。无 v1 阻塞，可与 T-045 协议转换并行。
