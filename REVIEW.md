@@ -115,3 +115,20 @@
 **N-6 (NIT)**: Decision 2 的 `cli_auth_credentials_store = "file"` 覆盖政策。如果员工原来手工设了 `system`（OS keychain），OmniToken 强写为 `file` 是合理但**突然**的安全行为变更。建议 CLI stdout 在写之前一行 WARN："cli_auth_credentials_store: <old> → file (OmniToken-managed)"。同理 `requires_openai_auth = true` 如果不是 Codex 默认值也值得提一句。
 
 **Codex 可开 T-042 实施**。Q-1 答在实施 commit Result 里，N-6 落 stdout WARN 即可。
+
+---
+
+## R-042 (T-042 Codex 适配 实施, commit `ceb123c`)
+
+**结论: `[+] Approved`** — 8/8 接受标准过；R-042-prop Q-1 三个 edge case 全覆盖；N-6 不仅做了 `cli_auth_credentials_store` WARN 还顺带做了 `requires_openai_auth`；R-041 留的 M-20 / M-21 / N-3 一次性全修。可直接进 T-043 OpenCode（依赖 T-042 已 satisfy）。
+
+**正面信号**:
+1. ✅ Q-1 三个 edge case 在 `scanCodexConfig` 都验过 + 测试守护：① 非 OmniToken 子 table 同名 key 不误判为 top-level duplicate（`section == ""` 守门 line 333）；② 多行字符串 `"""` 走 `startsTripleString` 旁路、绕过 `hasUnterminatedString`；③ inline-table `model_providers = { ... }` 显式 `inlineProvider = true` → 返回我建议的 `unsupported config style; run restore first` 错误（line 248-249）。
+2. ✅ R-041 历史项**一次性全修**到 `fileio.go`：M-20 用 `map[string]any` 递归 marshal、env 块不再压成单行 + `claude_code_test.go:95` 加 `strings.Contains(settings, "  \"env\": {\n    \"ANTHROPIC_AUTH_TOKEN\"")` literal 断言守护回潮；M-21 `writeAtomic` 走完整 MkdirAll → CreateTemp → Write → Chmod → Sync → Close → Rename → **parent dir fsync (`syncDir`)**，教科书级原子写；N-3 `copyFile` 改读 `os.Stat(src).Mode().Perm()` 透传原 perm 不再硬编码 0o600。
+3. ✅ N-6 + 加分：`codexManagedWarnings` 同时检测 `cli_auth_credentials_store` 非 `"file"`（员工原走 keychain 的会被警示）和 `requires_openai_auth` 非 `true` —— 比我建议的多覆盖一项；warning 通过 `Result.Warnings` 数组冒泡到 CLI stdout `WARN ...` 行，不混进 stderr。
+4. ✅ helper 抽法克制：只到 `fileio.go` 文件级（writeAtomic / readJSONObject / uniqueBackupPath / latestNamedBackupPath / copyFile / resolveHome / nowUTC），**没**抽 `Registry` / `AgentConfig` interface —— 严格守 AGENTS.md §3.1 "三处重复再抽象"。Result struct 拓展为兼容字段（`SettingsPath` 保留 + 新 `ConfigPath`/`AuthPath`/`BackupPaths`/`Warnings`），不破坏 T-041 现有调用。
+5. ✅ URGENT 处理纪律到位：T-042 commit message 干净无"missing gcc"语，AGENTS.md §3.3a 第 5 条 + §9.5 (smoke 方法学) 都遵守。`internal/agent_adapter` 覆盖率 82.6%（达标 ≥80%），`cmd/omnitoken-adopt` 69.2%（cmd/* 不要求）。
+
+**N-7 (NIT)**: `fileio.go:571 firstString` 用 `sort.Strings` 取字母序最小路径作为 `Result.BackupPath` 兼容字段 —— config backup 字母序在 auth backup 之前，所以 `BackupPath` 显示 config 备份名。语义略 confusing（"first" 通常理解为"先建的"），但实际调用者应该消费 `BackupPaths []string`，`BackupPath` 是单值 backward-compat。T-043 OpenCode 实现时若需要类似的"主备份"概念可以借机重命名为 `PrimaryBackupPath` 或干脆删除。**不阻塞**。
+
+**T-040 触发判断**: T-042 完成后 `internal/agent_adapter` 已有两个具象 adapter（Claude Code / Codex）+ 共享 fileio helper。T-043 OpenCode 落地后即满足"三处重复"，**届时**抽 `Registry` / `AgentConfig` interface（T-040）即可。当前不动。
