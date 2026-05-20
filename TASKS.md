@@ -22,6 +22,7 @@
 | 05-19 | **R-042-prop approve** (5+/1Q/1N)。`34ea18f` 决策 1/2/3 全采纳推荐方向；Codex 可开 T-042 实施 |
 | 05-19 22:07 | **URGENT triaged**: T-042 smoke 误读真 `~/.codex/auth.json` → 印到 Codex transcript。定性: 低 sev（中转站 key / 无外发 / 不轮换）。结构修复 → AGENTS.md §9.5 落 smoke 方法学（必须 `--home <temp>` + 禁 cat auth 文件）。T-042 实施代码本身无问题，可继续 commit |
 | 05-20 | **R-042 approve** (5+/1N)。`ceb123c` agent_adapter 82.6%；Q-1 三个 edge case 全覆盖 + N-6 加分；R-041 的 M-20/M-21/N-3 一次性修完。T-043 OpenCode 可启动 |
+| 05-20 | **T-043 任务体写好**：OpenCode 适配（第三个 adapter）。XDG 路径解析 + 复用 fileio.go；propose 前置=是（managed 字段集 / Windows XDG / `--home` 旗标）。落地后开 T-040 抽象 |
 
 ---
 
@@ -275,3 +276,42 @@ Proposal: `docs/proposals/2026-05-19-t042-codex-adapter.md`
 **依赖**: T-041 ✅。T-MK-RACE 优先实施（让 Codex 不再需要在 chat 里解释 race）—— **不阻塞**，T-042 完全可以并行。
 
 **参考**: `docs/references/agent-adapter/agent-adapter-pattern.md` §3.4（Codex Apply 模板）；`agent-adapter-projects-reference.md` §4.1（token_proxy `toml_edit` 无损编辑模式，但是 Rust，Go 需重新调研）；R-041 M-20 / M-21（REVIEW.md）。
+
+---
+
+## T-043 OpenCode 适配（配置写入） [phase:3-A] [owner:codex] [status:todo]
+
+**目标**: 让企业员工跑 `omnitoken-adopt adopt opencode` 一次，OpenCode IDE 插件之后所有调用都走 OmniToken。**第三个 adapter** —— 落地后即满足"三处重复"，T-040 抽象层提取解锁。
+
+**涉及**:
+- `internal/agent_adapter/opencode.go` + `opencode_test.go`（新增）
+- `cmd/omnitoken-adopt/main.go`（加 `adopt opencode` / `restore opencode` 分支）
+- **不动** `fileio.go` —— 现有 `readJSONObject` / `writeJSONAtomic` / `uniqueBackupPath` / `latestNamedBackupPath` 已够用（XDG 路径解析在 opencode.go 里写）
+
+**接受标准**:
+- [ ] `internal/agent_adapter` 导出 `WriteOpenCodeSettings(opts) (Result, error)` + `RestoreOpenCodeSettingsWithOptions(opts) (Result, error)`，签名风格对齐 T-041/T-042。
+- [ ] **XDG 路径解析**: `$XDG_CONFIG_HOME/opencode/opencode.json` 优先；未设则回退 `$HOME/.config/opencode/opencode.json`（含 Windows `%USERPROFILE%\.config\opencode\opencode.json` 回退）。`--home <path>` 覆盖时按 `<home>/.config/opencode/opencode.json` 解析。
+- [ ] **JSON 无损 merge**: 复用 `readJSONObject` + `writeJSONAtomic`；OmniToken 接管 `providers.omnitoken` 整个子对象（**整体替换**，与 T-042 `[model_providers.omnitoken]` table 替换语义一致），其他 provider 和 root 字段（`$schema` / 用户自定 key）保留。**M-20 indent 保形** 自然继承 fileio.go 行为。
+- [ ] 备份到 `~/.omnitoken/backups/opencode/opencode.json.<compact-UTC>.bak`；首次写无备份；重复幂等。
+- [ ] managed key 白名单 `managedOpenCodeProviderKeys` 常量化，CLI stdout 打印 `managed_provider providers.omnitoken,...`（**或** `managed_keys`，措辞由 propose 答）。
+- [ ] CLI 入口 `adopt opencode --gateway-url <URL> --token <virtual_key> [--model <name>] [--home <path>]` / `restore opencode [--home <path>]`；`flag` 标准库。
+- [ ] 失败语义对齐 T-041/T-042：invalid 现有 opencode.json（非 JSON object / `providers` 非 object）→ exit 2 + 单行 stderr + 原文件不改、备份不建。
+- [ ] 测试 ≥ 7 case：① 首次写（含建空目录） ② 合并保留 `$schema` 和其他 provider ③ 重复幂等 ④ 备份命名唯一 ⑤ restore 最新备份 ⑥ `--home` 覆盖 ⑦ XDG_CONFIG_HOME env 覆盖（含设置 vs 未设置两种）。**所有测试 100% 用 `t.TempDir()` + `t.Setenv("XDG_CONFIG_HOME", ...)` / `t.Setenv("HOME", ...)`** —— AGENTS.md §9.5 硬约束。
+- [ ] `internal/agent_adapter` 包覆盖率 ≥ 80%（合并三个 adapter 后）。
+
+**Codex propose 前置**: **是**。PROPOSAL 答清 3 点：
+1. **OpenCode managed 字段集**: opencode.json 的 `providers.omnitoken` 子对象需要哪些字段？对照 `agent-adapter-projects-reference.md` 第 233/329-333 行（token_proxy Rust 实现）和 OpenCode 官方 schema（https://opencode.ai/config.json）给最终清单 —— 至少含 `base_url` / `models` 数组 / 是否需要 `apiKey` 字段。**注意**：OmniToken 的 token 应放 OpenCode 的 secret 字段（如 `apiKey` 或独立 `auth` 字段），不要明文进 opencode.json 如果 OpenCode 支持外置 secret。如不支持就明文写但 stdout 不回显（同 T-041/T-042 安全纪律）。
+2. **XDG fallback 在 Windows 的行为**: Windows 上 `XDG_CONFIG_HOME` 一般未设，OpenCode 实际查 `%APPDATA%\opencode\` 还是 `%USERPROFILE%\.config\opencode\`？给出选择依据 + 1 个测试覆盖 Windows fallback。**默认推荐**：与 Linux 行为对齐 `<home>/.config/opencode/`（OpenCode 文档若另说则跟官方）。
+3. **`--home` vs `--config-home` 旗标**: 是否需要单独的 `--config-home` 覆盖 XDG_CONFIG_HOME？我的判断 **不需要** —— `--home` 一刀切（`<home>/.config/opencode/`）测试足够，advanced 用户可以直接设 `XDG_CONFIG_HOME` env。Codex 给反对意见再 propose。
+
+**T-040 trigger**: T-043 commit 落地 + R-043 approve 后，`internal/agent_adapter` 有三个具象 adapter（Claude Code / Codex / OpenCode）+ 共享 fileio helper。**这是开 T-040 的信号** —— 抽 `Registry` + `AgentConfig` interface 时机成熟。T-043 任务本身**不**做抽象抽取（属 T-040 范围），但 commit message 里点一下"三 adapter 全齐，T-040 可启"。
+
+**不在范围**:
+- 协议转换 / 真实端到端调通 → T-045
+- `Registry` / `AgentConfig` interface 抽象 → **T-040**（T-043 完成后启）
+- IDE 插件本体注入（VSCode extension 端）→ Phase 3-B 视市场反馈
+- 多 OpenCode 实例 / 用户 namespace 隔离 → 暂停区
+
+**依赖**: T-042 ✅（`fileio.go` 已抽出且包含 M-20/M-21 修复）。
+
+**参考**: `docs/references/agent-adapter/agent-adapter-pattern.md` §3.4（含 OpenCode 完整模板，但 tingly-box 把 Config 留作 opaque `map[string]any`，managed 字段需 propose 自定）；`agent-adapter-projects-reference.md` 第 233 / 329-352 行（token_proxy Rust 写 opencode.json + `resolve_opencode_config_dir` XDG 解析模式 —— Go 等价实现是本任务核心参考）；R-042 N-7（`firstString` BackupPath 语义可顺手改名 / 删除，**可选**，不强求）。
