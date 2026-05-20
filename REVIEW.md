@@ -172,3 +172,20 @@
 **N-9 (NIT)**: `nonEmptyStrings` 助手定义在 `internal/agent_adapter/claude_code.go:193`，但实际是跨 adapter 的通用工具（OpenCode 也用了，line 101）。逻辑上应该在 `fileio.go` 或 T-040 抽象层提取时归并。**不阻塞**，T-040 抽 Registry 时顺手挪即可。
 
 **T-040 启动信号**: 三个具象 adapter（Claude Code / Codex / OpenCode）+ 共享 fileio helper 凑齐"三处重复"，AGENTS.md §3.1 触发条件达成。**建议下一步直接 T-040**——`Registry` + `AgentConfig` interface 抽象 + `nonEmptyStrings` 归并 + Result struct 收敛（当前 `SettingsPath`/`ConfigPath`/`AuthPath`/`BackupPath`/`BackupPaths`/`ManagedKeys`/`ManagedEnvKeys`/`ManagedTomlKeys`/`Warnings` 字段冗余可借机重构）。无 v1 阻塞，可与 T-045 协议转换并行。
+
+---
+
+## R-040-prop (T-040 PROPOSAL, commit `fd8310a`)
+
+**结论: `[+] Approved`** — 3 决策全采纳推荐方向，且 Decision 2 主动**抓出我任务体里的内在矛盾**（"Result 弃单值字段" × "CLI 零修改"互斥）并给了分阶段解法。1 N 实施时一句注释解决。**Codex 可开 T-040 实施**。
+
+**正面信号**:
+1. ✅ Decision 1 走 base-options + 同构 interface 路线 (route c)：interface 三方法 `Type() / Write(BaseOptions) / Restore(BaseRestoreOptions)` 干净；type-safe + Registry 可同构。backward-compat 通过 type alias 或 thin struct 保 `ClaudeCodeOptions`/`CodexOptions`/`OpenCodeOptions` 不破现有 caller，`WriteXxxSettings` wrapper delegate 到 `(&XxxConfig{}).Write(BaseOptions(opts))`。三个 RestoreXxxOptions 当前都只含 `Home` 字段，collapse 成 `BaseRestoreOptions` 是水到渠成的简化。
+2. ✅ Decision 2 **接住了我的 spec 内在矛盾**：任务体说"Result 删 `BackupPath` 单值字段" + "CLI 零改"在 CLI 直读 `result.BackupPath` 的现状下逻辑互斥。proposal 显式点出 + 给方案 (2) **分阶段移除**：T-040 加 canonical 字段（`Paths map[string]string` + `BackupPaths`/`RestoredFromPaths`/`ManagedKeys`/`Warnings`），同时**保留 legacy 单值字段作为 compat shim** populated from canonical；物理删除留 T-046 CLI rewire 时做。这是 Codex 第三次主动纠 Claude spec（前两次：golang:1.25 / provider singular），独立性继续保持。
+3. ✅ Decision 3 init() 默认 registry + `NewRegistry()` 测试隔离 + 4 方法（Register / MustRegister / Get / List）+ **List() 确定性排序**（默认 registry 列出 agent 顺序稳定，避免测试 flaky）—— `Register` 重名返回 error / `MustRegister` panic 的两层语义清晰。
+4. ✅ Path roles 设计干净：`Paths["settings"]` (Claude Code) / `Paths["config"] + Paths["auth"]` (Codex) / `Paths["config"]` (OpenCode) —— 以 role 为 key 比固定 struct 字段更可扩展（未来加 IDE 插件 etc 不动 Result struct）。
+5. ✅ 实施 note 主动列了 5 条边界：CLI 零改 / `nonEmptyStrings` 挪 fileio / registry.go 新文件 / 三 adapter minimally refactor / 新增 `registry_test.go` 含 duplicate + default registry parity 表驱动测试。
+
+**N-10 (NIT)**: proposal Decision 3 示例代码 `MustRegisterDefault(&ClaudeCodeConfig{})` 这个函数名前文没定义。两种合理形态：(a) `DefaultRegistry.MustRegister(&ClaudeCodeConfig{})` 直接走 registry 方法；(b) 包级 helper `func MustRegisterDefault(c AgentConfig) { DefaultRegistry.MustRegister(c) }`。实施时任选其一在 `registry.go` 里**显式定义**即可，commit message 一句说清楚。
+
+**Codex 可开 T-040 实施**。N-10 在 `registry.go` 落具体形态即可，无需 propose 二次。

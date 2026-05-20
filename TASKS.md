@@ -26,6 +26,7 @@
 | 05-20 | **R-043-prop approve** (5+/1Q/1N)。`d3088d3` Codex 主动纠 spec（`provider` singular，非任务体里的复数）+ XDG 三档清晰。Q-1: 写几个 model 实施时拍板，默认推荐单一 |
 | 05-20 | **R-043 approve** (5+/1N)。`5254c48` agent_adapter 82.2%；Q-1 取单 model + N-8 文件 comment 落地；XDG 三档全测 + plural `providers` 用户数据保留有专测。**T-040 trigger 达成**，可直接开抽象层提取 |
 | 05-20 | **T-040 任务体写好**：Registry + AgentConfig interface 抽象。propose 前置=是（接口签名 3 路线 / Result 收敛 / 注册时机）。CLI 零改动，留 T-046；nonEmptyStrings 顺手收 R-043 N-9 |
+| 05-20 | **R-040-prop approve** (5+/1N)。`fd8310a` Codex 第三次纠 Claude spec（Result 删字段 × CLI 零改互斥），给分阶段 compat shim 方案。Codex 可开 T-040 实施 |
 
 ---
 
