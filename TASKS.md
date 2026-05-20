@@ -327,7 +327,7 @@ Proposal: `docs/proposals/2026-05-20-t043-opencode-adapter.md`
 
 ---
 
-## T-040 抽象层提取（Registry + AgentConfig interface） [phase:3-A] [owner:codex] [status:in-progress]
+## T-040 抽象层提取（Registry + AgentConfig interface） [phase:3-A] [owner:codex] [status:review]
 
 Started: 2026-05-20 12:33 +08:00
 Proposal: `docs/proposals/2026-05-20-t040-agent-registry.md`
@@ -364,3 +364,5 @@ Proposal: `docs/proposals/2026-05-20-t040-agent-registry.md`
 **依赖**: T-043 ✅（三个 adapter 齐了）。
 
 **参考**: `docs/references/agent-adapter/agent-adapter-pattern.md` §1（Registry 接口模板，但 Go 用 `interface{}` params 不够 idiomatic，自定签名）+ §3.3/§3.4（三个 Apply/Restore 实现模板对照）；R-043 N-9（`nonEmptyStrings` 归并）。
+
+**Result**: `147502da` — agent_adapter 83.6%; N-10 用 `DefaultRegistry.MustRegister(...)`; compat shim 保 CLI 零改. all green.
