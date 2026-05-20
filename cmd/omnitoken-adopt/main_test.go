@@ -216,3 +216,98 @@ func TestRunCLIRestoreCodex(t *testing.T) {
 		t.Fatalf("restore output missing paths: %s", stdout.String())
 	}
 }
+
+func TestRunCLIAdoptOpenCodeUsesHomeOverride(t *testing.T) {
+	home := t.TempDir()
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	var stdout, stderr bytes.Buffer
+	code := runCLI([]string{
+		"adopt",
+		"opencode",
+		"--gateway-url",
+		"https://gateway.example",
+		"--token",
+		"omt_secret",
+		"--home",
+		home,
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d stderr=%s", code, stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config", "opencode", "opencode.json")); err != nil {
+		t.Fatalf("OpenCode config file not created under home override: %v", err)
+	}
+	if strings.Contains(stdout.String(), "omt_secret") || strings.Contains(stderr.String(), "omt_secret") {
+		t.Fatalf("CLI output leaked token stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "managed_provider provider.omnitoken.name") {
+		t.Fatalf("managed provider list missing from stdout: %s", stdout.String())
+	}
+	if _, err := os.Stat(filepath.Join(xdg, "opencode", "opencode.json")); !os.IsNotExist(err) {
+		t.Fatalf("XDG config should not be written when --home is set: %v", err)
+	}
+}
+
+func TestRunCLIAdoptOpenCodeInvalidConfigExitsTwo(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	configPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(configPath, []byte(`{"provider":"bad"}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runCLI([]string{
+		"adopt",
+		"opencode",
+		"--gateway-url",
+		"https://gateway.example",
+		"--token",
+		"omt_secret",
+		"--home",
+		home,
+	}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if strings.Count(strings.TrimSpace(stderr.String()), "\n") != 0 {
+		t.Fatalf("expected one-line stderr, got %q", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "panic") {
+		t.Fatalf("stderr should not include panic stack: %s", stderr.String())
+	}
+}
+
+func TestRunCLIRestoreOpenCode(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	backupDir := filepath.Join(home, ".omnitoken", "backups", "opencode")
+	if err := os.MkdirAll(backupDir, 0o755); err != nil {
+		t.Fatalf("mkdir backup dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(backupDir, "opencode.json.20260519T100204.000000004Z.bak"), []byte(`{"provider":{"omnitoken":{"name":"backup"}}}`), 0o600); err != nil {
+		t.Fatalf("write backup: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runCLI([]string{"restore", "opencode", "--home", home}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d stderr=%s", code, stderr.String())
+	}
+	configData, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "opencode.json"))
+	if err != nil {
+		t.Fatalf("read restored config: %v", err)
+	}
+	if !strings.Contains(string(configData), `"backup"`) {
+		t.Fatalf("config was not restored: %s", configData)
+	}
+	if !strings.Contains(stdout.String(), "restored ") || !strings.Contains(stdout.String(), "from ") {
+		t.Fatalf("restore output missing paths: %s", stdout.String())
+	}
+}

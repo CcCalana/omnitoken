@@ -1,3 +1,3 @@
 # Agent Adapter Package
 
-Owns local Agent CLI configuration writers for OmniToken adoption. Supports Claude Code settings and Codex config/auth merge, backup, and restore.
+Owns local Agent CLI configuration writers for OmniToken adoption. Supports Claude Code, Codex, and OpenCode config merge, backup, and restore.
