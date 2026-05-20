@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 const (
@@ -24,17 +23,11 @@ const (
 
 var ErrInvalidExistingOpenCodeConfig = errors.New("invalid existing OpenCode config")
 
-type OpenCodeOptions struct {
-	Home       string
-	GatewayURL string
-	Token      string
-	Model      string
-	Now        func() time.Time
-}
+type OpenCodeOptions = BaseOptions
 
-type RestoreOpenCodeOptions struct {
-	Home string
-}
+type RestoreOpenCodeOptions = BaseRestoreOptions
+
+type OpenCodeConfig struct{}
 
 var managedOpenCodeProviderKeys = []string{
 	"provider.omnitoken.name",
@@ -49,6 +42,14 @@ func ManagedOpenCodeProviderKeys() []string {
 }
 
 func WriteOpenCodeSettings(opts OpenCodeOptions) (Result, error) {
+	return (&OpenCodeConfig{}).Write(opts)
+}
+
+func (OpenCodeConfig) Type() AgentType {
+	return AgentTypeOpenCode
+}
+
+func (OpenCodeConfig) Write(opts BaseOptions) (Result, error) {
 	if strings.TrimSpace(opts.GatewayURL) == "" {
 		return Result{}, fmt.Errorf("gateway url is required")
 	}
@@ -95,15 +96,20 @@ func WriteOpenCodeSettings(opts OpenCodeOptions) (Result, error) {
 	}
 
 	return Result{
+		Paths:        paths(map[string]string{"config": configPath}),
+		BackupPaths:  nonEmptyStrings(backupPath),
+		ManagedKeys:  ManagedOpenCodeProviderKeys(),
 		SettingsPath: configPath,
 		ConfigPath:   configPath,
 		BackupPath:   backupPath,
-		BackupPaths:  nonEmptyStrings(backupPath),
-		ManagedKeys:  ManagedOpenCodeProviderKeys(),
 	}, nil
 }
 
 func RestoreOpenCodeSettingsWithOptions(opts RestoreOpenCodeOptions) (Result, error) {
+	return (&OpenCodeConfig{}).Restore(opts)
+}
+
+func (OpenCodeConfig) Restore(opts BaseRestoreOptions) (Result, error) {
 	configPath, home, err := resolveOpenCodeConfigPath(opts.Home)
 	if err != nil {
 		return Result{}, err
@@ -116,13 +122,14 @@ func RestoreOpenCodeSettingsWithOptions(opts RestoreOpenCodeOptions) (Result, er
 		return Result{}, fmt.Errorf("restore OpenCode config: %w", err)
 	}
 	return Result{
-		SettingsPath: configPath,
-		ConfigPath:   configPath,
-		RestoredFrom: backupPath,
+		Paths: paths(map[string]string{"config": configPath}),
 		RestoredFromPaths: []string{
 			backupPath,
 		},
-		ManagedKeys: ManagedOpenCodeProviderKeys(),
+		ManagedKeys:  ManagedOpenCodeProviderKeys(),
+		SettingsPath: configPath,
+		ConfigPath:   configPath,
+		RestoredFrom: backupPath,
 	}, nil
 }
 

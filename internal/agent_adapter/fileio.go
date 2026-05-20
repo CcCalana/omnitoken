@@ -15,17 +15,21 @@ import (
 var errNoBackupFound = errors.New("no agent config backup found")
 
 type Result struct {
-	SettingsPath      string
-	ConfigPath        string
-	AuthPath          string
-	BackupPath        string
+	Paths             map[string]string
 	BackupPaths       []string
-	RestoredFrom      string
 	RestoredFromPaths []string
 	ManagedKeys       []string
-	ManagedEnvKeys    []string
-	ManagedTomlKeys   []string
 	Warnings          []string
+
+	// Legacy compatibility fields. T-046 should remove these after the CLI
+	// switches to the canonical Paths and slice fields above.
+	SettingsPath    string
+	ConfigPath      string
+	AuthPath        string
+	BackupPath      string
+	RestoredFrom    string
+	ManagedEnvKeys  []string
+	ManagedTomlKeys []string
 }
 
 func readJSONObject(path string, invalidPrefix string) (map[string]any, bool, error) {
@@ -175,4 +179,24 @@ func nowUTC(now func() time.Time) time.Time {
 		return time.Now().UTC()
 	}
 	return now().UTC()
+}
+
+func nonEmptyStrings(values ...string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func paths(values map[string]string) map[string]string {
+	out := make(map[string]string, len(values))
+	for key, value := range values {
+		if value != "" {
+			out[key] = value
+		}
+	}
+	return out
 }

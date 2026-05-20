@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 )
 
 const (
@@ -29,17 +28,11 @@ const (
 
 var ErrInvalidExistingCodexConfig = errors.New("invalid existing Codex config")
 
-type CodexOptions struct {
-	Home       string
-	GatewayURL string
-	Token      string
-	Model      string
-	Now        func() time.Time
-}
+type CodexOptions = BaseOptions
 
-type RestoreCodexOptions struct {
-	Home string
-}
+type RestoreCodexOptions = BaseRestoreOptions
+
+type CodexConfig struct{}
 
 var managedCodexTomlKeys = []string{
 	"model",
@@ -66,6 +59,14 @@ func ManagedCodexEnvKeys() []string {
 }
 
 func WriteCodexSettings(opts CodexOptions) (Result, error) {
+	return (&CodexConfig{}).Write(opts)
+}
+
+func (CodexConfig) Type() AgentType {
+	return AgentTypeCodex
+}
+
+func (CodexConfig) Write(opts BaseOptions) (Result, error) {
 	if strings.TrimSpace(opts.GatewayURL) == "" {
 		return Result{}, fmt.Errorf("gateway url is required")
 	}
@@ -135,19 +136,26 @@ func WriteCodexSettings(opts CodexOptions) (Result, error) {
 		return Result{}, fmt.Errorf("write Codex auth: %w", err)
 	}
 
+	managedKeys := append(ManagedCodexEnvKeys(), ManagedCodexTomlKeys()...)
 	return Result{
+		Paths:           paths(map[string]string{"config": configPath, "auth": authPath}),
+		BackupPaths:     backupPaths,
+		ManagedKeys:     managedKeys,
+		Warnings:        warnings,
 		ConfigPath:      configPath,
 		AuthPath:        authPath,
 		SettingsPath:    configPath,
 		BackupPath:      firstString(backupPaths),
-		BackupPaths:     backupPaths,
 		ManagedEnvKeys:  ManagedCodexEnvKeys(),
 		ManagedTomlKeys: ManagedCodexTomlKeys(),
-		Warnings:        warnings,
 	}, nil
 }
 
 func RestoreCodexSettingsWithOptions(opts RestoreCodexOptions) (Result, error) {
+	return (&CodexConfig{}).Restore(opts)
+}
+
+func (CodexConfig) Restore(opts BaseRestoreOptions) (Result, error) {
 	home, err := resolveHome(opts.Home)
 	if err != nil {
 		return Result{}, err
@@ -185,12 +193,15 @@ func RestoreCodexSettingsWithOptions(opts RestoreCodexOptions) (Result, error) {
 		restored = append(restored, authBackup)
 	}
 
+	managedKeys := append(ManagedCodexEnvKeys(), ManagedCodexTomlKeys()...)
 	return Result{
+		Paths:             paths(map[string]string{"config": configPath, "auth": authPath}),
+		RestoredFromPaths: restored,
+		ManagedKeys:       managedKeys,
 		ConfigPath:        configPath,
 		AuthPath:          authPath,
 		SettingsPath:      configPath,
 		RestoredFrom:      firstString(restored),
-		RestoredFromPaths: restored,
 		ManagedEnvKeys:    ManagedCodexEnvKeys(),
 		ManagedTomlKeys:   ManagedCodexTomlKeys(),
 	}, nil

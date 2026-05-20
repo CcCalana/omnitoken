@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 const defaultClaudeCodeModel = "chat-balanced"
@@ -15,17 +14,11 @@ var (
 	ErrInvalidExistingConfig = errors.New("invalid existing Claude Code settings")
 )
 
-type ClaudeCodeOptions struct {
-	Home       string
-	GatewayURL string
-	Token      string
-	Model      string
-	Now        func() time.Time
-}
+type ClaudeCodeOptions = BaseOptions
 
-type RestoreClaudeCodeOptions struct {
-	Home string
-}
+type RestoreClaudeCodeOptions = BaseRestoreOptions
+
+type ClaudeCodeConfig struct{}
 
 var omniTokenManagedKeys = []string{
 	"ANTHROPIC_BASE_URL",
@@ -47,6 +40,14 @@ func ManagedClaudeCodeEnvKeys() []string {
 }
 
 func WriteClaudeCodeSettings(opts ClaudeCodeOptions) (Result, error) {
+	return (&ClaudeCodeConfig{}).Write(opts)
+}
+
+func (ClaudeCodeConfig) Type() AgentType {
+	return AgentTypeClaudeCode
+}
+
+func (ClaudeCodeConfig) Write(opts BaseOptions) (Result, error) {
 	if strings.TrimSpace(opts.GatewayURL) == "" {
 		return Result{}, fmt.Errorf("gateway url is required")
 	}
@@ -92,10 +93,11 @@ func WriteClaudeCodeSettings(opts ClaudeCodeOptions) (Result, error) {
 	}
 
 	return Result{
-		SettingsPath: settingsPath,
-		BackupPath:   backupPath,
+		Paths:        paths(map[string]string{"settings": settingsPath}),
 		BackupPaths:  nonEmptyStrings(backupPath),
 		ManagedKeys:  ManagedClaudeCodeEnvKeys(),
+		SettingsPath: settingsPath,
+		BackupPath:   backupPath,
 	}, nil
 }
 
@@ -104,6 +106,10 @@ func RestoreClaudeCodeSettings() (Result, error) {
 }
 
 func RestoreClaudeCodeSettingsWithOptions(opts RestoreClaudeCodeOptions) (Result, error) {
+	return (&ClaudeCodeConfig{}).Restore(opts)
+}
+
+func (ClaudeCodeConfig) Restore(opts BaseRestoreOptions) (Result, error) {
 	home, err := resolveHome(opts.Home)
 	if err != nil {
 		return Result{}, err
@@ -120,12 +126,13 @@ func RestoreClaudeCodeSettingsWithOptions(opts RestoreClaudeCodeOptions) (Result
 		return Result{}, fmt.Errorf("restore Claude Code settings: %w", err)
 	}
 	return Result{
-		SettingsPath: settingsPath,
-		RestoredFrom: backupPath,
+		Paths: paths(map[string]string{"settings": settingsPath}),
 		RestoredFromPaths: []string{
 			backupPath,
 		},
-		ManagedKeys: ManagedClaudeCodeEnvKeys(),
+		ManagedKeys:  ManagedClaudeCodeEnvKeys(),
+		SettingsPath: settingsPath,
+		RestoredFrom: backupPath,
 	}, nil
 }
 
@@ -188,14 +195,4 @@ func claudeCodeSettingsPath(home string) string {
 
 func claudeCodeBackupDir(home string) string {
 	return filepath.Join(home, ".omnitoken", "backups", "claude-code")
-}
-
-func nonEmptyStrings(values ...string) []string {
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		if value != "" {
-			out = append(out, value)
-		}
-	}
-	return out
 }
