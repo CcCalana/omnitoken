@@ -190,7 +190,9 @@ N-1 compact UTC `20060102T150405.000000000Z`; N-2 invalid existing config exits 
 
 ---
 
-## T-CONC-CHECK v1 并发摸底（不修代码）[phase:2-B 后置] [owner:codex] [status:todo]
+## T-CONC-CHECK v1 并发摸底（不修代码）[phase:2-B 后置] [owner:codex] [status:review]
+
+Started: 2026-05-20 22:38 +08:00
 
 **目标**: Phase 3-A 启动前用半天测 v1 真实并发上限，**只测量不修**。发现红线再开 T-019 / DB 调优。
 
@@ -208,6 +210,9 @@ N-1 compact UTC `20060102T150405.000000000Z`; N-2 invalid existing config exits 
 **依赖**: T-INT ✅（`cmd/loadtest` + admin 鉴权已就位）。
 
 **参考**: `规划.md` §十.L3（1000 RPS / P95<80ms 验收门）+ `cmd/loadtest/README.md`。
+
+**Result**: `04fff8a7` — 2500 real chat: 428/2500 2xx, 2072 upstream 429, P95 1.798s/P99 2.415s; healthz ~996 RPS, 0 errors.
+DB sample peak by required `application_name LIKE 'omnitoken%'` filter: 0; report: `docs/release/v1-concurrency-baseline-2026-05-21.md`; all green.
 
 ---
 
