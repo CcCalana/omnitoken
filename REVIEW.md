@@ -132,3 +132,26 @@
 **N-7 (NIT)**: `fileio.go:571 firstString` 用 `sort.Strings` 取字母序最小路径作为 `Result.BackupPath` 兼容字段 —— config backup 字母序在 auth backup 之前，所以 `BackupPath` 显示 config 备份名。语义略 confusing（"first" 通常理解为"先建的"），但实际调用者应该消费 `BackupPaths []string`，`BackupPath` 是单值 backward-compat。T-043 OpenCode 实现时若需要类似的"主备份"概念可以借机重命名为 `PrimaryBackupPath` 或干脆删除。**不阻塞**。
 
 **T-040 触发判断**: T-042 完成后 `internal/agent_adapter` 已有两个具象 adapter（Claude Code / Codex）+ 共享 fileio helper。T-043 OpenCode 落地后即满足"三处重复"，**届时**抽 `Registry` / `AgentConfig` interface（T-040）即可。当前不动。
+
+---
+
+## R-043-prop (T-043 PROPOSAL, commit `d3088d3`)
+
+**结论: `[+] Approved`** — 3 决策全部对齐我的推荐方向，且 Decision 1 主动纠正了我任务体里的 spec 错误。1 Q 实施时拍板，1 N 落实施即可。**Codex 可开 T-043 实施**。
+
+**正面信号**:
+1. ✅ Decision 1 **纠 spec**：OpenCode 官方 schema 是 **singular `provider`**（不是我在任务体里写的复数 `providers`）。Codex 对照 https://opencode.ai/config.json + tingly-box + token_proxy 三方交叉验证后定singular，并明确"如果用户既有 `providers` 复数 key 存在，**保留不动**当用户数据，只写正确的 singular `provider`"——这是第二次 Codex 主动核对 ground truth 纠我（前一次是 golang:1.25 vs 我的 1.23 stale memory）。这种独立性正是我们想要的。
+2. ✅ Decision 1 字段集与 OpenCode `@ai-sdk/openai-compatible` provider 形状对齐：`npm` / `options.baseURL` / `options.apiKey` / `models.<model>.name`，含 `$schema` root 字段。Token 落 `options.apiKey` 明文但 CLI stdout 只打 key path 不打 value——明确写出"never echo to stdout/stderr, cover leakage with the same CLI-output assertions used in T-041/T-042"。
+3. ✅ Decision 2 XDG 路径三档顺序清晰（`--home` → `XDG_CONFIG_HOME` → `<home>/.config/opencode/`），**Windows 不走 `%APPDATA%`** —— 与 token_proxy 实现 + tingly-box 参考一致，避免再加平台分支。测试明确 "explicit tests for XDG_CONFIG_HOME set, unset fallback via HOME/USERPROFILE, and --home overriding XDG_CONFIG_HOME"——三档覆盖完整。
+4. ✅ Decision 3 拒绝 `--config-home`，理由"T-041/T-042 都只暴露 `--home`，加第二个 path 旗标只为 OpenCode 是 CLI 表面复杂化"——架构一致性优先。
+5. ✅ 末尾点了"T-043 should not extract Registry / AgentConfig; after R-043 approval, T-040 is the correct place"——纪律到位，没顺手抽抽象。
+
+**Q-1（实施时拍板）**: `provider.omnitoken.models` 子对象**写几个 model**？proposal 示意只写 `--model` 传入的那一个（默认 `chat-balanced`），但 OmniToken 已有 T-017a 注册的 5 个虚拟模型（chat-fast / chat-balanced / chat-quality / ...）+ Ark 直连模型名。员工在 OpenCode 模型选单里只看见 `chat-balanced`、看不见 `chat-fast` —— 是不是 UX 缺一截？两个方向都可接受：
+   - (a) **保持单一**：只写 `--model` 一项，员工改其他要重跑 adopt 或手编 opencode.json。简单、与 T-041/T-042 行为一致。
+   - (b) **全量写**：把 OmniToken 当前已知虚拟模型列表全写进 `models` 子对象，员工 OpenCode 选单直接可见。但需要从某处枚举模型清单（写死常量 vs 查 admin API）。
+   
+   **默认我倾向 (a)**——与 T-041/T-042 形状一致，多模型是 T-044（路由规则联动）的范围；如 Codex 觉得 (b) 实施代价低（写一份与 T-017a seed 一致的硬编码常量列表）也可。Result 里说明选择 + 理由即可。
+
+**N-8**: Token 明文落 `opencode.json` 是 OpenCode 设计限制（无外置 secret store），proposal 已直面这点。建议在 `internal/agent_adapter/opencode.go` 文件级 comment 里写一行"OpenCode does not expose a separate secret store; apiKey lives in opencode.json by design. CLI output MUST never echo this field's value." —— 给后来读代码的人一个明确锚点，避免未来误以为是 bug。
+
+**Codex 可开 T-043 实施**。Q-1 答在实施 commit Result（建议方向 (a)），N-8 落文件注释即可。

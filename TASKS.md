@@ -23,6 +23,7 @@
 | 05-19 22:07 | **URGENT triaged**: T-042 smoke 误读真 `~/.codex/auth.json` → 印到 Codex transcript。定性: 低 sev（中转站 key / 无外发 / 不轮换）。结构修复 → AGENTS.md §9.5 落 smoke 方法学（必须 `--home <temp>` + 禁 cat auth 文件）。T-042 实施代码本身无问题，可继续 commit |
 | 05-20 | **R-042 approve** (5+/1N)。`ceb123c` agent_adapter 82.6%；Q-1 三个 edge case 全覆盖 + N-6 加分；R-041 的 M-20/M-21/N-3 一次性修完。T-043 OpenCode 可启动 |
 | 05-20 | **T-043 任务体写好**：OpenCode 适配（第三个 adapter）。XDG 路径解析 + 复用 fileio.go；propose 前置=是（managed 字段集 / Windows XDG / `--home` 旗标）。落地后开 T-040 抽象 |
+| 05-20 | **R-043-prop approve** (5+/1Q/1N)。`d3088d3` Codex 主动纠 spec（`provider` singular，非任务体里的复数）+ XDG 三档清晰。Q-1: 写几个 model 实施时拍板，默认推荐单一 |
 
 ---
 
