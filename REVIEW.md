@@ -189,3 +189,45 @@
 **N-10 (NIT)**: proposal Decision 3 示例代码 `MustRegisterDefault(&ClaudeCodeConfig{})` 这个函数名前文没定义。两种合理形态：(a) `DefaultRegistry.MustRegister(&ClaudeCodeConfig{})` 直接走 registry 方法；(b) 包级 helper `func MustRegisterDefault(c AgentConfig) { DefaultRegistry.MustRegister(c) }`。实施时任选其一在 `registry.go` 里**显式定义**即可，commit message 一句说清楚。
 
 **Codex 可开 T-040 实施**。N-10 在 `registry.go` 落具体形态即可，无需 propose 二次。
+
+---
+
+## R-040 (T-040 实施, commit `147502da`)
+
+**结论: `[+] Approved`** — 三 PROPOSAL 决策全落地，9 条接受标准逐条达成。`go vet` clean、`agent_adapter` 83.6%（+1.4pp）、`cmd/omnitoken-adopt` 测试全绿、CLI diff 空。无 CRITICAL / HIGH。**T-040 可关，T-044 / T-046 解锁**。
+
+**正面信号**:
+1. ✅ 三决策严格对齐 PROPOSAL：`AgentConfig{Type/Write/Restore}` + `BaseOptions`/`BaseRestoreOptions` 同构接口（registry.go:18-35）；`Paths map[string]string` + slice 字段做 canonical + legacy 字段做 compat shim（fileio.go:18-32，附 T-046 删除注释）；`init()` 注册三 adapter 到 `DefaultRegistry`（registry.go:40-46），`NewRegistry()` 暴露给隔离测试。
+2. ✅ N-10 选 (a) 路线 `DefaultRegistry.MustRegister(...)`，未引入冗余包级 helper —— 比 (b) 更简，commit message 也点了。
+3. ✅ CLI 零改实锤：`git diff 147502da~1 147502da -- cmd/omnitoken-adopt/` 输出为空，CLI 测试全绿；compat shim 三处都把 legacy 单值字段从 canonical 派生（`BackupPath = firstString(backupPaths)` / `RestoredFrom = firstString(restored)`），避免双向漂移。
+4. ✅ 测试覆盖到位：`TestRegistryRegisterGetListAndDuplicate` / `TestRegistryRejectsInvalidConfig`（nil + 空 Type 两路）/ `TestRegistryMustRegisterPanicsOnDuplicate` / `TestDefaultRegistryContainsBuiltInAdapters` / `TestRegistryWriteMatchesExportedWrappers`（三 adapter 表驱动 wrapper vs registry parity）/ `TestCanonicalResultFieldsArePopulated`（canonical + legacy 双向验证）/ `TestNonEmptyStringsSharedHelper`（R-043 N-9 跟进）—— 各能力维度都有 1-2 例。
+5. ✅ Codex propose 拍板 ManagedKeys 收敛细节做得稳：Codex 的 canonical `ManagedKeys = ManagedEnv + ManagedToml` 拼接（codex.go:139, 196），同时 legacy `ManagedEnvKeys`/`ManagedTomlKeys` 保留给 CLI；CLI 输出两行 `managed_env` / `managed_toml` 不破。
+
+**N-11 (NIT)**: `fileio.go:194` 新增 `paths()` helper 过滤空值，但当前三 adapter 的 map 字面量值都非空（`configPath`/`authPath` 在 Codex 是必填，settings/config 在 Claude/OpenCode 也是必填）—— 过滤分支永不命中。可以下次裁掉，或把它换成直接 `map[string]string{...}` 字面量。不阻塞合并。
+
+**N-12 (NIT)**: `init()` 用 `&ClaudeCodeConfig{}`（指针）注册，但三 Config 的方法用 value receiver（如 `func (ClaudeCodeConfig) Type() AgentType`）。两种风格混用不会出 bug（Go 自动派发），但风格上要么全 value-receiver + `ClaudeCodeConfig{}` 注册，要么 pointer-receiver + `&ClaudeCodeConfig{}` 注册。后续若 Config 要带状态再统一即可。
+
+**[+] 决策遗产**: PROPOSAL Decision 2 的"两阶段移除"（T-040 加 canonical + 保 legacy，T-046 删 legacy）是这次能"CLI 零改 + Result 收敛"同时成立的关键。**已在 fileio.go:25-32 留下显式注释**指向 T-046，迁移路径清晰。
+
+---
+
+## R-CONC-CHECK (T-CONC-CHECK 实施, 报告 `04fff8a7`, status `c6c4262f`)
+
+**结论: `[+] Approved with follow-ups`** — 任务形式上完成：报告交付 + V2 candidates 主动列 3 条 + 严格"不修代码"。但**baseline 数据不完整**且**抓到底座成本归因隐患**。T-CONC-CHECK 本身可关；需起 3 个 follow-up（M-23 / H-3 / H-4），其中 M-23 阻塞 Phase 3-A 商业化场景，建议先开。
+
+**正面信号**:
+1. ✅ Codex 严格守"只测量不修"边界：所有发现写进报告 §V2 Candidate Fixes，未单边改 DSN / 加索引 / 调连接池 —— 任务体接受标准末条达成。
+2. ✅ Preflight 设计严谨：跑前先打 1 发 chat-fast 看实际下游模型，**抓出了 `virtual_models` 表 vs `usage.model_actual` 的不一致**（实质是 Ark backend 模型名披露，gateway 转发逻辑经 `cmd/gateway/main.go:235` + `internal/usage/parser.go:38,41` 证实正确）；同时跑前清零 demo admin 的 monthly budget，避免 quota 抑制 mask 上游真实行为，实验设计强。
+3. ✅ Gateway 自身韧性: 50 并发 × 50 真 chat 跑下来 **0 panic / 0 5xx / 0 timeout / 0 client error**，428 成功请求 P95 1.798s / P99 2.415s（含 Ark 上游往返）—— `internal/proxy` SSE 反代 + budget/auth/audit 中间件全链路在压力下没出 race / 没崩。
+4. ✅ 报告透明披露所有偏差：vegeta 不可用 → 临时 Go driver（已标出）/ DB sampling filter 失效（peak=0）→ 主动说明"not proof of zero connections"；healthz 实际 996.2 RPS vs 配置 1000 RPS 也照实记。无"成功率掩饰"的迹象。
+5. ✅ V2 candidate fixes 三条都精准对症：upstream-aware load profile（解 H-4）/ DSN `application_name` 显式设置（解 H-3）/ loadtest summary 加 429 计数（提升可观测性）—— 不是泛泛的"以后再说"，是可直接立任务的清单。
+
+**M-23 (MEDIUM, 升级建议)**: `model_actual = deepseek-v4-pro` ≠ gateway 重写后 `kimi-k2.6` —— 经查 `cmd/gateway/main.go:235` (`payload["model"] = res.RealModel`) + `internal/usage/parser.go:38` (`ModelActual = response.Model`)，**gateway 转发逻辑正确**，这是 Ark 上游响应里自报的 backend 模型名（与 memory `project_omnitoken_ark_coding_plan` 中"5 模型共用一把 key"的设计契合）。**但**：`cmd/admin/main.go:667/791/803` admin overview 全部按 `model_actual` 聚合成本/请求数 → 用户问"我用了多少 kimi-k2.6"会被答"deepseek-v4-pro"。**这是 OmniToken 底座"性价比资源"角的成本归因路径污染**。建议起 **T-CONC-COST-ATTR**：(a) 复现 Ark 行为并补 ADR 记录预期；(b) `usage_records` 加 `model_routed`（gateway 转发出的模型名，从 `httpx.WithVirtualModel` ctx 取）作为归因 ground truth；(c) admin overview 默认按 `model_routed` 聚合，`model_actual` 保留供审计。**建议 Phase 3-A 之前做**。
+
+**H-3 (HIGH)**: 任务体接受标准第 3 项"DB 连接峰值"形式上未达成（filter `application_name LIKE 'omnitoken%'` peak=0），Codex 已透明说明。建议起 **T-CONC-DSN**：在 `cmd/gateway/main.go` / `cmd/admin/main.go` 的 DSN 构造处显式拼 `application_name=omnitoken-gateway` / `application_name=omnitoken-admin`，并在 `cmd/loadtest/README.md` 把采样 SQL 一并写好。**不阻塞 Phase 3-A**，但底座可观测性短板要补，建议穿插做。
+
+**H-4 (HIGH)**: 2500 真跑 83% 是 Ark 429 → **v1 真实并发上限 baseline 实际上没拿到**。任务体目标"测 v1 真实并发上限"被 Ark rate limit 吃了。Codex 结论"primary bottleneck is Ark upstream rate limiting"诚实，但用户层面"v1 上线后能扛多少 RPS"这个问题没答案。建议起 **T-CONC-RERUN**：(a) mock upstream 跑 50 并发 / 100 并发 / 200 并发 各 1 分钟，量 gateway 真实承载；(b) 真 Ark 跑低 RPS 长时间（如 3 RPS × 600s = 1800 请求，成本约 9 RMB），定位 Ark 429 阈值。**Phase 3-A 启动不强依赖此数**（Agent 适配是离线配置写入，不打 Ark）—— 可推到 v1 真实流量进来前做。
+
+**N-13 (NIT)**: 报告第 30-36 行解释 `model_actual = deepseek-v4-pro` 那一段语义偏弱（"routing target evidence is the virtual_models row"），未点透"这是 Ark backend 模型名披露"。可在后续报告版本加一句"Ark coding plan 5 模型 backend 推理可能共用 —— 这不是 gateway bug"。
+
+**[+] 方法学遗产**: Preflight 校验"客户端→gateway→上游→usage"的端到端模型路径，是个**值得沉淀到 AGENTS.md §3.3 的 smoke 方法学**（在 `AGENTS.md §9.5` smoke 守则之后补一条"涉及虚拟模型路由的实测必须 preflight 比对 virtual_models 表 vs usage.model_actual"）。这次 Codex 主动做了，未来其他任务也该照搬。
