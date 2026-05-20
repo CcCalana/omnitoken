@@ -280,7 +280,7 @@ Proposal: `docs/proposals/2026-05-19-t042-codex-adapter.md`
 
 ---
 
-## T-043 OpenCode 适配（配置写入） [phase:3-A] [owner:codex] [status:in-progress]
+## T-043 OpenCode 适配（配置写入） [phase:3-A] [owner:codex] [status:review]
 
 Started: 2026-05-20 09:52 +08:00
 Proposal: `docs/proposals/2026-05-20-t043-opencode-adapter.md`
@@ -319,3 +319,5 @@ Proposal: `docs/proposals/2026-05-20-t043-opencode-adapter.md`
 **依赖**: T-042 ✅（`fileio.go` 已抽出且包含 M-20/M-21 修复）。
 
 **参考**: `docs/references/agent-adapter/agent-adapter-pattern.md` §3.4（含 OpenCode 完整模板，但 tingly-box 把 Config 留作 opaque `map[string]any`，managed 字段需 propose 自定）；`agent-adapter-projects-reference.md` 第 233 / 329-352 行（token_proxy Rust 写 opencode.json + `resolve_opencode_config_dir` XDG 解析模式 —— Go 等价实现是本任务核心参考）；R-042 N-7（`firstString` BackupPath 语义可顺手改名 / 删除，**可选**，不强求）。
+
+**Result**: `5254c48` — agent_adapter 82.2%; Q-1 选单一 `--model`，多模型留 T-044；N-8 文件注释已落. all green.
