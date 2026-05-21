@@ -21,6 +21,8 @@
 | 05-20 | **路线反思 + ADR 0003**: 用户讯问"50×50 单 key 不符合中转站行业玩法"，回溯 §零A 第 1 条，**T-016 多 key 池 v1 必做**。从 vNext 拉回 Phase 2-C；admin CRUD UI / KMS / rotation 推 v1.1；T-CONC-RERUN 也拉回与 T-016 同期。v1 ETA "~1 周" → "~2 周"。memory `project_omnitoken_ark_coding_plan` 需修正 |
 | 05-20 | **T-016 任务体写好**（status:todo, propose 前置=是）。schema + envelope encryption + 2-3 Ark key seed + gateway 轮询 + 429 切池；5 propose 决策点：主密钥来源 / credential 加载策略 / 429 backoff / SSE 流式中途切换 / metadata 字段用途 |
 | 05-21 | **R-EXT-2026-05-21 外部专家分析核验**：6 条诊断 → 3 命中已跟踪 / 1 NIT 挂到 T-016 顺带做（SSE ctx.Done 分支补 body.Close + 单测）/ 1 推测（quota Redis 缓存）降为 vNext 观察项 **T-QUOTA-CACHE-PROBE** / 1 读错代码（goroutine 泄漏 OOM）。v1 ETA 不动 |
+| 05-21 | **R-016-prop approve** (`fd9ce8d8`)：5/5 propose 决策直接采纳；H-5 (partial-first-read) + M-24/M-25 (ops 文档) + N-15 (WARN log 不漏 Ark body) 留实施期核 |
+| 05-21 | **R-016 approve** (impl `c6ee841d` + e2e `8544ce82`)：12/12 接受标准全达成；H-5/M-24/M-25/N-15 + T-NIT-SSE-CLOSE 五条债全部落地且有显式断言；proxy 86.7% / crypto 87.8% / credentials 92.0%；T-CONC-COST-ATTR 合并到 000012 migration + admin 三处 SQL 切到 model_routed 一并完成。**v1 §零A 第 1 条"性价比资源 = 多 upstream key 池"落地**。3 NIT (provider='ark' 缺注释 / master key fallback log 缺 reason / usage_events 不追溯 retry 链路) 不阻塞 |
 
 ---
 
@@ -58,6 +60,8 @@
 | T-043 | OpenCode 适配 (XDG 三档解析) | `5254c48` | agent_adapter 82.2% |
 | T-040 | Registry + AgentConfig interface 抽象 | `147502da` | agent_adapter 83.6% |
 | T-CONC-CHECK | v1 并发摸底报告 + 3 follow-up | `04fff8a7` / `c6c4262f` | — |
+| **T-016** | upstream_credentials 多 key 池 v1 (envelope + selector + retry + ops 文档) | `c6ee841d` + e2e `8544ce82` | proxy 86.7% / crypto 87.8% / credentials 92.0% |
+| **T-CONC-COST-ATTR** | model_routed 列 + admin 三处 SQL 切换（**并入 T-016 同一 migration 000012**） | `c6ee841d` | usage/admin 不降 |
 
 > 详细 review 见 `docs/reviews/archive-2026-05-20.md`（Phase 2-B 收官 + Phase 3-A Adapter 链路）；T-006d 验收明细见 R-006d 归档；T-009a/T-009b 详情见 R-009a / git。
 
@@ -101,7 +105,7 @@ E2E 验收通过，但**前端假数据 + admin 无鉴权 + 未验证并发**。
 | 2-B 权限 | T-005b admin auth 升级 + 登录页 + RBAC 落地（全栈） | 替换 bootstrap → session/JWT；RBAC 挂 admin 写；前端登录/退出 | 3d | T-005a + T-013 | ✅ |
 | 2-B 性价比 | **T-017a 虚拟模型解析（单 key 5 模型）** | gateway 接 `chat-fast/balanced/quality/...` 改写为真实 Ark model；含 admin 列表 + 前端展示 | 1-1.5d | T-008 ✅ | ✅ |
 | 2-B 联调 | **T-INT 前后端联调 + v1 release prep** | admin + viewer 双账号走通全流程；env / docker-compose / 部署文档；含虚拟模型路由演示 | 1d | T-015 + T-005b + T-017a | ✅ |
-| 2-C 性价比 | **T-016 upstream_credentials + 多 key 池**（ADR 0003 拉回）| schema + 2-3 把 Ark key seed 加密入库 + gateway 轮询/429 重试 + usage 写 credential_id；CRUD UI 推 v1.1 | 5-7d | T-INT ✅ | todo |
+| 2-C 性价比 | **T-016 upstream_credentials + 多 key 池**（ADR 0003 拉回）| schema + 2-3 把 Ark key seed 加密入库 + gateway 轮询/429 重试 + usage 写 credential_id；CRUD UI 推 v1.1 | 5-7d | T-INT ✅ | ✅ |
 | 2-C 验证 | **T-CONC-RERUN 多 key 池真实 baseline**（原 vNext 拉回）| mock upstream 测 gateway 承载 + 多 key 池上线后真 Ark 复跑 50/100 并发 | 1d | T-016 | todo |
 
 **v1 上线 ETA（2026-05-20 调整）**: ADR 0003 拉回 T-016 后，v1 ETA 从原 "~1 周" 调整为 **"~2 周"**。T-016 是关键路径（5-7d），T-CONC-RERUN 验收 1d。Phase 3-A Agent 适配相应延后 ~1 周。
@@ -164,110 +168,14 @@ E2E 验收通过，但**前端假数据 + admin 无鉴权 + 未验证并发**。
 
 ---
 
-## T-016 upstream_credentials 多 key 池（v1） [phase:2-C] [owner:codex] [status:review]
-
-Started: 2026-05-21 00:15 +08:00
-Proposal: `docs/proposals/2026-05-21-t016-upstream-credential-pool.md`
-
-**目标**: 落实 ADR 0003 决策，把 §零A 第 1 条"性价比资源 = 多 upstream key 池"在 v1 阶段真正落地。具体做：(a) `upstream_credentials` 表 schema + AES-256-GCM envelope encryption；(b) 2-3 把 Ark coding plan key 通过 seed SQL 加密入库；(c) gateway 按 priority/weight 选 credential，429/5xx 自动切池中下一把；(d) usage 流水记录 `upstream_credential_id` 作为 key 维度归因。**admin CRUD UI / KMS / 自动 rotation / 多 provider 推 v1.1**，不在本任务范围。
-
-**涉及**:
-- `internal/migrate/migrations/00XX_create_upstream_credentials.sql` + 00YY_add_credential_id_to_usage.sql（新增）
-- `internal/crypto/envelope.go`（新增）— AES-256-GCM envelope encryption，主密钥从 env `OMNITOKEN_MASTER_KEY` 注入（hex 编码）
-- `internal/credentials/` 包（新增）— credential 加载（启动时从 DB 解密入内存）、selector（按 priority/weight 轮询）、health state（429/5xx 临时降权）
-- `cmd/gateway/main.go` — proxy 层接 credential selector；HTTP client 实际用的 `Authorization: Bearer <decrypted_secret>` 替换原硬编码/单 env
-- `internal/proxy/`（看具体文件）— 429/5xx 重试切下一 credential 的状态机；SSE 反代要兼容（chunk 已发出后不能切）
-- `internal/usage/recorder.go` + `internal/usage/store_postgres.go` + 同期 T-CONC-COST-ATTR 的 schema 合并 — 加 `upstream_credential_id` 列
-- `cmd/admin/main.go` — overview 加 "按 credential 维度" 查询能力（v1 后端 API 就行，UI 推 v1.1）
-- `deploy/docker-compose.yml` — 加 `OMNITOKEN_MASTER_KEY` env 注入位（用一个固定 demo key，部署文档写明生产换）
-- `docs/operations/master-key-rotation.md`（新增）— 主密钥注入和 rotation 流程文档
-
-**接受标准**:
-- [ ] **Schema**: `upstream_credentials` 表含字段（按规划.md §185 行）：`id`、`provider`、`base_url`、`encrypted_secret`（bytea）、`region`、`priority`（int）、`weight`（int, 默认 1）、`status`（active/disabled）、`health_state`（healthy/degraded/quarantined）、`last_error`、`quota_hint`、`metadata`（jsonb）、`created_at`、`updated_at`。reverse migration 完整。
-- [ ] **加密**: AES-256-GCM envelope，单元测试覆盖 (a) 加密后密文不含明文子串 (b) 错误主密钥解密失败 (c) tag 篡改解密失败 (d) nonce 不复用（每次加密生成新 nonce）。
-- [ ] **Seed**: docker-compose 启动时通过 migration 或独立 seed 命令插入 2-3 把 Ark key（明文从 env `OMNITOKEN_ARK_KEYS_*` 读，加密落 DB）；启动日志打印"loaded N upstream credentials"但**不打印任何 key 明文/密文/前后缀**。
-- [ ] **Gateway 选 credential**: priority 升序 + weight 加权轮询；status=disabled 跳过；health_state=quarantined 跳过；usage 流水里 `upstream_credential_id` 写选中的。
-- [ ] **429/5xx 切换**: 单请求遇 429 或 5xx，**最多重试 2 次**切下一 credential（避免无限重试）；SSE 流式如果 chunk 已发出则不切（标 final）；切到底没 healthy 的返回 503 envelope。**429 自动把当前 credential 标为 degraded 持续 30s**，避免短时间反复打同一 key。
-- [ ] **顺手 NIT (T-NIT-SSE-CLOSE)**: 改 `internal/proxy/proxy.go` retry 逻辑时，把 `readWithIdle` 的 `case <-ctx.Done():` 分支补上 `_ = body.Close()`，与 `timer.C` 分支对称（避免依赖外层 defer + buffered channel 间接清理 goroutine）。**单测加一条**：客户端断开后，goroutine 数量在 100ms 内回归基线（用 `runtime.NumGoroutine()` 差值断言或类似手法）。**不阻塞 T-016 主线 review，作为顺带项**。
-- [ ] **Usage 归因**: `usage_records.upstream_credential_id` 列（int FK）+ 写入。**与 T-CONC-COST-ATTR 的 model_routed 列同期添加，合并到一个 migration 文件减少冲突**。
-- [ ] **Admin 后端 API**: `GET /admin/credentials` 返回 credential 列表（不含密文，仅 id/provider/priority/weight/status/health_state/last_error 等元数据）；用于 v1.1 UI 接入。**UI 不做**，但 API + 单测要做。
-- [ ] **关键日志/审计**: credential 添加/更新/禁用走 audit_logs；429 切换 credential 走 WARN log；明文密钥**严禁**出现在任何日志/error message/HTTP response。code review 时 grep `encrypted_secret` 的所有路径。
-- [ ] **测试**: `internal/crypto/envelope_test.go`（envelope 加密 4 条）；`internal/credentials/selector_test.go`（priority/weight 排序、disabled/quarantined 跳过、空池 503）；`internal/credentials/load_test.go`（DB 解密 + nonce 唯一）；`internal/proxy/retry_test.go`（429 切换 + SSE 兼容 + 最多 2 次重试）；admin handler test（API 不漏密文）。
-- [ ] **覆盖率**: `internal/crypto` + `internal/credentials` ≥85%；`internal/proxy` 不降。
-- [ ] **e2e (docker-compose)**: 1 admin user + 3 把 Ark key seed + gateway 接 admin handler；mock upstream 返回 429 让 gateway 切换；usage 流水按 credential 维度聚合可看到 3 把 key 各自的请求数 + 切换次数 > 0。
-- [ ] **`go vet ./...` clean；`go test ./...` 全绿；docker race target (`make test-race`) 全绿**。
-
-**Codex propose 前置**: **是**。PROPOSAL 答清 5 点：
-1. **主密钥从 env 还是 file？** v1 默认 env (`OMNITOKEN_MASTER_KEY` hex)。但 docker-compose 把 env 写进 yaml 显式存在被 cat 风险。propose 给"docker secret 挂载文件 + 进程 read once"的 v1 方案对比，定取舍。
-2. **credential 加载策略**: 启动一次全部解密入内存 vs 每次请求从 DB 解密。**默认推荐启动一次**（避免请求路径解密成本 + 主密钥使用次数最少）；但需要 cache invalidation 机制（admin 改 credential 后 gateway 怎么感知）。propose 给方案：v1 重启感知 vs SIGHUP reload vs 定时 poll vs PG NOTIFY。
-3. **429 切换的 backoff 策略**: 当前任务体写"429 标 degraded 30s"。propose 拍 30s 是否合理（Ark 单 key rate limit 实测 ~7 RPS，30s 内不应再打）；也可考虑指数退避（30s/60s/120s）。
-4. **SSE 流式中途 429 怎么办**: chunk 已发给客户端，不能切 credential。两路：(a) 流式失败直接 final（用户体验：截断）(b) 流式上游 1 次失败重试要在第一 chunk 之前完成。**默认推荐 (b) 配合 stream 缓冲首 chunk**。propose 拍。
-5. **upstream_credentials.metadata jsonb 字段干嘛用**: v1 留着不用？还是塞 `ark_user_id`（key 归属用户，便于运维联系采购）？默认推荐 v1 字段加但不强制写，给 schema 预留扩展位。
-
-**不在范围**:
-- admin CRUD **UI**（v1 后端 API 够；UI 推 **v1.1 T-016b**）
-- KMS 集成（v1 用 env 主密钥；KMS 推 vNext）
-- 自动 rotation（推 vNext T-016c）
-- 多 provider（Ark 之外的 OpenAI/Anthropic）（推 vNext T-016d，与 protocol 转换并轨）
-- 按虚拟模型分配 credential 池（v1 全局一个池；推 v1.1）
-- T-017 priority_fallback policy_id 体系（推 vNext，v1 简化为 priority/weight 静态）
-- T-018 故障注入 e2e（推 vNext）
-
-**依赖**: T-INT ✅（v1 联调基线）；T-CONC-COST-ATTR（建议**同期并行**，合并 migration）；ADR 0003 ✅。
-
-**参考**: `docs/adr/0003-multi-key-pool-priority.md` ✅；`规划.md` §零A 第 1 条 + §185 upstream_credentials 字段定义 + §四十六风险表行 468；`REVIEW.md` R-CONC-CHECK M-23 + H-4；memory `project_omnitoken_ark_coding_plan`（已修正）；`docs/release/v1-concurrency-baseline-2026-05-21.md`（验证 baseline 起点）。
-
-**Result**: `c6ee841d` + `8544ce82` — proxy 86.7%, crypto 87.8%, credentials 92.0%; H-5/M-24/M-25/N-15/T-NIT-SSE-CLOSE + e2e landed, all green.
-
----
-
-## T-CONC-COST-ATTR 成本归因路径修复（model_routed） [phase:2-B 后置] [owner:codex] [status:todo]
-
-**目标**: 修复 OmniToken 底座"性价比资源"角的成本归因路径。R-CONC-CHECK M-23 实测：admin overview 当前按 `model_actual`（Ark 上游响应里自报的 backend 模型名）聚合，**与用户/管理员心智里"我请求了哪个模型"完全脱节** —— 例：preflight 跑 `chat-fast → kimi-k2.6`，但 `model_actual = deepseek-v4-pro`（Ark coding plan 多模型共用 backend 推理的预期行为）。本任务把 admin 成本归因切到 **gateway 实际转发的模型**（虚拟模型解析后的 real_model；非虚拟时即用户原 request 的 model），让 admin overview 和审计层数据可信。
-
-**涉及**:
-- `internal/migrate/migrations/00XX_add_model_routed_to_usage.sql` (新增) — `usage_records` 加 `model_routed` 列
-- `internal/usage/recorder.go` / `internal/usage/store_postgres.go` — `Record` struct 加 `ModelRouted` 字段，写入新列
-- `internal/usage/parser.go` — **保持不变**（`ModelActual` 继续取 Ark `response.Model`）
-- `cmd/gateway/main.go` — `payload["model"] = res.RealModel` 那段（line 234-244）把 `res.RealModel`（或非虚拟时的 `modelRequested`）传进后续 usage 流水，可走 `httpx.WithVirtualModel` ctx 扩展或新增 ctx key
-- `cmd/admin/main.go:667/791/803` — 三处 `COALESCE(NULLIF(ue.model_actual, ''), ...)` 改为 `COALESCE(NULLIF(ue.model_routed, ''), NULLIF(ue.model_requested, ''), 'unknown')`；`model_actual` 列**保留**给审计但 overview 不再用
-- `docs/adr/000X-cost-attribution-model-routed.md` (新增) — Context/Decision/Consequences 三段式
-- 单测 + admin SQL 断言更新
-
-**接受标准**:
-- [ ] **schema**: `usage_records.model_routed text NOT NULL DEFAULT ''`（与 `model_actual` 同 nullability 策略；migration 加 reverse SQL）。
-- [ ] **写入**: gateway 把 `res.RealModel`（virtual 路径）或 `modelRequested`（非虚拟路径）写到 `Record.ModelRouted`；recorder/store 透传到 DB。
-- [ ] **`internal/usage/parser.go` 行为零变化**：`ModelActual` 继续取 `response.Model`；该字段语义重新定义为"上游自报的 backend 模型名"（在 ADR 里写明）。
-- [ ] **admin 聚合切换**: overview / users / models 三处 SQL（`cmd/admin/main.go:667/791/803`）改为 COALESCE `model_routed → model_requested → 'unknown'`；`model_actual` 列保留供审计接口（如果有审计 tab 需要展示 Ark backend 真名，留一个查询点）。
-- [ ] **历史数据兜底**: v1 之前 demo 数据 `model_routed=''`，靠 COALESCE 回退到 `model_requested` 即可显示；**不需要回填 SQL**。
-- [ ] **ADR `000X-cost-attribution-model-routed.md`**: 必须包含 (a) Ark coding plan 多模型共用 backend 推理的实测证据（R-CONC-CHECK preflight）；(b) 为什么 `model_routed` 是成本归因 ground truth、`model_actual` 退为审计字段；(c) 多 provider 启动后这一策略是否仍成立（前瞻一句话即可）。
-- [ ] **测试**:
-   - `internal/usage/recorder_test.go` 加 ModelRouted 写入用例（虚拟模型 + 非虚拟模型两路）
-   - `internal/usage/store_postgres_test.go` 加 model_routed 列写入断言
-   - `cmd/admin/main_test.go` 三处 SQL 断言更新为新 COALESCE
-   - 新增 `internal/usage/parser_test.go` 反向断言：parser **不**碰 ModelRouted（防回归）
-- [ ] `go vet ./...` clean；`go test ./...`（含 `golang:1.25` Docker race 跑）全绿；`internal/usage` + `cmd/admin` 覆盖率不降。
-
-**Codex propose 前置**: **是**。PROPOSAL 答清 3 点：
-1. **`ModelRouted` 数据源**: 复用 `httpx.WithVirtualModel(ctx, modelRequested)` 的 ctx key（已在 `cmd/gateway/main.go:242` 设置，但目前只存 `modelRequested`），还是新增一个 `httpx.WithModelRouted(ctx, res.RealModel)`？前者改语义会破现有用 WithVirtualModel 的地方，后者更干净。**默认推荐后者**，但要 grep 现存 `httpx.WithVirtualModel` 所有 caller 确认无歧义。
-2. **schema NOT NULL 还是 nullable**: `model_actual` 当前 schema 是什么（nullable text？），新列保持一致最安全。如果 `model_actual` 是 nullable 且现网数据可能 NULL，`model_routed` 也保 nullable + COALESCE 兜底；如果 `model_actual NOT NULL DEFAULT ''`，新列照搬。Codex propose 时贴 schema 现状定。
-3. **`model_actual` 在 admin 是否完全下沉**: overview 切到 model_routed 后，`model_actual` 是否还有展示位（如 audit tab "Ark 上游实际模型"列）？默认推荐**保留供 audit**，overview/users/models 三处 SQL **不展示** model_actual；如果 audit tab 当前没用，propose 给出"未来扩展位"的 stub 设计即可。
-
-**不在范围**:
-- DSN `application_name` 修复 → vNext T-CONC-DSN
-- v1 真实并发 baseline 复跑 → vNext T-CONC-RERUN
-- 跨 provider 的 backend 模型披露差异（OpenAI/Anthropic 是否也有同样行为）→ 多 provider 启动时再看
-- Ark 这种 backend 多路复用是否合规/合同问题 → 不是工程范围
-
-**依赖**: T-INT ✅（usage pipeline + admin overview 已就位）；R-CONC-CHECK ✅（M-23 提出）。
-
-**参考**: `docs/release/v1-concurrency-baseline-2026-05-21.md` §Preflight（M-23 实测证据）；`REVIEW.md` R-CONC-CHECK M-23 段；`cmd/gateway/main.go:234-244`（virtual_model 重写）+ `internal/usage/parser.go:38,41`（ModelActual 来源）；memory `project_omnitoken_ark_coding_plan`（5 模型共用 key 的设计背景）；`规划.md` 第八节（schema 变更走 migration）+ §零A（底座三角"性价比资源"）。
-
----
-
-
 <!-- T-041 / T-CONC-CHECK / T-MK-RACE / T-042 / T-043 / T-040 任务体已迁出。
      done 状态见 Phase 3-A 表 + 速查表；R-* 详 docs/reviews/archive-2026-05-20.md；
-     PROPOSAL 在 docs/proposals/；实现 diff 走 git log。 -->
+     PROPOSAL 在 docs/proposals/；实现 diff 走 git log。
+
+     T-016 + T-CONC-COST-ATTR 任务体已迁出（2026-05-21 done）。done 状态见
+     Phase 2 表 + 速查表；R-016-prop / R-016 详 REVIEW.md；PROPOSAL 在
+     docs/proposals/2026-05-21-t016-upstream-credential-pool.md；
+     ops 文档 docs/operations/master-key-rotation.md；
+     migration 000012；实现 diff 走 git log (c6ee841d + 8544ce82)。 -->
 
 **Review**: R-040 Approved (REVIEW.md)。无 CRITICAL/HIGH；N-11 (paths() helper 过滤分支永不命中) + N-12 (init() 指针 vs value-receiver 风格混用) 不阻塞，下次顺手裁。T-044 / T-046 解锁。

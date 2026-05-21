@@ -8,6 +8,33 @@
 >
 > 本文件保留最近 review；老的归档到 docs/reviews/。
 
+## R-016 (T-016 实施, impl `c6ee841d` + e2e `8544ce82` + status `9a219c2a`)
+
+**结论: `[+] Approved`** — T-016 接受标准 12/12 全部达成，R-016-prop 留的 4 条债（H-5/M-24/M-25/N-15）+ R-EXT-2026-05-21 折进来的 T-NIT-SSE-CLOSE 全部落地且都有显式断言，无 CRITICAL/HIGH/MEDIUM。3 NIT 不阻塞。v1 最关键的"性价比资源 = 多 upstream key 池"角到位，§零A 第 1 条落地完成。
+
+**正面信号**:
+1. ✅ **R-016-prop H-5 教科书级实现**：`copyStreamingResponse:384-386` 在 `n>0` 时 `result.final = true`，`doWithRetries:278` 重试条件包含 `!result.final` —— n>0 即标 final, 无论是否伴 err 都不切。`retry_test.go:97-126 TestArkChatProxyDoesNotRetryPartialFirstRead` 用 mock 返回 `(5 bytes, io.ErrUnexpectedEOF)` 正面断言 `transport.calls == 1`、`body == "part\n"`，三个 assertion 全部命中 R-016-prop H-5 的原文要求。
+2. ✅ **T-NIT-SSE-CLOSE 三分支全对称**：`readWithIdle` pre-flight ctx.Done (`proxy.go:433-436`) / 阻塞中 ctx.Done (`456-458`) / timer 触发 (`459-462`) 三个退出分支统一 `_ = body.Close()`。两条 goroutine 回归测试 (`retry_test.go:128-184`) 用 `runtime.NumGoroutine() <= before+2` 在 100ms 内回归基线 —— 完整对齐 T-NIT-SSE-CLOSE 接受标准。
+3. ✅ **M-24 / M-25 ops 文档极简但精确**：`docs/operations/master-key-rotation.md` 20 行覆盖两个核心问题——v1 不 unlink/zeroize 取舍 + 4 步 production rotation 流程 + startup-only reload 模型；`deploy/docker-compose.yml` 在 `credential-seed` 与 `gateway` 两处加注释强调"restart gateway after seed change"，运维不会踩坑。
+4. ✅ **N-15 双重防漏 Ark body**：`logCredentialRetry` 只输出 `credential_id/attempt/code/upstream_status`，不附响应体；`TestLogCredentialRetryOmitsUpstreamBody` 直接断言 `not Contains("quota_owner")`；`TestArkChatProxyRetries429WithNextCredential` 在 mock 上游 429 body 里塞 `{"quota_owner":"must-not-leak"}` 后再断言响应体不漏 —— log 路径 + client 响应路径都被锁死。
+5. ✅ **`WithUpstreamCredentialRecorder` 的指针式设计**：`httpx/virtual_model.go:36-63` 用 mutex 包裹可变 id 解决 "ctx 不可变 vs retry 后归因要更新" 的痛点，proxy retry 切换时 `SetUpstreamCredentialID` 改指针指向值，middleware 收尾读到最终成功的 credential id — 归因到"成功 credential"是正确的语义（429 失败 credential 走 WARN log 而非 usage_events）。`credential_pool_e2e_test.go:198` 用真 DB 聚合 `upstream_credential_id` 验三把 key 全部出现，端到端断言。
+
+**T-CONC-COST-ATTR 合并完成**:
+- migration `000012_upstream_credentials_v1.up.sql:32-33` 把 `usage_events.model_routed text NOT NULL DEFAULT ''` 合并到 T-016 同一 migration，无新增 0013（达成 R-016-prop 实现 notes 要求）。
+- `cmd/admin/main.go:695/819/831` 三处 SQL 一并切 `COALESCE(NULLIF(ue.model_routed, ''), NULLIF(ue.model_requested, ''), 'unknown')`；`cmd/admin/main_test.go:715/921` 测试断言同步更新。
+- `cmd/gateway/main.go:273-278` Decision 1（ctx key 新增 `WithModelRouted` 不动 `WithVirtualModel` 语义）落实，虚拟路径写 `RealModel` / 非虚拟路径写 `modelRequested`，符合 T-CONC-COST-ATTR propose 决策 1 推荐方向。
+- **T-CONC-COST-ATTR 任务体可关，无单独实施 commit 必要**。建议 TASKS.md 把它合到 T-016 done 速查表，状态标 ✅。
+
+**N-16 (NIT)**: `internal/credentials/store_postgres.go:135` `loadCredentialsSQL` 硬编码 `WHERE provider = 'ark'` 是 v1 范围正确取舍（任务体明确"多 provider 推 v1.1"），但没注释。多 provider 启动时容易当成 bug 排查很久。可加一行注释 `-- v1: ark-only; expand here for multi-provider`。
+
+**N-17 (NIT)**: `cmd/gateway/main.go:107-110` 当 master key 加载失败但 `cfg.Ark.Enabled()` 时静默 fallback 到 `OMNITOKEN_ARK_API_KEY` 单 key 路径，log level 是 Warn。这在生产环境是合理的 degraded mode，但日志中没说明 "for which reason"（key file missing vs hex decode failed vs invalid length）。可把 LoadMasterKey 的 err 也带进 Warn (现有 line 111 已带，line 108 没带)，让运维一眼分清是哪种失败。
+
+**N-18 (观察, 不立任务)**: usage 归因到"最终成功 credential"是正确语义，但运维想知道"哪把 key 触发 429"只能看 WARN log（grep）。如果 v1.1 admin UI 引入"按 credential 健康度排序"视图，可考虑加 `usage_events.upstream_credential_attempts jsonb` 或独立 `credential_retry_events` 表。**纯设计选项，不预判 v1.1 路线**。
+
+**与 R-EXT-2026-05-21 闭环**: 外部专家 #2（SSE goroutine 泄漏 OOM CRITICAL）被 R-EXT 降级为 NIT 后通过 T-NIT-SSE-CLOSE 完成兜底；专家 #3（单 key 17.1% 成功率）通过本 T-016 完整解决；专家 #4（model_routed 归因）通过 T-CONC-COST-ATTR 合入解决；专家 #6（KMS 主密钥）的 v1 部分通过 Decision 1 file-first + ops 文档解决，KMS 留 vNext。本轮路线判断（"3 命中已跟踪 / 1 NIT / 1 推测降级 / 1 读错代码"）经实测验证全部到位。
+
+---
+
 ## R-016-prop (T-016 PROPOSAL, commit `fd9ce8d8`)
 
 **结论: `[+] Approved`** — 5/5 决策直接答了 propose 问题，方向全部采纳。Codex 可开 T-016 实施。1 HIGH + 2 MEDIUM + 1 NIT 是实施期的细节边界，不阻塞 propose 关门。
@@ -72,7 +99,7 @@
 | M-19 | R-010 | MEDIUM | 503 admin_auth_not_configured 在生产部署中可能成隐患（默认不放行正确，但运行期需 alerting） | Informational, Phase 2 alerting |
 | H-3 | R-CONC-CHECK | HIGH | DSN 未拼 `application_name` → `pg_stat_activity` 采样失效 | 留 vNext T-CONC-DSN |
 | H-4 | R-CONC-CHECK | HIGH | 50×50 真 Ark 17.1% 成功率被上游 429 吃了，gateway 真实承载 baseline 未拿到 | 拉回 v1 起 T-CONC-RERUN（与 T-016 同期） |
-| M-23 | R-CONC-CHECK | MEDIUM | admin overview 按 `model_actual` 聚合 → Ark backend 名污染成本归因 | 起 T-CONC-COST-ATTR (todo) |
+| M-23 | R-CONC-CHECK | MEDIUM | admin overview 按 `model_actual` 聚合 → Ark backend 名污染成本归因 | ✅ 并入 T-016 (`c6ee841d`) |
 
 ---
 
