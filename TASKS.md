@@ -164,7 +164,7 @@ E2E 验收通过，但**前端假数据 + admin 无鉴权 + 未验证并发**。
 
 ---
 
-## T-016 upstream_credentials 多 key 池（v1） [phase:2-C] [owner:codex] [status:in-progress]
+## T-016 upstream_credentials 多 key 池（v1） [phase:2-C] [owner:codex] [status:review]
 
 Started: 2026-05-21 00:15 +08:00
 Proposal: `docs/proposals/2026-05-21-t016-upstream-credential-pool.md`
@@ -216,6 +216,8 @@ Proposal: `docs/proposals/2026-05-21-t016-upstream-credential-pool.md`
 **依赖**: T-INT ✅（v1 联调基线）；T-CONC-COST-ATTR（建议**同期并行**，合并 migration）；ADR 0003 ✅。
 
 **参考**: `docs/adr/0003-multi-key-pool-priority.md` ✅；`规划.md` §零A 第 1 条 + §185 upstream_credentials 字段定义 + §四十六风险表行 468；`REVIEW.md` R-CONC-CHECK M-23 + H-4；memory `project_omnitoken_ark_coding_plan`（已修正）；`docs/release/v1-concurrency-baseline-2026-05-21.md`（验证 baseline 起点）。
+
+**Result**: `c6ee841d` — proxy 86.7%, crypto 87.8%, credentials 92.0%; H-5/M-24/M-25/N-15/T-NIT-SSE-CLOSE landed, all green.
 
 ---
 
