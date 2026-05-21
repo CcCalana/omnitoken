@@ -52,6 +52,29 @@ func TestParseConfigUsesAdminTokenFromEnv(t *testing.T) {
 	}
 }
 
+func TestParseConfigAllowsDurationWithinMaxRequests(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parseConfig([]string{
+		"-concurrency", "2",
+		"-requests", "999",
+		"-duration", "10ms",
+		"-key", "omt_test",
+		"-admin-token", "dev-bootstrap",
+	}, func(key string) string {
+		if key == "MAX_REQUESTS" {
+			return "5"
+		}
+		return ""
+	})
+	if err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	if cfg.duration != 10*time.Millisecond {
+		t.Fatalf("duration = %s", cfg.duration)
+	}
+}
+
 func TestRunSendsRequestsAndChecksOverview(t *testing.T) {
 	t.Parallel()
 
@@ -112,11 +135,56 @@ func TestRunSendsRequestsAndChecksOverview(t *testing.T) {
 		"total_requests\t6",
 		"success_rate\t100.0%",
 		"2xx\t6",
+		"p50_latency\t",
+		"p99_latency\t",
+		"runtime_goroutines_final\t",
 		"usage_total_tokens\t123",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("summary missing %q:\n%s", want, output)
 		}
+	}
+}
+
+func TestRunDurationStopsAtMaxRequests(t *testing.T) {
+	t.Parallel()
+
+	var requestCount atomic.Int64
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requestCount.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"mock","usage":{"total_tokens":1}}`))
+	}))
+	defer gateway.Close()
+
+	admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"total_tokens":1,"active_users":1}`))
+	}))
+	defer admin.Close()
+
+	cfg := config{
+		concurrency: 2,
+		requests:    100,
+		duration:    time.Second,
+		gatewayURL:  gateway.URL,
+		adminURL:    admin.URL,
+		key:         "omt_test",
+		adminToken:  "dev-bootstrap",
+		model:       defaultModel,
+		timeout:     2 * time.Second,
+		maxRequests: 5,
+	}
+	var out bytes.Buffer
+
+	if err := run(context.Background(), cfg, gateway.Client(), &out); err != nil {
+		t.Fatalf("run loadtest: %v", err)
+	}
+	if got := requestCount.Load(); got != 5 {
+		t.Fatalf("expected 5 gateway requests, got %d", got)
+	}
+	if !strings.Contains(out.String(), "total_requests\t5") {
+		t.Fatalf("summary missing capped request count:\n%s", out.String())
 	}
 }
 
@@ -185,6 +253,43 @@ func TestRunFailsOnNon2xxRequests(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "5xx\t1") {
 		t.Fatalf("expected summary to include 5xx count, got:\n%s", out.String())
+	}
+}
+
+func TestRunAllowFailuresReportsUpstream429(t *testing.T) {
+	t.Parallel()
+
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"error":{"code":"upstream_429"}}`))
+	}))
+	defer gateway.Close()
+
+	admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"total_tokens":1,"active_users":1}`))
+	}))
+	defer admin.Close()
+
+	cfg := config{
+		concurrency:   1,
+		requests:      1,
+		gatewayURL:    gateway.URL,
+		adminURL:      admin.URL,
+		key:           "omt_test",
+		adminToken:    "dev-bootstrap",
+		model:         defaultModel,
+		timeout:       2 * time.Second,
+		maxRequests:   defaultMaxRequests,
+		allowFailures: true,
+	}
+	var out bytes.Buffer
+
+	if err := run(context.Background(), cfg, gateway.Client(), &out); err != nil {
+		t.Fatalf("run loadtest: %v", err)
+	}
+	if !strings.Contains(out.String(), "upstream_429\t1") {
+		t.Fatalf("expected upstream_429 count, got:\n%s", out.String())
 	}
 }
 

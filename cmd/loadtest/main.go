@@ -13,10 +13,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -30,15 +32,17 @@ const (
 )
 
 type config struct {
-	concurrency int
-	requests    int
-	gatewayURL  string
-	adminURL    string
-	key         string
-	adminToken  string
-	model       string
-	timeout     time.Duration
-	maxRequests int
+	concurrency   int
+	requests      int
+	gatewayURL    string
+	adminURL      string
+	key           string
+	adminToken    string
+	model         string
+	timeout       time.Duration
+	duration      time.Duration
+	maxRequests   int
+	allowFailures bool
 }
 
 type chatRequest struct {
@@ -55,6 +59,7 @@ type chatMessage struct {
 
 type requestResult struct {
 	status  int
+	code    string
 	latency time.Duration
 	timeout bool
 	err     error
@@ -65,9 +70,11 @@ type summary struct {
 	success2xx  int
 	client4xx   int
 	server5xx   int
+	upstream429 int
 	timeouts    int
 	otherErrors int
 	latencies   []time.Duration
+	elapsed     time.Duration
 	usage       overviewResponse
 }
 
@@ -116,6 +123,8 @@ func parseConfig(args []string, getenv func(string) string) (config, error) {
 	fs.StringVar(&cfg.adminToken, "admin-token", cfg.adminToken, "admin bootstrap token for usage verification")
 	fs.StringVar(&cfg.model, "model", cfg.model, "model to request")
 	fs.DurationVar(&cfg.timeout, "timeout", cfg.timeout, "per-request timeout")
+	fs.DurationVar(&cfg.duration, "duration", 0, "run for this duration instead of a fixed requests-per-worker count")
+	fs.BoolVar(&cfg.allowFailures, "allow-failures", false, "print summary and exit zero even when some chat requests fail")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
@@ -125,6 +134,9 @@ func parseConfig(args []string, getenv func(string) string) (config, error) {
 	}
 	if cfg.requests <= 0 {
 		return config{}, fmt.Errorf("requests must be positive")
+	}
+	if cfg.duration < 0 {
+		return config{}, fmt.Errorf("duration must be non-negative")
 	}
 	if strings.TrimSpace(cfg.key) == "" {
 		return config{}, fmt.Errorf("key is required")
@@ -139,7 +151,7 @@ func parseConfig(args []string, getenv func(string) string) (config, error) {
 		return config{}, fmt.Errorf("admin URL: %w", err)
 	}
 	total := cfg.concurrency * cfg.requests
-	if total > cfg.maxRequests {
+	if cfg.duration == 0 && total > cfg.maxRequests {
 		return config{}, fmt.Errorf("requested %d total requests exceeds MAX_REQUESTS=%d", total, cfg.maxRequests)
 	}
 
@@ -170,22 +182,31 @@ func run(ctx context.Context, cfg config, client *http.Client, out io.Writer) er
 		out = io.Discard
 	}
 
-	results := make(chan requestResult, cfg.concurrency*cfg.requests)
+	results := make(chan requestResult, cfg.concurrency)
 	var wg sync.WaitGroup
+	started := time.Now()
+	var issued atomic.Int64
 	for worker := 0; worker < cfg.concurrency; worker++ {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
-			for requestID := 0; requestID < cfg.requests; requestID++ {
+			for {
+				requestID, ok := nextRequestID(started, cfg, &issued)
+				if !ok {
+					return
+				}
 				results <- sendChatRequest(ctx, client, cfg, workerID, requestID)
 			}
 		}(worker)
 	}
 
-	wg.Wait()
-	close(results)
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
 
 	report := collectSummary(results)
+	report.elapsed = time.Since(started)
 	usage, err := fetchOverview(ctx, client, cfg)
 	if err != nil {
 		return err
@@ -195,11 +216,29 @@ func run(ctx context.Context, cfg config, client *http.Client, out io.Writer) er
 	}
 	report.usage = usage
 	printSummary(out, report)
-	if report.success2xx != report.total {
-		return fmt.Errorf("chat requests had failures: 2xx=%d total=%d 4xx=%d 5xx=%d timeouts=%d errors=%d",
-			report.success2xx, report.total, report.client4xx, report.server5xx, report.timeouts, report.otherErrors)
+	if !cfg.allowFailures && report.success2xx != report.total {
+		return fmt.Errorf("chat requests had failures: 2xx=%d total=%d 4xx=%d 5xx=%d upstream_429=%d timeouts=%d errors=%d",
+			report.success2xx, report.total, report.client4xx, report.server5xx, report.upstream429, report.timeouts, report.otherErrors)
 	}
 	return nil
+}
+
+func nextRequestID(started time.Time, cfg config, issued *atomic.Int64) (int, bool) {
+	next := int(issued.Add(1))
+	if cfg.maxRequests > 0 && next > cfg.maxRequests {
+		return 0, false
+	}
+	if cfg.duration > 0 {
+		if time.Since(started) >= cfg.duration {
+			return 0, false
+		}
+		return next - 1, true
+	}
+	total := cfg.concurrency * cfg.requests
+	if next > total {
+		return 0, false
+	}
+	return next - 1, true
 }
 
 func sendChatRequest(ctx context.Context, client *http.Client, cfg config, workerID int, requestID int) requestResult {
@@ -233,8 +272,8 @@ func sendChatRequest(ctx context.Context, client *http.Client, cfg config, worke
 		return requestResult{latency: latency, timeout: isTimeout(err), err: err}
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, resp.Body)
-	return requestResult{status: resp.StatusCode, latency: latency}
+	respBody, _ := io.ReadAll(resp.Body)
+	return requestResult{status: resp.StatusCode, code: errorCode(respBody), latency: latency}
 }
 
 func fetchOverview(ctx context.Context, client *http.Client, cfg config) (overviewResponse, error) {
@@ -273,6 +312,9 @@ func collectSummary(results <-chan requestResult) summary {
 			continue
 		}
 		report.latencies = append(report.latencies, result.latency)
+		if result.code == "upstream_429" {
+			report.upstream429++
+		}
 		switch {
 		case result.status >= 200 && result.status < 300:
 			report.success2xx++
@@ -295,15 +337,29 @@ func printSummary(out io.Writer, report summary) {
 
 	fmt.Fprintln(out, "OmniToken loadtest summary")
 	fmt.Fprintf(out, "total_requests\t%d\n", report.total)
+	fmt.Fprintf(out, "elapsed\t%s\n", report.elapsed.Round(time.Millisecond))
+	fmt.Fprintf(out, "rps\t%.1f\n", requestsPerSecond(report.total, report.elapsed))
 	fmt.Fprintf(out, "success_rate\t%.1f%%\n", successRate)
 	fmt.Fprintf(out, "2xx\t%d\n", report.success2xx)
 	fmt.Fprintf(out, "4xx\t%d\n", report.client4xx)
 	fmt.Fprintf(out, "5xx\t%d\n", report.server5xx)
+	fmt.Fprintf(out, "upstream_429\t%d\n", report.upstream429)
 	fmt.Fprintf(out, "timeouts\t%d\n", report.timeouts)
 	fmt.Fprintf(out, "errors\t%d\n", report.otherErrors)
 	fmt.Fprintf(out, "avg_latency\t%s\n", averageLatency(report.latencies).Round(time.Millisecond))
+	fmt.Fprintf(out, "p50_latency\t%s\n", percentileLatency(report.latencies, 0.50).Round(time.Millisecond))
 	fmt.Fprintf(out, "p95_latency\t%s\n", percentileLatency(report.latencies, 0.95).Round(time.Millisecond))
+	fmt.Fprintf(out, "p99_latency\t%s\n", percentileLatency(report.latencies, 0.99).Round(time.Millisecond))
+	fmt.Fprintf(out, "max_latency\t%s\n", maxLatency(report.latencies).Round(time.Millisecond))
+	fmt.Fprintf(out, "runtime_goroutines_final\t%d\n", runtime.NumGoroutine())
 	fmt.Fprintf(out, "usage_total_tokens\t%d\n", report.usage.TotalTokens)
+}
+
+func requestsPerSecond(total int, elapsed time.Duration) float64 {
+	if elapsed <= 0 {
+		return 0
+	}
+	return float64(total) / elapsed.Seconds()
 }
 
 func averageLatency(values []time.Duration) time.Duration {
@@ -331,6 +387,28 @@ func percentileLatency(values []time.Duration, percentile float64) time.Duration
 		index = len(sorted) - 1
 	}
 	return sorted[index]
+}
+
+func maxLatency(values []time.Duration) time.Duration {
+	var max time.Duration
+	for _, value := range values {
+		if value > max {
+			max = value
+		}
+	}
+	return max
+}
+
+func errorCode(body []byte) string {
+	var envelope struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return ""
+	}
+	return envelope.Error.Code
 }
 
 func normalizedBaseURL(raw string) (*url.URL, error) {
