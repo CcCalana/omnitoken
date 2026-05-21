@@ -16,39 +16,46 @@ import (
 	"time"
 
 	"github.com/omnitoken/omnitoken/internal/auth"
+	"github.com/omnitoken/omnitoken/internal/credentials"
 	"github.com/omnitoken/omnitoken/internal/httpx"
 )
 
 const (
-	DefaultMaxRequestBytes = int64(1 << 20)
+	DefaultMaxRequestBytes      = int64(1 << 20)
+	DefaultMaxCredentialRetries = 2
 
-	CodeInvalidRequest             = "invalid_request"
-	CodeUpstreamNotConfigured      = "upstream_not_configured"
-	CodeUpstreamTimeout            = "upstream_timeout"
-	CodeUpstreamConnectionFailed   = "upstream_connection_failed"
-	CodeUpstream5xx                = "upstream_5xx"
-	CodeUpstreamInvalidResponse    = "upstream_invalid_response"
-	defaultConnectTimeout          = 5 * time.Second
-	defaultWriteTimeout            = 10 * time.Second
-	defaultFirstByteTimeout        = 20 * time.Second
-	defaultNonStreamTotalTimeout   = 60 * time.Second
-	defaultSSEIdleTimeout          = 30 * time.Second
-	defaultExpectContinueTimeout   = time.Second
-	defaultTransportKeepAlive      = 30 * time.Second
-	defaultTransportIdleConn       = 90 * time.Second
-	defaultTransportMaxIdleConns   = 100
-	defaultTransportMaxIdlePerHost = 10
+	CodeInvalidRequest              = "invalid_request"
+	CodeUpstreamNotConfigured       = "upstream_not_configured"
+	CodeUpstreamTimeout             = "upstream_timeout"
+	CodeUpstreamConnectionFailed    = "upstream_connection_failed"
+	CodeUpstream5xx                 = "upstream_5xx"
+	CodeUpstream429                 = "upstream_429"
+	CodeUpstreamInvalidResponse     = "upstream_invalid_response"
+	CodeUpstreamCredentialPoolEmpty = "upstream_credential_pool_empty"
+	defaultConnectTimeout           = 5 * time.Second
+	defaultWriteTimeout             = 10 * time.Second
+	defaultFirstByteTimeout         = 20 * time.Second
+	defaultNonStreamTotalTimeout    = 60 * time.Second
+	defaultSSEIdleTimeout           = 30 * time.Second
+	defaultExpectContinueTimeout    = time.Second
+	defaultTransportKeepAlive       = 30 * time.Second
+	defaultTransportIdleConn        = 90 * time.Second
+	defaultTransportMaxIdleConns    = 100
+	defaultTransportMaxIdlePerHost  = 10
 )
 
 var errSSEIdleTimeout = errors.New("sse idle timeout")
 
 type ArkChatConfig struct {
-	BaseURL         string
-	APIKey          string
-	DefaultModel    string
-	DisableThinking bool
-	MaxRequestBytes int64
-	Timeouts        TimeoutConfig
+	BaseURL              string
+	APIKey               string
+	DefaultModel         string
+	DisableThinking      bool
+	MaxRequestBytes      int64
+	Timeouts             TimeoutConfig
+	CredentialSelector   *credentials.Selector
+	MaxCredentialRetries int
+	DegradeDuration      time.Duration
 }
 
 type TimeoutConfig struct {
@@ -80,6 +87,7 @@ type streamCopyResult struct {
 	code        string
 	wroteHeader bool
 	err         error
+	final       bool
 }
 
 type readResult struct {
@@ -156,53 +164,14 @@ func (p *ArkChatProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	upstreamReq, cancel, err := p.newUpstreamRequest(r, body, stream)
-	if err != nil {
-		status = http.StatusServiceUnavailable
-		code = CodeUpstreamNotConfigured
-		writeError(w, status, "upstream is not configured", "gateway_error", code)
-		return
-	}
-	defer cancel()
-
-	resp, err := p.client.Do(upstreamReq)
-	if err != nil {
-		status = http.StatusBadGateway
-		code = classifyUpstreamRequestError(err)
-		writeError(w, status, "upstream request failed", "gateway_error", code)
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= http.StatusInternalServerError {
-		status = http.StatusBadGateway
-		code = CodeUpstream5xx
-		writeError(w, status, "upstream request failed", "gateway_error", code)
-		return
-	}
-
-	if stream && isSuccessful(resp.StatusCode) {
-		result := p.copyStreamingResponse(w, r.Context(), cancel, resp)
-		status = result.status
-		code = result.code
-		if result.err != nil && !result.wroteHeader {
-			writeError(w, http.StatusBadGateway, "upstream request failed", "gateway_error", result.code)
-			status = http.StatusBadGateway
-		}
-		return
-	}
-
-	copyStatus, copyCode, copyErr := copyBufferedResponse(w, resp)
-	status = copyStatus
-	code = copyCode
-	if copyErr != nil {
-		writeError(w, http.StatusBadGateway, "upstream request failed", "gateway_error", copyCode)
-		status = http.StatusBadGateway
-	}
+	status, code = p.doWithRetries(w, r, body, stream)
 }
 
 func (p *ArkChatProxy) configured() bool {
-	return strings.TrimSpace(p.cfg.APIKey) != "" && strings.TrimSpace(p.cfg.BaseURL) != ""
+	if strings.TrimSpace(p.cfg.APIKey) != "" && strings.TrimSpace(p.cfg.BaseURL) != "" {
+		return true
+	}
+	return p.cfg.CredentialSelector != nil && p.cfg.CredentialSelector.Len() > 0
 }
 
 func (p *ArkChatProxy) rewriteRequest(w http.ResponseWriter, r *http.Request) ([]byte, bool, error) {
@@ -247,8 +216,106 @@ func (p *ArkChatProxy) rewriteRequest(w http.ResponseWriter, r *http.Request) ([
 	return body, stream, nil
 }
 
-func (p *ArkChatProxy) newUpstreamRequest(r *http.Request, body []byte, stream bool) (*http.Request, context.CancelFunc, error) {
-	target, err := chatCompletionsURL(p.cfg.BaseURL)
+func (p *ArkChatProxy) doWithRetries(w http.ResponseWriter, r *http.Request, body []byte, stream bool) (int, string) {
+	exclude := map[string]struct{}{}
+	maxAttempts := p.cfg.MaxCredentialRetries + 1
+	if maxAttempts <= 0 {
+		maxAttempts = 1
+	}
+	if p.cfg.CredentialSelector == nil {
+		maxAttempts = 1
+	}
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		credential, ok := p.nextCredential(r.Context(), exclude)
+		if !ok {
+			writeError(w, http.StatusServiceUnavailable, "no healthy upstream credential", "gateway_error", CodeUpstreamCredentialPoolEmpty)
+			return http.StatusServiceUnavailable, CodeUpstreamCredentialPoolEmpty
+		}
+		upstreamReq, cancel, err := p.newUpstreamRequest(r, body, stream, credential)
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, "upstream is not configured", "gateway_error", CodeUpstreamNotConfigured)
+			return http.StatusServiceUnavailable, CodeUpstreamNotConfigured
+		}
+
+		resp, err := p.client.Do(upstreamReq)
+		if err != nil {
+			cancel()
+			code := classifyUpstreamRequestError(err)
+			if shouldRetryCode(code) && credential.ID != "" && attempt+1 < maxAttempts {
+				exclude[credential.ID] = struct{}{}
+				p.logCredentialRetry(r.Context(), credential.ID, 0, code, attempt+1)
+				continue
+			}
+			writeError(w, http.StatusBadGateway, "upstream request failed", "gateway_error", code)
+			return http.StatusBadGateway, code
+		}
+
+		retry, retryCode := p.retryableResponse(resp, credential, attempt, maxAttempts)
+		if retry {
+			cancel()
+			_ = resp.Body.Close()
+			exclude[credential.ID] = struct{}{}
+			p.logCredentialRetry(r.Context(), credential.ID, resp.StatusCode, retryCode, attempt+1)
+			continue
+		}
+		if resp.StatusCode == http.StatusTooManyRequests {
+			cancel()
+			_ = resp.Body.Close()
+			writeError(w, http.StatusServiceUnavailable, "upstream rate limited", "gateway_error", CodeUpstream429)
+			return http.StatusServiceUnavailable, CodeUpstream429
+		}
+		if resp.StatusCode >= http.StatusInternalServerError {
+			cancel()
+			_ = resp.Body.Close()
+			writeError(w, http.StatusBadGateway, "upstream request failed", "gateway_error", CodeUpstream5xx)
+			return http.StatusBadGateway, CodeUpstream5xx
+		}
+
+		if stream && isSuccessful(resp.StatusCode) {
+			result := p.copyStreamingResponse(w, r.Context(), cancel, resp)
+			_ = resp.Body.Close()
+			if result.err != nil && !result.wroteHeader && !result.final && credential.ID != "" && attempt+1 < maxAttempts {
+				exclude[credential.ID] = struct{}{}
+				p.logCredentialRetry(r.Context(), credential.ID, result.status, result.code, attempt+1)
+				continue
+			}
+			if result.err != nil && !result.wroteHeader {
+				writeError(w, http.StatusBadGateway, "upstream request failed", "gateway_error", result.code)
+				return http.StatusBadGateway, result.code
+			}
+			return result.status, result.code
+		}
+
+		copyStatus, copyCode, copyErr := copyBufferedResponse(w, resp)
+		cancel()
+		_ = resp.Body.Close()
+		if copyErr != nil {
+			writeError(w, http.StatusBadGateway, "upstream request failed", "gateway_error", copyCode)
+			return http.StatusBadGateway, copyCode
+		}
+		return copyStatus, copyCode
+	}
+
+	writeError(w, http.StatusServiceUnavailable, "no healthy upstream credential", "gateway_error", CodeUpstreamCredentialPoolEmpty)
+	return http.StatusServiceUnavailable, CodeUpstreamCredentialPoolEmpty
+}
+
+func (p *ArkChatProxy) nextCredential(ctx context.Context, exclude map[string]struct{}) (credentials.Credential, bool) {
+	if p.cfg.CredentialSelector != nil {
+		return p.cfg.CredentialSelector.Next(ctx, exclude)
+	}
+	return credentials.Credential{
+		BaseURL: p.cfg.BaseURL,
+		Secret:  strings.TrimSpace(p.cfg.APIKey),
+	}, strings.TrimSpace(p.cfg.APIKey) != "" && strings.TrimSpace(p.cfg.BaseURL) != ""
+}
+
+func (p *ArkChatProxy) newUpstreamRequest(r *http.Request, body []byte, stream bool, credential credentials.Credential) (*http.Request, context.CancelFunc, error) {
+	if credential.ID != "" {
+		httpx.SetUpstreamCredentialID(r.Context(), credential.ID)
+	}
+	target, err := chatCompletionsURL(credential.BaseURL)
 	if err != nil {
 		return nil, func() {}, err
 	}
@@ -266,7 +333,7 @@ func (p *ArkChatProxy) newUpstreamRequest(r *http.Request, body []byte, stream b
 		cancel()
 		return nil, func() {}, err
 	}
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(p.cfg.APIKey))
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(credential.Secret))
 	req.Header.Set("Content-Type", "application/json")
 	if stream {
 		req.Header.Set("Accept", "text/event-stream")
@@ -278,6 +345,23 @@ func (p *ArkChatProxy) newUpstreamRequest(r *http.Request, body []byte, stream b
 	}
 
 	return req, cancel, nil
+}
+
+func (p *ArkChatProxy) retryableResponse(resp *http.Response, credential credentials.Credential, attempt int, maxAttempts int) (bool, string) {
+	if resp.StatusCode == http.StatusTooManyRequests {
+		if credential.ID != "" && p.cfg.CredentialSelector != nil {
+			duration := p.cfg.DegradeDuration
+			if duration <= 0 {
+				duration = credentials.DefaultDegradeDuration
+			}
+			p.cfg.CredentialSelector.MarkDegraded(credential.ID, duration)
+		}
+		return credential.ID != "" && attempt+1 < maxAttempts, CodeUpstream429
+	}
+	if resp.StatusCode >= http.StatusInternalServerError {
+		return credential.ID != "" && attempt+1 < maxAttempts, CodeUpstream5xx
+	}
+	return false, ""
 }
 
 func (p *ArkChatProxy) copyStreamingResponse(w http.ResponseWriter, ctx context.Context, cancel context.CancelFunc, resp *http.Response) streamCopyResult {
@@ -296,6 +380,9 @@ func (p *ArkChatProxy) copyStreamingResponse(w http.ResponseWriter, ctx context.
 		result.code = classifyStreamingReadError(err)
 		result.err = err
 		return result
+	}
+	if n > 0 {
+		result.final = true
 	}
 
 	copyAllowedResponseHeaders(w.Header(), resp.Header, true)
@@ -345,6 +432,7 @@ func copyBufferedResponse(w http.ResponseWriter, resp *http.Response) (int, stri
 func readWithIdle(ctx context.Context, cancel context.CancelFunc, body io.ReadCloser, buf []byte, idle time.Duration) (int, error) {
 	select {
 	case <-ctx.Done():
+		_ = body.Close()
 		return 0, ctx.Err()
 	default:
 	}
@@ -366,12 +454,17 @@ func readWithIdle(ctx context.Context, cancel context.CancelFunc, body io.ReadCl
 	case result := <-resultc:
 		return result.n, result.err
 	case <-ctx.Done():
+		_ = body.Close()
 		return 0, ctx.Err()
 	case <-timer.C:
 		cancel()
 		_ = body.Close()
 		return 0, errSSEIdleTimeout
 	}
+}
+
+func shouldRetryCode(code string) bool {
+	return code == CodeUpstreamTimeout || code == CodeUpstreamConnectionFailed || code == CodeUpstreamInvalidResponse
 }
 
 func classifyUpstreamRequestError(err error) string {
@@ -459,6 +552,19 @@ func isSuccessful(status int) bool {
 	return status >= http.StatusOK && status < http.StatusMultipleChoices
 }
 
+func (p *ArkChatProxy) logCredentialRetry(ctx context.Context, credentialID string, upstreamStatus int, code string, attempt int) {
+	attrs := []any{
+		"request_id", httpx.RequestIDFromContext(ctx),
+		"credential_id", credentialID,
+		"attempt", attempt,
+		"code", code,
+	}
+	if upstreamStatus != 0 {
+		attrs = append(attrs, "upstream_status", upstreamStatus)
+	}
+	p.logger.Warn("upstream credential retry", attrs...)
+}
+
 func flush(w http.ResponseWriter) {
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()
@@ -500,6 +606,14 @@ func (p *ArkChatProxy) logRequest(ctx context.Context, status int, code string, 
 func (cfg ArkChatConfig) withDefaults() ArkChatConfig {
 	if cfg.MaxRequestBytes <= 0 {
 		cfg.MaxRequestBytes = DefaultMaxRequestBytes
+	}
+	if cfg.MaxCredentialRetries < 0 {
+		cfg.MaxCredentialRetries = 0
+	} else if cfg.MaxCredentialRetries == 0 && cfg.CredentialSelector != nil {
+		cfg.MaxCredentialRetries = DefaultMaxCredentialRetries
+	}
+	if cfg.DegradeDuration <= 0 {
+		cfg.DegradeDuration = credentials.DefaultDegradeDuration
 	}
 	cfg.Timeouts = cfg.Timeouts.withDefaults()
 	return cfg

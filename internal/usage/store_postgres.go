@@ -35,7 +35,9 @@ func (s *PostgresStore) InsertUsage(ctx context.Context, record UsageRecord) err
 		record.OrganizationID,
 		record.UserID,
 		record.APIKeyID,
+		nullableUUID(record.UpstreamCredentialID),
 		record.ModelRequested,
+		record.ModelRouted,
 		nullableText(record.ModelActual),
 		record.Provider,
 		record.StatusCode,
@@ -90,13 +92,22 @@ func nullableText(value string) any {
 	return value
 }
 
+func nullableUUID(value uuid.NullUUID) any {
+	if !value.Valid {
+		return nil
+	}
+	return value.UUID
+}
+
 const insertUsageEventSQL = `
 INSERT INTO usage_events (
   request_id,
   organization_id,
   user_id,
   api_key_id,
+  upstream_credential_id,
   model_requested,
+  model_routed,
   model_actual,
   provider,
   status_code,
@@ -104,7 +115,7 @@ INSERT INTO usage_events (
   latency_ms,
   streaming
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 ON CONFLICT (request_id) DO NOTHING
 RETURNING id`
 

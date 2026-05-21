@@ -25,16 +25,18 @@ func TestPostgresStoreInsertUsage(t *testing.T) {
 	setUsageFakeState(fakeUsageDBState{queryRow: []driver.Value{eventID.String()}})
 
 	record := UsageRecord{
-		RequestID:      "req-1",
-		OrganizationID: uuid.New(),
-		UserID:         uuid.New(),
-		APIKeyID:       uuid.New(),
-		ModelRequested: "client-model",
-		ModelActual:    "glm-5.1",
-		ModelFallback:  "ark-code-latest",
-		Provider:       "ark",
-		StatusCode:     200,
-		LatencyMS:      42,
+		RequestID:            "req-1",
+		OrganizationID:       uuid.New(),
+		UserID:               uuid.New(),
+		APIKeyID:             uuid.New(),
+		UpstreamCredentialID: uuid.NullUUID{UUID: uuid.New(), Valid: true},
+		ModelRequested:       "client-model",
+		ModelRouted:          "glm-5.1",
+		ModelActual:          "glm-5.1",
+		ModelFallback:        "ark-code-latest",
+		Provider:             "ark",
+		StatusCode:           200,
+		LatencyMS:            42,
 		Tokens: TokenBreakdown{
 			PromptTokens:     15,
 			CompletionTokens: 2,
@@ -53,7 +55,7 @@ func TestPostgresStoreInsertUsage(t *testing.T) {
 	if len(state.execQueries) != 2 {
 		t.Fatalf("expected token and cost inserts, got %d", len(state.execQueries))
 	}
-	if !strings.Contains(state.query, "INSERT INTO usage_events") || !strings.Contains(state.execQueries[1], "INSERT INTO cost_ledger") {
+	if !strings.Contains(state.query, "INSERT INTO usage_events") || !strings.Contains(state.query, "upstream_credential_id") || !strings.Contains(state.query, "model_routed") || !strings.Contains(state.execQueries[1], "INSERT INTO cost_ledger") {
 		t.Fatalf("unexpected queries: query=%s exec=%v", state.query, state.execQueries)
 	}
 }

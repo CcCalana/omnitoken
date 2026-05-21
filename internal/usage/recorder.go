@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+
+	"github.com/google/uuid"
 )
 
 type Service struct {
@@ -25,18 +27,20 @@ func (s *Service) Record(ctx context.Context, input RecordInput) error {
 
 	parsed, found, parseErr := parseCaptured(input)
 	record := UsageRecord{
-		RequestID:      input.RequestID,
-		OrganizationID: input.Subject.OrgID,
-		UserID:         input.Subject.UserID,
-		APIKeyID:       input.Subject.APIKeyID,
-		ModelRequested: coalesce(input.ModelRequested, "unknown"),
-		ModelActual:    parsed.ModelActual,
-		ModelFallback:  input.ModelFallback,
-		Provider:       coalesce(input.Provider, "ark"),
-		StatusCode:     input.StatusCode,
-		LatencyMS:      input.LatencyMS,
-		Streaming:      input.Streaming,
-		Tokens:         parsed.Tokens,
+		RequestID:            input.RequestID,
+		OrganizationID:       input.Subject.OrgID,
+		UserID:               input.Subject.UserID,
+		APIKeyID:             input.Subject.APIKeyID,
+		UpstreamCredentialID: parseCredentialID(input.UpstreamCredentialID),
+		ModelRequested:       coalesce(input.ModelRequested, "unknown"),
+		ModelRouted:          firstNonEmpty(input.ModelRouted, input.ModelRequested),
+		ModelActual:          parsed.ModelActual,
+		ModelFallback:        input.ModelFallback,
+		Provider:             coalesce(input.Provider, "ark"),
+		StatusCode:           input.StatusCode,
+		LatencyMS:            input.LatencyMS,
+		Streaming:            input.Streaming,
+		Tokens:               parsed.Tokens,
 	}
 	if parseErr != nil {
 		record.ErrorCode = ErrorCodeUsageParseFailed
@@ -52,6 +56,17 @@ func (s *Service) Record(ctx context.Context, input RecordInput) error {
 		return fmt.Errorf("insert usage: %w", err)
 	}
 	return nil
+}
+
+func parseCredentialID(value string) uuid.NullUUID {
+	if value == "" {
+		return uuid.NullUUID{}
+	}
+	id, err := uuid.Parse(value)
+	if err != nil {
+		return uuid.NullUUID{}
+	}
+	return uuid.NullUUID{UUID: id, Valid: true}
 }
 
 func parseCaptured(input RecordInput) (ParsedUsage, bool, error) {

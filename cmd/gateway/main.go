@@ -16,6 +16,8 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/omnitoken/omnitoken/internal/auth"
 	"github.com/omnitoken/omnitoken/internal/config"
+	"github.com/omnitoken/omnitoken/internal/credentials"
+	omnicrypto "github.com/omnitoken/omnitoken/internal/crypto"
 	"github.com/omnitoken/omnitoken/internal/httpx"
 	"github.com/omnitoken/omnitoken/internal/proxy"
 	"github.com/omnitoken/omnitoken/internal/quota"
@@ -75,10 +77,11 @@ func main() {
 	}()
 
 	resolver := router.NewPostgresStore(db)
+	selector := loadCredentialSelector(context.Background(), logger, db, cfg)
 
 	server := &http.Server{
 		Addr:              cfg.Gateway.Addr,
-		Handler:           newMux(logger, auth.NewPostgresStore(db), quota.NewChecker(quota.NewPostgresStore(db)), resolver, newChatHandler(cfg, logger, db)),
+		Handler:           newMux(logger, auth.NewPostgresStore(db), quota.NewChecker(quota.NewPostgresStore(db)), resolver, newChatHandler(cfg, logger, db, selector)),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -98,16 +101,44 @@ func newMux(logger *slog.Logger, store auth.VirtualKeyStore, budgetChecker quota
 	return httpx.RequestID(httpx.RequestLogger(logger)(mux))
 }
 
-func newArkChatProxy(cfg config.Config, logger *slog.Logger) http.Handler {
+func loadCredentialSelector(ctx context.Context, logger *slog.Logger, db *sql.DB, cfg config.Config) *credentials.Selector {
+	masterKey, err := omnicrypto.LoadMasterKey(cfg.MasterKeyFile, cfg.MasterKey)
+	if err != nil {
+		if cfg.Ark.Enabled() {
+			logger.Warn("upstream credential pool disabled; falling back to OMNITOKEN_ARK_API_KEY")
+			return nil
+		}
+		logger.Warn("upstream credential pool disabled", "err", err)
+		return nil
+	}
+	envelope, err := omnicrypto.NewEnvelope(masterKey)
+	if err != nil {
+		logger.Warn("upstream credential pool disabled", "err", err)
+		return nil
+	}
+	items, err := credentials.NewPostgresStore(db, envelope).Load(ctx)
+	if err != nil {
+		logger.Error("load upstream credentials", "err", err)
+		return nil
+	}
+	logger.Info("loaded upstream credentials", "count", len(items))
+	if len(items) == 0 {
+		return nil
+	}
+	return credentials.NewSelector(items)
+}
+
+func newArkChatProxy(cfg config.Config, logger *slog.Logger, selector *credentials.Selector) http.Handler {
 	return proxy.NewArkChatProxy(proxy.ArkChatConfig{
-		BaseURL:         cfg.Ark.OpenAIBaseURL,
-		APIKey:          cfg.Ark.APIKey,
-		DefaultModel:    cfg.Ark.DefaultModel,
-		DisableThinking: cfg.Ark.DisableThinking,
+		BaseURL:            cfg.Ark.OpenAIBaseURL,
+		APIKey:             cfg.Ark.APIKey,
+		DefaultModel:       cfg.Ark.DefaultModel,
+		DisableThinking:    cfg.Ark.DisableThinking,
+		CredentialSelector: selector,
 	}, logger, nil)
 }
 
-func newChatHandler(cfg config.Config, logger *slog.Logger, db *sql.DB) http.Handler {
+func newChatHandler(cfg config.Config, logger *slog.Logger, db *sql.DB, selector *credentials.Selector) http.Handler {
 	return usage.Middleware(
 		usage.NewRecorder(usage.NewPostgresStore(db), logger),
 		usage.MiddlewareConfig{
@@ -115,7 +146,7 @@ func newChatHandler(cfg config.Config, logger *slog.Logger, db *sql.DB) http.Han
 			ModelFallback: cfg.Ark.DefaultModel,
 			Logger:        logger,
 		},
-	)(newArkChatProxy(cfg, logger))
+	)(newArkChatProxy(cfg, logger, selector))
 }
 
 func protectGatewayRoute(store auth.VirtualKeyStore, next http.Handler) http.Handler {
@@ -240,7 +271,10 @@ func resolveVirtualModel(resolver router.Resolver) func(http.Handler) http.Handl
 					r.Header.Set("Content-Length", strconv.Itoa(len(body)))
 				}
 				ctx := httpx.WithVirtualModel(r.Context(), modelRequested)
+				ctx = httpx.WithModelRouted(ctx, res.RealModel)
 				r = r.WithContext(ctx)
+			} else {
+				r = r.WithContext(httpx.WithModelRouted(r.Context(), modelRequested))
 			}
 
 			r.Body = io.NopCloser(bytes.NewReader(body))

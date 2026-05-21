@@ -20,6 +20,7 @@ import (
 	"github.com/omnitoken/omnitoken/internal/audit"
 	"github.com/omnitoken/omnitoken/internal/auth"
 	"github.com/omnitoken/omnitoken/internal/config"
+	"github.com/omnitoken/omnitoken/internal/credentials"
 	"github.com/omnitoken/omnitoken/internal/rbac"
 	usageanomaly "github.com/omnitoken/omnitoken/internal/usage/anomaly"
 )
@@ -499,6 +500,54 @@ func TestModelsStoreErrorReturns500(t *testing.T) {
 	}
 }
 
+func TestCredentialsHandlerDoesNotExposeSecrets(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeOverviewStore{
+		credentials: credentialsResponse{Credentials: []credentials.PublicCredential{
+			{
+				ID:          "00000000-0000-0000-0000-000000000301",
+				Provider:    "ark",
+				BaseURL:     "https://ark.example/v3",
+				Priority:    10,
+				Weight:      1,
+				Status:      "active",
+				HealthState: "healthy",
+			},
+		}},
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/credentials", nil)
+	rec := httptest.NewRecorder()
+
+	makeCredentialsHandler(testLogger(), store).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "encrypted_secret") || strings.Contains(rec.Body.String(), "secret") {
+		t.Fatalf("credentials response leaked secret fields: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"provider":"ark"`) {
+		t.Fatalf("missing credential metadata: %s", rec.Body.String())
+	}
+}
+
+func TestCredentialsAliasRoute(t *testing.T) {
+	t.Parallel()
+
+	cfg := testAdminConfig()
+	cfg.BootstrapToken = "dev-bootstrap"
+	req := httptest.NewRequest(http.MethodGet, "/admin/credentials", nil)
+	req.Header.Set("Authorization", "Bearer dev-bootstrap")
+	rec := httptest.NewRecorder()
+
+	newMux(testLogger(), cfg, &fakeOverviewStore{}, nil, nil).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+}
+
 func TestAuditLogsReturnsEmptyWithoutStore(t *testing.T) {
 	t.Parallel()
 
@@ -666,7 +715,7 @@ func TestPostgresOverviewStoreLoadOverviewMapsSQLResults(t *testing.T) {
 	if !strings.Contains(queries[1].query, "GROUP BY (ue.created_at AT TIME ZONE 'UTC')::date") {
 		t.Fatalf("trend query should group by UTC date: %s", queries[1].query)
 	}
-	if !strings.Contains(queries[2].query, "COALESCE(NULLIF(ue.model_actual, ''), ue.model_requested, 'unknown')") {
+	if !strings.Contains(queries[2].query, "COALESCE(NULLIF(ue.model_routed, ''), NULLIF(ue.model_requested, ''), 'unknown')") {
 		t.Fatalf("model query should group by model fallback expression: %s", queries[2].query)
 	}
 }
@@ -872,7 +921,7 @@ func TestPostgresOverviewStoreLoadModelsMapsSQLResults(t *testing.T) {
 	monthStart, monthEnd := monthWindow(now)
 	assertTimeArg(t, queries[0].args[0], monthStart)
 	assertTimeArg(t, queries[0].args[1], monthEnd)
-	if !strings.Contains(queries[0].query, "GROUP BY") || !strings.Contains(queries[0].query, "model_actual") {
+	if !strings.Contains(queries[0].query, "GROUP BY") || !strings.Contains(queries[0].query, "model_routed") {
 		t.Fatalf("models query should group by model fallback expression: %s", queries[0].query)
 	}
 	if !strings.Contains(queries[0].query, "COUNT(*)::bigint AS call_count") {
@@ -1387,6 +1436,8 @@ type fakeOverviewStore struct {
 	authOrgID         uuid.UUID
 	authRole          string
 	authErr           error
+	credentials       credentialsResponse
+	credentialsErr    error
 }
 
 func (f *fakeOverviewStore) Authenticate(ctx context.Context, email, password string) (uuid.UUID, uuid.UUID, string, error) {
@@ -1399,6 +1450,10 @@ func (f *fakeOverviewStore) Authenticate(ctx context.Context, email, password st
 
 func (f *fakeOverviewStore) LoadVirtualModels(ctx context.Context) (virtualModelsResponse, error) {
 	return virtualModelsResponse{}, errors.New("not implemented")
+}
+
+func (f *fakeOverviewStore) LoadCredentials(ctx context.Context) (credentialsResponse, error) {
+	return f.credentials, f.credentialsErr
 }
 
 func (f *fakeOverviewStore) LoadOverview(_ context.Context, now time.Time) (overviewResponse, error) {

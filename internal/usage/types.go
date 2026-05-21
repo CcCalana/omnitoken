@@ -25,15 +25,17 @@ type Store interface {
 }
 
 type RecordInput struct {
-	RequestID      string
-	Subject        auth.Subject
-	ModelRequested string
-	ModelFallback  string
-	Provider       string
-	StatusCode     int
-	LatencyMS      int
-	Streaming      bool
-	Captured       []byte
+	RequestID            string
+	Subject              auth.Subject
+	ModelRequested       string
+	ModelRouted          string
+	ModelFallback        string
+	Provider             string
+	UpstreamCredentialID string
+	StatusCode           int
+	LatencyMS            int
+	Streaming            bool
+	Captured             []byte
 }
 
 type TokenBreakdown struct {
@@ -50,17 +52,19 @@ type ParsedUsage struct {
 }
 
 type UsageRecord struct {
-	RequestID      string
-	OrganizationID uuid.UUID
-	UserID         uuid.UUID
-	APIKeyID       uuid.UUID
-	ModelRequested string
-	ModelActual    string
-	ModelFallback  string
-	Provider       string
-	StatusCode     int
-	ErrorCode      string
-	LatencyMS      int
-	Streaming      bool
-	Tokens         TokenBreakdown
+	RequestID            string
+	OrganizationID       uuid.UUID
+	UserID               uuid.UUID
+	APIKeyID             uuid.UUID
+	UpstreamCredentialID uuid.NullUUID
+	ModelRequested       string
+	ModelRouted          string
+	ModelActual          string
+	ModelFallback        string
+	Provider             string
+	StatusCode           int
+	ErrorCode            string
+	LatencyMS            int
+	Streaming            bool
+	Tokens               TokenBreakdown
 }

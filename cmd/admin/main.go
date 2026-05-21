@@ -21,6 +21,7 @@ import (
 	"github.com/omnitoken/omnitoken/internal/audit"
 	"github.com/omnitoken/omnitoken/internal/auth"
 	"github.com/omnitoken/omnitoken/internal/config"
+	"github.com/omnitoken/omnitoken/internal/credentials"
 	"github.com/omnitoken/omnitoken/internal/httpx"
 	"github.com/omnitoken/omnitoken/internal/rbac"
 	usageanomaly "github.com/omnitoken/omnitoken/internal/usage/anomaly"
@@ -85,6 +86,10 @@ type modelsResponse struct {
 
 type virtualModelsResponse struct {
 	VirtualModels []adminVirtualModel `json:"virtual_models"`
+}
+
+type credentialsResponse struct {
+	Credentials []credentials.PublicCredential `json:"credentials"`
 }
 
 type adminVirtualModel struct {
@@ -191,6 +196,7 @@ type overviewStore interface {
 	LoadAuditLogs(context.Context, auditLogFilters) ([]adminAuditLog, error)
 	UpdateUserBudget(context.Context, uuid.UUID, *int64, time.Time) (updateUserBudgetResult, error)
 	LoadVirtualModels(context.Context) (virtualModelsResponse, error)
+	LoadCredentials(context.Context) (credentialsResponse, error)
 	Authenticate(ctx context.Context, email, password string) (uuid.UUID, uuid.UUID, string, error)
 }
 
@@ -379,6 +385,9 @@ func newMux(logger *slog.Logger, cfg config.AdminConfig, overview overviewStore,
 	mux.Handle("GET /api/admin/users", protectedRead(http.HandlerFunc(makeUsersHandler(logger, overview, time.Now))))
 	mux.Handle("GET /api/admin/models", protectedRead(http.HandlerFunc(makeModelsHandler(logger, overview, time.Now))))
 	mux.Handle("GET /api/admin/virtual-models", protectedRead(http.HandlerFunc(makeVirtualModelsHandler(logger, overview))))
+	credentialsHandler := protectedRead(http.HandlerFunc(makeCredentialsHandler(logger, overview)))
+	mux.Handle("GET /admin/credentials", credentialsHandler)
+	mux.Handle("GET /api/admin/credentials", credentialsHandler)
 	mux.Handle("GET /api/admin/audit-logs", protectedRead(http.HandlerFunc(makeAuditLogsHandler(logger, overview))))
 	mux.Handle("PATCH /api/admin/users/{id}/quota", protectedWrite(rbac.ActionUpdateQuota, http.HandlerFunc(makeUpdateUserQuotaHandler(logger, overview))))
 	if creator != nil {
@@ -480,6 +489,25 @@ func makeVirtualModelsHandler(logger *slog.Logger, store overviewStore) http.Han
 		}
 
 		httpx.WriteJSON(w, http.StatusOK, models)
+	}
+}
+
+func makeCredentialsHandler(logger *slog.Logger, store overviewStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if store == nil {
+			httpx.WriteJSON(w, http.StatusOK, credentialsResponse{Credentials: []credentials.PublicCredential{}})
+			return
+		}
+		response, err := store.LoadCredentials(r.Context())
+		if err != nil {
+			logger.Error("load admin credentials", "error", err)
+			httpx.WriteJSON(w, http.StatusInternalServerError, errorEnvelope("failed to load credentials", "server_error", "load_credentials_failed"))
+			return
+		}
+		if response.Credentials == nil {
+			response.Credentials = []credentials.PublicCredential{}
+		}
+		httpx.WriteJSON(w, http.StatusOK, response)
 	}
 }
 
@@ -664,14 +692,14 @@ ORDER BY (ue.created_at AT TIME ZONE 'UTC')::date ASC`
 func (s *postgresOverviewStore) loadModelUsage(ctx context.Context, start time.Time, end time.Time, totalTokens int64) ([]modelUsage, error) {
 	const modelUsageQuery = `
 SELECT
-  COALESCE(NULLIF(ue.model_actual, ''), ue.model_requested, 'unknown') AS model,
+  COALESCE(NULLIF(ue.model_routed, ''), NULLIF(ue.model_requested, ''), 'unknown') AS model,
   COALESCE(SUM(utb.total_tokens), 0)::bigint AS total_tokens,
   COALESCE(SUM(cl.cost_usd), 0)::float8 AS cost_usd
 FROM usage_events ue
 LEFT JOIN usage_token_breakdown utb ON utb.usage_event_id = ue.id
 LEFT JOIN cost_ledger cl ON cl.usage_event_id = ue.id
 WHERE ue.created_at >= $1 AND ue.created_at < $2
-GROUP BY COALESCE(NULLIF(ue.model_actual, ''), ue.model_requested, 'unknown')
+GROUP BY COALESCE(NULLIF(ue.model_routed, ''), NULLIF(ue.model_requested, ''), 'unknown')
 ORDER BY total_tokens DESC, model ASC`
 
 	rows, err := s.db.QueryContext(ctx, modelUsageQuery, start.UTC(), end.UTC())
@@ -788,7 +816,7 @@ func (s *postgresOverviewStore) LoadModels(ctx context.Context, now time.Time) (
 	monthStart, monthEnd := monthWindow(now)
 	const modelsQuery = `
 SELECT
-  COALESCE(NULLIF(ue.model_actual, ''), ue.model_requested, 'unknown') AS model,
+  COALESCE(NULLIF(ue.model_routed, ''), NULLIF(ue.model_requested, ''), 'unknown') AS model,
   COALESCE(NULLIF(ue.provider, ''), 'unknown') AS provider,
   COALESCE(SUM(utb.prompt_tokens), 0)::bigint AS prompt_tokens,
   COALESCE(SUM(utb.completion_tokens), 0)::bigint AS completion_tokens,
@@ -800,7 +828,7 @@ LEFT JOIN usage_token_breakdown utb ON utb.usage_event_id = ue.id
 LEFT JOIN cost_ledger cl ON cl.usage_event_id = ue.id
 WHERE ue.created_at >= $1 AND ue.created_at < $2
 GROUP BY
-  COALESCE(NULLIF(ue.model_actual, ''), ue.model_requested, 'unknown'),
+  COALESCE(NULLIF(ue.model_routed, ''), NULLIF(ue.model_requested, ''), 'unknown'),
   COALESCE(NULLIF(ue.provider, ''), 'unknown')
 ORDER BY total_tokens DESC, model ASC`
 
@@ -911,6 +939,17 @@ ORDER BY name ASC`
 		return virtualModelsResponse{}, fmt.Errorf("iterate virtual models: %w", err)
 	}
 	return response, nil
+}
+
+func (s *postgresOverviewStore) LoadCredentials(ctx context.Context) (credentialsResponse, error) {
+	items, err := credentials.NewPostgresStore(s.db, nil).ListPublic(ctx)
+	if err != nil {
+		return credentialsResponse{}, err
+	}
+	if items == nil {
+		items = []credentials.PublicCredential{}
+	}
+	return credentialsResponse{Credentials: items}, nil
 }
 
 func (s *postgresOverviewStore) LoadAuditLogs(ctx context.Context, filters auditLogFilters) ([]adminAuditLog, error) {

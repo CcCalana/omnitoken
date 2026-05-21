@@ -53,6 +53,24 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  credential-seed:
+    image: omnitoken-migrate:local
+    # Credential changes are loaded by the gateway at startup. Re-run this
+    # service, then restart gateway for new upstream keys to take effect.
+    entrypoint: ["/omnitoken-seed-upstream"]
+    environment:
+      OMNITOKEN_DATABASE_URL: "postgres://omnitoken:omnitoken@postgres:5432/omnitoken?sslmode=disable"
+      OMNITOKEN_MASTER_KEY_FILE: "${OMNITOKEN_MASTER_KEY_FILE:-}"
+      OMNITOKEN_MASTER_KEY: "${OMNITOKEN_MASTER_KEY:-}"
+      OMNITOKEN_ARK_KEYS: "${OMNITOKEN_ARK_KEYS:-}"
+      OMNITOKEN_ARK_KEYS_1: "${OMNITOKEN_ARK_KEYS_1:-}"
+      OMNITOKEN_ARK_KEYS_2: "${OMNITOKEN_ARK_KEYS_2:-}"
+      OMNITOKEN_ARK_KEYS_3: "${OMNITOKEN_ARK_KEYS_3:-}"
+      OMNITOKEN_ARK_OPENAI_BASE_URL: "${OMNITOKEN_ARK_OPENAI_BASE_URL:-https://ark.cn-beijing.volces.com/api/coding/v3}"
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+
   redis:
     image: redis:7-alpine
     command: ["redis-server", "--appendonly", "yes"]
@@ -88,6 +106,10 @@ services:
     environment:
       OMNITOKEN_GATEWAY_ADDR: ":8080"
       OMNITOKEN_DATABASE_URL: "postgres://omnitoken:omnitoken@postgres:5432/omnitoken?sslmode=disable"
+      # Gateway loads encrypted upstream credentials once at startup.
+      # After credential-seed changes, restart gateway to reload the pool.
+      OMNITOKEN_MASTER_KEY_FILE: "${OMNITOKEN_MASTER_KEY_FILE:-}"
+      OMNITOKEN_MASTER_KEY: "${OMNITOKEN_MASTER_KEY:-}"
       OMNITOKEN_ARK_API_KEY: "${OMNITOKEN_ARK_API_KEY:-}"
       OMNITOKEN_ARK_OPENAI_BASE_URL: "${OMNITOKEN_ARK_OPENAI_BASE_URL:-https://ark.cn-beijing.volces.com/api/coding/v3}"
       OMNITOKEN_ARK_ANTHROPIC_BASE_URL: "${OMNITOKEN_ARK_ANTHROPIC_BASE_URL:-https://ark.cn-beijing.volces.com/api/coding}"
@@ -97,6 +119,8 @@ services:
       - "8080:8080"
     depends_on:
       seed:
+        condition: service_completed_successfully
+      credential-seed:
         condition: service_completed_successfully
       redis:
         condition: service_healthy

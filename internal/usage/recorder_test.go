@@ -13,16 +13,19 @@ func TestServiceRecordWritesParsedUsage(t *testing.T) {
 	store := &recordingStore{}
 	service := NewRecorder(store, nil)
 	subject := testSubject()
+	credentialID := uuid.New()
 
 	err := service.Record(context.Background(), RecordInput{
-		RequestID:      "req-1",
-		Subject:        subject,
-		ModelRequested: "client-model",
-		ModelFallback:  "ark-code-latest",
-		Provider:       "ark",
-		StatusCode:     200,
-		LatencyMS:      123,
-		Captured:       []byte(`{"model":"glm-5.1","usage":{"prompt_tokens":15,"completion_tokens":2,"total_tokens":17}}`),
+		RequestID:            "req-1",
+		Subject:              subject,
+		ModelRequested:       "client-model",
+		ModelRouted:          "glm-5.1",
+		ModelFallback:        "ark-code-latest",
+		Provider:             "ark",
+		UpstreamCredentialID: credentialID.String(),
+		StatusCode:           200,
+		LatencyMS:            123,
+		Captured:             []byte(`{"model":"glm-5.1","usage":{"prompt_tokens":15,"completion_tokens":2,"total_tokens":17}}`),
 	})
 	if err != nil {
 		t.Fatalf("record usage: %v", err)
@@ -32,7 +35,10 @@ func TestServiceRecordWritesParsedUsage(t *testing.T) {
 	if got.RequestID != "req-1" || got.OrganizationID != subject.OrgID || got.UserID != subject.UserID || got.APIKeyID != subject.APIKeyID {
 		t.Fatalf("record identity mismatch: %#v", got)
 	}
-	if got.ModelRequested != "client-model" || got.ModelActual != "glm-5.1" || got.ModelFallback != "ark-code-latest" {
+	if !got.UpstreamCredentialID.Valid || got.UpstreamCredentialID.UUID != credentialID {
+		t.Fatalf("credential id mismatch: %#v", got.UpstreamCredentialID)
+	}
+	if got.ModelRequested != "client-model" || got.ModelRouted != "glm-5.1" || got.ModelActual != "glm-5.1" || got.ModelFallback != "ark-code-latest" {
 		t.Fatalf("model mismatch: %#v", got)
 	}
 	if got.ErrorCode != "" || got.Tokens.TotalTokens != 17 {

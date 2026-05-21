@@ -30,6 +30,7 @@ func Middleware(recorder Recorder, cfg MiddlewareConfig) func(http.Handler) http
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := cfg.Now()
+			r = r.WithContext(httpx.WithUpstreamCredentialRecorder(r.Context()))
 			modelRequested, streaming := snapshotRequestMetadata(r)
 			capture := newCaptureResponseWriter(w, cfg.CaptureLimit)
 
@@ -45,15 +46,17 @@ func Middleware(recorder Recorder, cfg MiddlewareConfig) func(http.Handler) http
 			}
 
 			input := RecordInput{
-				RequestID:      httpx.RequestIDFromContext(r.Context()),
-				Subject:        subject,
-				ModelRequested: modelRequested,
-				ModelFallback:  cfg.ModelFallback,
-				Provider:       cfg.Provider,
-				StatusCode:     capture.Status(),
-				LatencyMS:      int(cfg.Now().Sub(start).Milliseconds()),
-				Streaming:      streaming,
-				Captured:       capture.Captured(),
+				RequestID:            httpx.RequestIDFromContext(r.Context()),
+				Subject:              subject,
+				ModelRequested:       modelRequested,
+				ModelRouted:          httpx.ModelRoutedFromContext(r.Context()),
+				ModelFallback:        cfg.ModelFallback,
+				Provider:             cfg.Provider,
+				UpstreamCredentialID: httpx.UpstreamCredentialIDFromContext(r.Context()),
+				StatusCode:           capture.Status(),
+				LatencyMS:            int(cfg.Now().Sub(start).Milliseconds()),
+				Streaming:            streaming,
+				Captured:             capture.Captured(),
 			}
 
 			go func(input RecordInput) {
@@ -106,11 +109,11 @@ func snapshotRequestMetadata(r *http.Request) (string, bool) {
 	if err := decoder.Decode(&payload); err != nil {
 		return "", false
 	}
-	
+
 	model := payload.Model
 	if vm := httpx.VirtualModelFromContext(r.Context()); vm != "" {
 		model = vm
 	}
-	
+
 	return model, payload.Stream
 }

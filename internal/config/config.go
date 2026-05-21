@@ -14,14 +14,15 @@ const (
 )
 
 type Config struct {
-	Gateway     GatewayConfig
-	Admin       AdminConfig
-	DatabaseURL string
-	RedisAddr   string
-	NATSURL     string
-	LogBodyMode string
-	MasterKey   string
-	Ark         ArkConfig
+	Gateway       GatewayConfig
+	Admin         AdminConfig
+	DatabaseURL   string
+	RedisAddr     string
+	NATSURL       string
+	LogBodyMode   string
+	MasterKey     string
+	MasterKeyFile string
+	Ark           ArkConfig
 }
 
 type GatewayConfig struct {
@@ -63,11 +64,12 @@ func Load() (Config, error) {
 			CORSMethods:    envCSV("OMNITOKEN_ADMIN_CORS_METHODS", []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"}),
 			BootstrapToken: Env("OMNITOKEN_ADMIN_BOOTSTRAP_TOKEN", ""),
 		},
-		DatabaseURL: Env("OMNITOKEN_DATABASE_URL", ""),
-		RedisAddr:   Env("OMNITOKEN_REDIS_ADDR", ""),
-		NATSURL:     Env("OMNITOKEN_NATS_URL", ""),
-		LogBodyMode: Env("OMNITOKEN_LOG_BODY_MODE", "off"),
-		MasterKey:   Env("OMNITOKEN_MASTER_KEY", ""),
+		DatabaseURL:   Env("OMNITOKEN_DATABASE_URL", ""),
+		RedisAddr:     Env("OMNITOKEN_REDIS_ADDR", ""),
+		NATSURL:       Env("OMNITOKEN_NATS_URL", ""),
+		LogBodyMode:   Env("OMNITOKEN_LOG_BODY_MODE", "off"),
+		MasterKey:     Env("OMNITOKEN_MASTER_KEY", ""),
+		MasterKeyFile: Env("OMNITOKEN_MASTER_KEY_FILE", ""),
 		Ark: ArkConfig{
 			APIKey:           Env("OMNITOKEN_ARK_API_KEY", ""),
 			OpenAIBaseURL:    Env("OMNITOKEN_ARK_OPENAI_BASE_URL", DefaultArkOpenAIBaseURL),
