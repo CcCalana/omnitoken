@@ -183,13 +183,14 @@ E2E 验收通过，但**前端假数据 + admin 无鉴权 + 未验证并发**。
 
 ---
 
-## T-CONC-DSN pg_stat_activity application_name [phase:2-C] [owner:codex] [status:in-progress]
+## T-CONC-DSN pg_stat_activity application_name [phase:2-C] [owner:codex] [status:review]
 
 Started: 2026-05-21 19:29 +08:00
 
 Review: R-CONC-RERUN-prop Decision 3 approved.
 Scope: gateway/admin Postgres DSN `application_name=omnitoken-gateway` / `omnitoken-admin` plus `cmd/loadtest/README.md` sampling SQL. No config or internal DB interface changes.
 Acceptance: `go vet ./...` and `go test ./...` clean; independent commit before T-CONC-RERUN.
+Result: `9b44f98b` — gateway/admin application_name + sampling SQL landed; all green, no deviation.
 
 ---
 
