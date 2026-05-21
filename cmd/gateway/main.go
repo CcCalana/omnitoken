@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -65,7 +66,7 @@ func main() {
 		logger.Error("gateway requires OMNITOKEN_DATABASE_URL for Demo-Ready virtual key auth")
 		os.Exit(1)
 	}
-	db, err := sql.Open("postgres", cfg.DatabaseURL)
+	db, err := sql.Open("postgres", postgresURLWithApplicationName(cfg.DatabaseURL, "omnitoken-gateway"))
 	if err != nil {
 		logger.Error("open postgres", "error", err)
 		os.Exit(1)
@@ -90,6 +91,22 @@ func main() {
 		logger.Error("gateway stopped", "error", err)
 		os.Exit(1)
 	}
+}
+
+func postgresURLWithApplicationName(databaseURL, applicationName string) string {
+	dsn := strings.TrimSpace(databaseURL)
+	name := strings.TrimSpace(applicationName)
+	if dsn == "" || name == "" {
+		return databaseURL
+	}
+	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
+		separator := "?"
+		if strings.Contains(dsn, "?") {
+			separator = "&"
+		}
+		return dsn + separator + "application_name=" + name
+	}
+	return dsn + " application_name=" + name
 }
 
 func newMux(logger *slog.Logger, store auth.VirtualKeyStore, budgetChecker quota.BudgetChecker, resolver router.Resolver, chatHandler http.Handler) http.Handler {

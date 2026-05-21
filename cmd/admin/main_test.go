@@ -653,6 +653,27 @@ func TestAuditLogsStoreErrorReturns500(t *testing.T) {
 	assertErrorCode(t, rec, "audit_logs_query_failed")
 }
 
+func TestPostgresURLWithApplicationName(t *testing.T) {
+	t.Parallel()
+
+	got := postgresURLWithApplicationName("postgres://user:pass@localhost:5432/db?sslmode=disable", "omnitoken-admin")
+	if !strings.Contains(got, "application_name=omnitoken-admin") {
+		t.Fatalf("expected application_name in URL, got %q", got)
+	}
+	if !strings.Contains(got, "sslmode=disable") {
+		t.Fatalf("expected existing query value to remain, got %q", got)
+	}
+}
+
+func TestPostgresURLWithApplicationNameKeywordDSN(t *testing.T) {
+	t.Parallel()
+
+	got := postgresURLWithApplicationName("host=localhost user=omnitoken dbname=omnitoken sslmode=disable", "omnitoken-admin")
+	if !strings.Contains(got, "application_name=omnitoken-admin") {
+		t.Fatalf("expected application_name in keyword DSN, got %q", got)
+	}
+}
+
 func TestPostgresOverviewStoreLoadOverviewMapsSQLResults(t *testing.T) {
 	now := time.Date(2026, 5, 12, 10, 30, 0, 0, time.UTC)
 	db := openFakeAdminDB(t, []adminFakeSQLResponse{

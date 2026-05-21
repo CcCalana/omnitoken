@@ -248,7 +248,7 @@ func newAdminDB(logger *slog.Logger, cfg config.Config) (*sql.DB, func()) {
 		return nil, func() {}
 	}
 
-	db, err := sql.Open("postgres", cfg.DatabaseURL)
+	db, err := sql.Open("postgres", postgresURLWithApplicationName(cfg.DatabaseURL, "omnitoken-admin"))
 	if err != nil {
 		logger.Error("open postgres", "error", err)
 		os.Exit(1)
@@ -258,6 +258,22 @@ func newAdminDB(logger *slog.Logger, cfg config.Config) (*sql.DB, func()) {
 			logger.Error("close postgres", "error", err)
 		}
 	}
+}
+
+func postgresURLWithApplicationName(databaseURL, applicationName string) string {
+	dsn := strings.TrimSpace(databaseURL)
+	name := strings.TrimSpace(applicationName)
+	if dsn == "" || name == "" {
+		return databaseURL
+	}
+	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
+		separator := "?"
+		if strings.Contains(dsn, "?") {
+			separator = "&"
+		}
+		return dsn + separator + "application_name=" + name
+	}
+	return dsn + " application_name=" + name
 }
 
 func newOverviewStore(db *sql.DB) overviewStore {

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -173,6 +174,27 @@ func TestChatCompletionsQuotaCheckErrorFailsClosed(t *testing.T) {
 	}
 	if body.Error.Code != "quota_check_failed" {
 		t.Fatalf("unexpected error envelope: %#v", body)
+	}
+}
+
+func TestPostgresURLWithApplicationName(t *testing.T) {
+	t.Parallel()
+
+	got := postgresURLWithApplicationName("postgres://user:pass@localhost:5432/db?sslmode=disable", "omnitoken-gateway")
+	if !strings.Contains(got, "application_name=omnitoken-gateway") {
+		t.Fatalf("expected application_name in URL, got %q", got)
+	}
+	if !strings.Contains(got, "sslmode=disable") {
+		t.Fatalf("expected existing query value to remain, got %q", got)
+	}
+}
+
+func TestPostgresURLWithApplicationNameKeywordDSN(t *testing.T) {
+	t.Parallel()
+
+	got := postgresURLWithApplicationName("host=localhost user=omnitoken dbname=omnitoken sslmode=disable", "omnitoken-gateway")
+	if !strings.Contains(got, "application_name=omnitoken-gateway") {
+		t.Fatalf("expected application_name in keyword DSN, got %q", got)
 	}
 }
 
