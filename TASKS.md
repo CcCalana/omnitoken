@@ -23,6 +23,7 @@
 | 05-21 | **R-EXT-2026-05-21 外部专家分析核验**：6 条诊断 → 3 命中已跟踪 / 1 NIT 挂到 T-016 顺带做（SSE ctx.Done 分支补 body.Close + 单测）/ 1 推测（quota Redis 缓存）降为 vNext 观察项 **T-QUOTA-CACHE-PROBE** / 1 读错代码（goroutine 泄漏 OOM）。v1 ETA 不动 |
 | 05-21 | **R-016-prop approve** (`fd9ce8d8`)：5/5 propose 决策直接采纳；H-5 (partial-first-read) + M-24/M-25 (ops 文档) + N-15 (WARN log 不漏 Ark body) 留实施期核 |
 | 05-21 | **R-016 approve** (impl `c6ee841d` + e2e `8544ce82`)：12/12 接受标准全达成；H-5/M-24/M-25/N-15 + T-NIT-SSE-CLOSE 五条债全部落地且有显式断言；proxy 86.7% / crypto 87.8% / credentials 92.0%；T-CONC-COST-ATTR 合并到 000012 migration + admin 三处 SQL 切到 model_routed 一并完成。**v1 §零A 第 1 条"性价比资源 = 多 upstream key 池"落地**。3 NIT (provider='ark' 缺注释 / master key fallback log 缺 reason / usage_events 不追溯 retry 链路) 不阻塞 |
+| 05-21 | **T-CONC-RERUN 任务体写好**（status:todo, propose 前置=是）。mock baseline + 真 Ark 多 key 池验证 + DB/quota 观察；5 propose 决策点：mock 形式 / 并发档位 / T-CONC-DSN 是否前置 / pg_stat_statements 是否启 / 报告位置。严格 measurement-only |
 
 ---
 
@@ -106,7 +107,7 @@ E2E 验收通过，但**前端假数据 + admin 无鉴权 + 未验证并发**。
 | 2-B 性价比 | **T-017a 虚拟模型解析（单 key 5 模型）** | gateway 接 `chat-fast/balanced/quality/...` 改写为真实 Ark model；含 admin 列表 + 前端展示 | 1-1.5d | T-008 ✅ | ✅ |
 | 2-B 联调 | **T-INT 前后端联调 + v1 release prep** | admin + viewer 双账号走通全流程；env / docker-compose / 部署文档；含虚拟模型路由演示 | 1d | T-015 + T-005b + T-017a | ✅ |
 | 2-C 性价比 | **T-016 upstream_credentials + 多 key 池**（ADR 0003 拉回）| schema + 2-3 把 Ark key seed 加密入库 + gateway 轮询/429 重试 + usage 写 credential_id；CRUD UI 推 v1.1 | 5-7d | T-INT ✅ | ✅ |
-| 2-C 验证 | **T-CONC-RERUN 多 key 池真实 baseline**（原 vNext 拉回）| mock upstream 测 gateway 承载 + 多 key 池上线后真 Ark 复跑 50/100 并发 | 1d | T-016 | todo |
+| 2-C 验证 | **T-CONC-RERUN 多 key 池真实 baseline**（原 vNext 拉回）| mock upstream 测 gateway 承载 + 多 key 池上线后真 Ark 复跑 50/100 并发 | 1d | T-016 ✅ | propose |
 
 **v1 上线 ETA（2026-05-20 调整）**: ADR 0003 拉回 T-016 后，v1 ETA 从原 "~1 周" 调整为 **"~2 周"**。T-016 是关键路径（5-7d），T-CONC-RERUN 验收 1d。Phase 3-A Agent 适配相应延后 ~1 周。
 
@@ -179,3 +180,45 @@ E2E 验收通过，但**前端假数据 + admin 无鉴权 + 未验证并发**。
      migration 000012；实现 diff 走 git log (c6ee841d + 8544ce82)。 -->
 
 **Review**: R-040 Approved (REVIEW.md)。无 CRITICAL/HIGH；N-11 (paths() helper 过滤分支永不命中) + N-12 (init() 指针 vs value-receiver 风格混用) 不阻塞，下次顺手裁。T-044 / T-046 解锁。
+
+---
+
+## T-CONC-RERUN 多 key 池真实并发 baseline（v1 收官） [phase:2-C] [owner:codex] [status:todo]
+
+Started: 2026-05-21 18:30 +08:00
+
+**目标**: 拿到 v1 上线前 OmniToken gateway 的**真实并发承载 baseline**——T-CONC-CHECK 上次跑 17.1% 成功率被 Ark 单 key rate limit 吃了（H-4），无法回答用户"v1 能扛多少 RPS"。本任务通过两路验证拿到可信数据：(a) mock upstream 跑高并发，量 gateway 自身处理能力（不被上游 rate limit 干扰）；(b) T-016 多 key 池真 Ark 复跑，验证切换机制是否真把 Ark 总速率上限提高到 N 倍。报告产物作为 v1 release 一部分。**严格"不修 internal/* 与 cmd/gateway 代码"**，与 T-CONC-CHECK 同性质 measurement-only。
+
+**涉及**（read-only + 报告写入）:
+- `cmd/loadtest/`（可能要加 profile 配置 / 429 计数）— **propose 时拍是否允许修**；如果改 loadtest 工具则改动隔离在 `cmd/loadtest/` 内，不动 internal/* 与 cmd/gateway / cmd/admin
+- `deploy/docker-compose.yml`（可能要起 mock upstream service）— propose 时拍 mock 形式
+- `docs/release/v1-concurrency-rerun-2026-05-22.md`（新增，或追加到 `v1-concurrency-baseline-2026-05-21.md`，propose 时拍）
+- `docs/proposals/2026-05-21-t-conc-rerun-*.md`（propose 落地）
+
+**接受标准**:
+- [ ] **mock upstream baseline**: 给出 gateway 在 mock upstream（< 1ms 响应延迟、永不 429）下的承载曲线——至少覆盖 3 个并发档位（建议 50 / 100 / 200，propose 拍最终值），每档至少 60s 稳定段。报告含：RPS（实际 vs 配置）、P50/P95/P99 延迟、gateway 5xx 数、超时数、客户端错误数、**memory/goroutine 走势**（至少进程级 `runtime.NumGoroutine` 终值 + `/proc/self/status` 或 docker stats 一次抓取）。**目标**：gateway 5xx ≤ 0.1% 且 P99 ≤ 100ms（mock 路径下基线门槛，未达则在报告里点明 follow-up）。
+- [ ] **真 Ark 多 key 池验证**: 用 T-016 已 seed 的 3 把 Ark key（docker-compose `credential-seed` 跑过），跑一档真请求（建议 30 并发 × 30s，约 900 请求，成本 < 5 元）。报告含：成功率、上游 429 次数、**429 切换发生次数**（grep gateway log "upstream credential retry"）、`usage_events` 按 `upstream_credential_id` 聚合的三把 key 各自请求数。**目标**：成功率 > 80%（vs T-CONC-CHECK 17.1%），证明 T-016 切池机制把单 key rate limit 转成池级 rate limit。
+- [ ] **DB 观察**（连接池 + 慢查询）: 跑期间至少采样 3 次 `pg_stat_activity` 和 `pg_stat_statements`（如 enabled）的 omnitoken 相关连接。**前置门槛**：DSN 是否有 `application_name`，见 propose 决策点 3。如果 propose 决定**不**做 T-CONC-DSN 前置，报告必须像 T-CONC-CHECK 一样透明披露"采样失效，连接池数据缺失"；如果做了前置，报告含 gateway / admin 各自连接峰值 + 是否触发 max_conn 上限。
+- [ ] **额度路径观察（T-QUOTA-CACHE-PROBE 输入）**: 跑期间记录 `pg_stat_statements` 里 `monthlyBudgetStatusSQL`（如可识别）或 quota path 慢查询的 mean/max 延迟，作为 T-QUOTA-CACHE-PROBE 的 baseline 数据。如果 `pg_stat_statements` 没开，propose 决定是开（改 docker-compose postgres conf）还是用 EXPLAIN 离线粗估。**至少给一条结论**："quota check 路径在 N RPS 下平均延迟 X ms / 是否成瓶颈"。
+- [ ] **报告产物**: 一份 release 文档（propose 拍位置），含：methodology / mock baseline 数据 / 真 Ark 数据 / DB 观察 / V2 candidate fixes（与 T-CONC-CHECK 同结构）/ 与 T-CONC-CHECK 17.1% 的对照说明。
+- [ ] **严格 measurement-only**: 不改 internal/* 与 cmd/gateway / cmd/admin 代码。如果发现新瓶颈（如 quota DB 真成瓶颈、selector lock 争用、proxy goroutine 异常增长），**写进报告 V2 candidates，不当场修**，开 follow-up 任务交给后续。
+- [ ] `go vet ./...` clean；`go test ./...`（含 docker race）全绿（如果 propose 决定改 loadtest 工具，这条强制）；如果完全不改代码，仅断言"runtime 行为不变"。
+
+**Codex propose 前置**: **是**。PROPOSAL 答清 5 点：
+1. **mock upstream 形式**: (a) 在 docker-compose 起一个独立 mock service（如 `mock-ark` nginx + lua / 一个 30 行 Go binary 返 stub completion）；(b) `cmd/loadtest` 内 in-process httptest server 然后从 loadtest 直打 mock + gateway 旁路（**不经 docker network**）；(c) 起一个 wiremock 容器。**默认推荐 (a)**——最接近真实部署网络拓扑，但要新建一个 ~50 行 Go binary。propose 拍。
+2. **并发档位 + 时长**: 默认建议 50 / 100 / 200 各 60s 稳定段（前 10s warmup 不计入）。propose 是否覆盖；要不要加 spike test（500 并发 30s 看是否优雅 degrade）；真 Ark 一档是否 30×30 还是 10×120。
+3. **T-CONC-DSN 是否前置**: T-CONC-DSN 是修代码（DSN 加 `application_name=omnitoken-gateway`/`omnitoken-admin`），独立 vNext 任务。propose 拍：(a) 前置一个 < 1h 的 T-CONC-DSN 实施 commit，本任务才开跑，让 DB 观察数据可信；(b) 不前置，本任务报告里透明披露 sampling 失效（与 T-CONC-CHECK 同处理），T-CONC-DSN 留 vNext。**两个方案各自 trade-off**，propose 给推荐 + 理由。
+4. **`pg_stat_statements` 是否启用**: 默认 docker-compose postgres 没开。propose 拍 (a) 改 docker-compose postgres command 加 `-c shared_preload_libraries=pg_stat_statements`（要重启 PG，是改 deploy 不是改 internal/*，属本任务允许范围）；(b) 不开，用 EXPLAIN ANALYZE 离线粗估 monthlyBudgetStatusSQL 延迟。**默认推荐 (a)**——给 T-QUOTA-CACHE-PROBE 留好 baseline。
+5. **报告位置**: (a) 新建 `docs/release/v1-concurrency-rerun-2026-05-22.md`，与 T-CONC-CHECK 报告并列；(b) 追加到 `v1-concurrency-baseline-2026-05-21.md` 作为 "Rerun" 章节。**默认推荐 (a)**——两次跑性质不同（单 key vs 多 key 池），分文件更清晰；T-CONC-CHECK 那份留作 history snapshot。
+
+**不在范围**:
+- T-CONC-DSN 实施（如果 propose 决定前置，独立一个 < 1h commit，**不并入本任务 commit**）
+- T-QUOTA-CACHE-PROBE 实施（依赖此任务输出的 baseline 数据，本任务只产出输入数据 + 结论建议）
+- 任何 `internal/*` 与 `cmd/gateway / cmd/admin` 代码修复（与 T-CONC-CHECK 同性质 measurement-only）
+- v1.1 admin CRUD UI 配套压测（v1.1 范围）
+- 多 provider（OpenAI/Anthropic）并发对照（多 provider 启动后再做）
+- DDoS / 异常输入压测（vNext T-018 故障注入 e2e 范围）
+
+**依赖**: T-016 ✅（多 key 池就绪，3 把 Ark seed key 可用）；R-CONC-CHECK ✅（17.1% 对照基线）；可选前置：T-CONC-DSN（见 propose 决策点 3）。
+
+**参考**: `docs/release/v1-concurrency-baseline-2026-05-21.md`（T-CONC-CHECK 报告 + V2 candidates）；`REVIEW.md` R-CONC-CHECK H-4 段；`docs/adr/0003-multi-key-pool-priority.md`（多 key 池设计）；`cmd/loadtest/README.md`（loadtest 工具用法）；`规划.md` §零A 第 1 条（性价比资源验收门槛）。
