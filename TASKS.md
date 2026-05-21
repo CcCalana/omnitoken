@@ -217,7 +217,7 @@ Proposal: `docs/proposals/2026-05-21-t016-upstream-credential-pool.md`
 
 **参考**: `docs/adr/0003-multi-key-pool-priority.md` ✅；`规划.md` §零A 第 1 条 + §185 upstream_credentials 字段定义 + §四十六风险表行 468；`REVIEW.md` R-CONC-CHECK M-23 + H-4；memory `project_omnitoken_ark_coding_plan`（已修正）；`docs/release/v1-concurrency-baseline-2026-05-21.md`（验证 baseline 起点）。
 
-**Result**: `c6ee841d` — proxy 86.7%, crypto 87.8%, credentials 92.0%; H-5/M-24/M-25/N-15/T-NIT-SSE-CLOSE landed, all green.
+**Result**: `c6ee841d` + `8544ce82` — proxy 86.7%, crypto 87.8%, credentials 92.0%; H-5/M-24/M-25/N-15/T-NIT-SSE-CLOSE + e2e landed, all green.
 
 ---
 
