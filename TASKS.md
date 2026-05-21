@@ -194,7 +194,7 @@ Result: `9b44f98b` — gateway/admin application_name + sampling SQL landed; all
 
 ---
 
-## T-CONC-RERUN 多 key 池真实并发 baseline（v1 收官） [phase:2-C] [owner:codex] [status:in-progress]
+## T-CONC-RERUN 多 key 池真实并发 baseline（v1 收官） [phase:2-C] [owner:codex] [status:review]
 
 Started: 2026-05-21 18:30 +08:00
 Proposal: `docs/proposals/2026-05-21-t-conc-rerun-baseline.md`
@@ -234,3 +234,5 @@ Proposal: `docs/proposals/2026-05-21-t-conc-rerun-baseline.md`
 **依赖**: T-016 ✅（多 key 池就绪，3 把 Ark seed key 可用）；R-CONC-CHECK ✅（17.1% 对照基线）；可选前置：T-CONC-DSN（见 propose 决策点 3）。
 
 **参考**: `docs/release/v1-concurrency-baseline-2026-05-21.md`（T-CONC-CHECK 报告 + V2 candidates）；`REVIEW.md` R-CONC-CHECK H-4 段；`docs/adr/0003-multi-key-pool-priority.md`（多 key 池设计）；`cmd/loadtest/README.md`（loadtest 工具用法）；`规划.md` §零A 第 1 条（性价比资源验收门槛）。
+
+Result: `abc98a05` — mock rerun captured PG saturation; true Ark 30x30 blocked by missing 3-key seed/master-key env, no undeclared deviation.
