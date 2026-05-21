@@ -183,9 +183,10 @@ E2E 验收通过，但**前端假数据 + admin 无鉴权 + 未验证并发**。
 
 ---
 
-## T-CONC-RERUN 多 key 池真实并发 baseline（v1 收官） [phase:2-C] [owner:codex] [status:todo]
+## T-CONC-RERUN 多 key 池真实并发 baseline（v1 收官） [phase:2-C] [owner:codex] [status:in-progress]
 
 Started: 2026-05-21 18:30 +08:00
+Proposal: `docs/proposals/2026-05-21-t-conc-rerun-baseline.md`
 
 **目标**: 拿到 v1 上线前 OmniToken gateway 的**真实并发承载 baseline**——T-CONC-CHECK 上次跑 17.1% 成功率被 Ark 单 key rate limit 吃了（H-4），无法回答用户"v1 能扛多少 RPS"。本任务通过两路验证拿到可信数据：(a) mock upstream 跑高并发，量 gateway 自身处理能力（不被上游 rate limit 干扰）；(b) T-016 多 key 池真 Ark 复跑，验证切换机制是否真把 Ark 总速率上限提高到 N 倍。报告产物作为 v1 release 一部分。**严格"不修 internal/* 与 cmd/gateway 代码"**，与 T-CONC-CHECK 同性质 measurement-only。
 
