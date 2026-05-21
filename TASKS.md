@@ -228,7 +228,10 @@ DB sample peak by required `application_name LIKE 'omnitoken%'` filter: 0; repor
 
 ---
 
-## T-016 upstream_credentials 多 key 池（v1） [phase:2-C] [owner:codex] [status:todo]
+## T-016 upstream_credentials 多 key 池（v1） [phase:2-C] [owner:codex] [status:in-progress]
+
+Started: 2026-05-21 00:15 +08:00
+Proposal: `docs/proposals/2026-05-21-t016-upstream-credential-pool.md`
 
 **目标**: 落实 ADR 0003 决策，把 §零A 第 1 条"性价比资源 = 多 upstream key 池"在 v1 阶段真正落地。具体做：(a) `upstream_credentials` 表 schema + AES-256-GCM envelope encryption；(b) 2-3 把 Ark coding plan key 通过 seed SQL 加密入库；(c) gateway 按 priority/weight 选 credential，429/5xx 自动切池中下一把；(d) usage 流水记录 `upstream_credential_id` 作为 key 维度归因。**admin CRUD UI / KMS / 自动 rotation / 多 provider 推 v1.1**，不在本任务范围。
 
