@@ -236,3 +236,17 @@ Proposal: `docs/proposals/2026-05-21-t-conc-rerun-baseline.md`
 **参考**: `docs/release/v1-concurrency-baseline-2026-05-21.md`（T-CONC-CHECK 报告 + V2 candidates）；`REVIEW.md` R-CONC-CHECK H-4 段；`docs/adr/0003-multi-key-pool-priority.md`（多 key 池设计）；`cmd/loadtest/README.md`（loadtest 工具用法）；`规划.md` §零A 第 1 条（性价比资源验收门槛）。
 
 Result: `abc98a05` — mock rerun captured PG saturation; true Ark 30x30 blocked by missing 3-key seed/master-key env, no undeclared deviation.
+Result(rerun): `dff69844` — true Ark 43.0%, switch 216, no undeclared deviation.
+
+**Hints (R-CONC-RERUN H-6 follow-up, 2026-05-22)**: 用户已把 master key + 三把真 Ark key 落进本机 `.env`（`OMNITOKEN_MASTER_KEY` 64-hex + `OMNITOKEN_ARK_KEYS_1/2/3`），接受标准 #2 的前置条件齐了。请执行真 Ark 30×30 那一档并把结果**追加进同一份 release 文档**（`docs/release/v1-concurrency-rerun-2026-05-22.md` 的 "True Ark Rerun" 段，**不新开 release 文件、不改 mock 段已有数字**），步骤约束：
+1. `docker compose -f deploy/docker-compose.yml up -d` 让 `credential-seed` 用新 env 跑——必要时 `docker compose stop gateway credential-seed && docker compose up -d` 触发 credential-seed 重跑；不要 `-v` 抹卷（per R-CONC-RERUN M-26）。
+2. 跑前查 `upstream_credentials`：`SELECT provider, COUNT(*), MIN(priority), MAX(priority) FROM upstream_credentials WHERE active GROUP BY provider;` 应 `ark` = 3 行（mock-ark 假行 = 0；否则 M-28 清理证据缺失，先 `DELETE FROM upstream_credentials WHERE provider <> 'ark'` 并把这条命令写进报告 cleanup 段）。
+3. 用 mock 段同款命令形状跑：`cmd/loadtest -concurrency 30 -duration 30s -allow-failures` + `MAX_REQUESTS=900` + `model chat-fast` + 复用现有 demo virtual key + admin-token。完整形状参考 `cmd/loadtest/README.md`；**不修 cmd/loadtest 代码**。
+4. 跑后查证据：
+   - `usage_events` 按 `upstream_credential_id` 聚合，确认三个 credential_id 都出现；若集中在单一 priority 1，记 V2 candidate 而**不**当 defect（ADR 0003 priority-based fallback 是设计，仅 429 触发切换）。
+   - gateway log `grep "upstream credential retry"` 看 429 切换次数（观察是否发生即可，不要求下限）。
+   - 与 T-CONC-CHECK 17.1% 对照：成功率必须 > 80%（任务体接受标准 #2 硬门槛）。未达则在 True Ark Rerun 段透明披露原因 + V2 candidate，**不当场修**。
+5. 写完 release 文档 + **新 commit（不要 amend `abc98a05`）**，TASKS.md 本条 Result 行后**再追加一行** `Result(rerun): <hash> — true Ark <成功率>%, switch <次数>, no undeclared deviation.`，状态保持 `status:review` 等二审。
+6. 报告 True Ark Rerun 段必须含：跑期 timestamp / 实际 RPS / 总请求数 / 2xx / upstream_429 / gateway 5xx / P50/P95/P99 / 三把 key 各自 `count(*)` / 切换次数 / 与 T-CONC-CHECK 17.1% 对照一行结论。
+7. **禁动**：`internal/*`、`cmd/gateway`、`cmd/admin`、`cmd/loadtest` 任何代码；`docs/release/v1-concurrency-baseline-2026-05-21.md`；mock 段已有数字；ADR 0003；R-CONC-RERUN M-27 / M-28 顺手在报告里修就行，不另开 commit。
+8. **Cost 约束**：`MAX_REQUESTS=900` 是硬上限（≈ 5 元预算）；真 Ark 提前 429 / 网络异常则直接中止并把已得数据写进报告，**不重跑超 budget**。
