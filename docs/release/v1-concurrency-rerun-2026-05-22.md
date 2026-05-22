@@ -18,7 +18,8 @@ This run added only loadtest/mock measurement tooling; it did not change
 - PG container was recreated to apply preload; the existing named volume was
   reused. No volume deletion was performed.
 - Mock credential seed used a deterministic non-secret dev master key and
-  three fake mock keys. These rows were removed after the mock run.
+  three fake mock keys. Cleanup command for non-Ark rows:
+  `DELETE FROM upstream_credentials WHERE provider <> 'ark';`
 - Planned paid Ark budget: `MAX_REQUESTS=900` for `30 x 30s`.
 
 M-26 note: if the compose Postgres volume is recreated for a future paid Ark
@@ -63,29 +64,44 @@ Postgres `107.6MiB`, mock-ark `9.94MiB`.
 
 ## True Ark Rerun
 
-The paid true Ark multi-key profile did not run. The local `.env` contains one
-fallback `OMNITOKEN_ARK_API_KEY`, but it does not contain
-`OMNITOKEN_MASTER_KEY_FILE`/`OMNITOKEN_MASTER_KEY` or any
-`OMNITOKEN_ARK_KEYS*` values required by `credential-seed`.
+Run timestamp: 2026-05-22 22:00 CST. Compose was restarted with
+`--env-file .env`; `credential-seed` loaded three Ark credentials, and
+`SELECT COUNT(*) FROM upstream_credentials WHERE provider <> 'ark'` returned
+`0`.
 
-Running a paid `30 x 30s` test against a single fallback key would repeat the
-old T-CONC-CHECK shape and would not validate T-016 multi-key pooling. Required
-preconditions before retrying:
+Command shape: `MAX_REQUESTS=900`, `cmd/loadtest -concurrency 30 -duration 30s
+-allow-failures -model chat-fast`.
 
-1. Set the same master key source used for credential seeding.
-2. Set three Ark seed keys through `OMNITOKEN_ARK_KEYS` or numbered
-   `OMNITOKEN_ARK_KEYS_1..3`.
-3. Run `credential-seed`.
-4. Restart gateway.
-5. Run loadtest with `MAX_REQUESTS=900`.
+| Requests | RPS | 2xx | 4xx | Gateway 5xx | Upstream 429 | Success | P50 | P95 | P99 | Max |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 588 | 17.0 | 253 | 319 | 15 | 0 | 43.0% | 1.656s | 3.078s | 3.694s | 4.868s |
+
+Gateway logs for the same window counted `200=253`, `404=319`, and `502=16`;
+one 502 overlapped the client timeout bucket. Retry logs counted 216 switches:
+`upstream_5xx=214`, `upstream_connection_failed=2`, `upstream_429=0`.
+
+Usage rows were written through all three seeded credentials:
+
+| Credential alias | Priority | Usage rows |
+| --- | ---: | ---: |
+| ark-seed-1 | 1 | 169 |
+| ark-seed-2 | 2 | 62 |
+| ark-seed-3 | 3 | 22 |
+
+The true Ark rerun did not meet acceptance criterion #2 (`>80%` success). The
+failure shape is not single-key 429 exhaustion: all three keys were used and
+there were zero upstream 429s. The dominant failed response was upstream 404
+for `chat-fast` -> `kimi-k2.6`, with additional upstream 5xx/connection retry
+events.
 
 ## Comparison With T-CONC-CHECK
 
 T-CONC-CHECK found `428/2500` success (`17.1%`) on a single Ark key with zero
-gateway panic/timeout/5xx. This rerun proves a different bottleneck: when Ark
-is removed via mock upstream, the current gateway stack saturates Postgres
-quota/usage paths before it meets the mock target of P99 <= 100ms and 5xx <=
-0.1%.
+gateway panic/timeout/5xx. The true Ark rerun improved to `253/588` success
+(`43.0%`) with three seeded credentials, but still missed the `>80%` gate. The
+mock rerun separately proves that when Ark is removed, the current gateway stack
+saturates Postgres quota/usage paths before it meets the mock target of P99 <=
+100ms and 5xx <= 0.1%.
 
 ## V2 Candidate Fixes
 
@@ -93,9 +109,10 @@ quota/usage paths before it meets the mock target of P99 <= 100ms and 5xx <=
   enough concurrent Postgres work to hit server `max_connections`.
 - Optimize or cache `monthlyBudgetStatusSQL`; it is already a confirmed input
   for T-QUOTA-CACHE-PROBE.
-- Revisit upstream credential priority semantics: the mock run had three
-  active credentials, but usage aggregated to one credential ID because all
-  seeded rows use increasing priorities and the selector exhausts priority 1
-  before lower-priority fallback rows.
-- Retry true Ark multi-key validation after the three seed keys and master key
-  source are configured.
+- Mock observation: priority-based fallback per ADR 0003 means non-429 traffic
+  concentrates on priority 1; this is expected by design. Round-robin or
+  weighted priority variants are v1.1+ topics, not v1 defects.
+- Add provider/model capability validation before adding a key to the active
+  pool. The true Ark rerun used all three keys but saw 319 upstream 404s for
+  `chat-fast` -> `kimi-k2.6`, so a seeded key can be live while not serving the
+  routed model successfully.
