@@ -299,7 +299,7 @@ Result: `026f90ca` — multi-provider 30 conc 100.0%, DeepSeek 767/767, no undec
 
 ---
 
-## T-016b-MIN Admin Credential CRUD UI (Min) + 30s Polling Hot Reload (v1 上线必备) [phase:2-C] [owner:codex] [status:in-progress]
+## T-016b-MIN Admin Credential CRUD UI (Min) + 30s Polling Hot Reload (v1 上线必备) [phase:2-C] [owner:codex] [status:review]
 
 Started: 2026-05-23 00:00 Asia/Shanghai
 
@@ -356,4 +356,6 @@ Started: 2026-05-23 00:00 Asia/Shanghai
 **依赖**: T-016 ✅；T-MP-DEEPSEEK ✅；ADR 0005
 
 **参考**: `docs/adr/0005-admin-credential-crud-min.md`；`cmd/admin/main.go:512-529` 既有 list handler；`internal/credentials/selector.go` 既有 mutex；T-013 audit middleware；T-005a RBAC middleware
+
+Result: `4b3d6b32` — admin credential add/disable + 30s polling hot reload landed; Docker-only all green, no undeclared deviation.
 
