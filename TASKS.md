@@ -299,7 +299,9 @@ Result: `026f90ca` — multi-provider 30 conc 100.0%, DeepSeek 767/767, no undec
 
 ---
 
-## T-016b-MIN Admin Credential CRUD UI (Min) + 30s Polling Hot Reload (v1 上线必备) [phase:2-C] [owner:codex] [status:todo]
+## T-016b-MIN Admin Credential CRUD UI (Min) + 30s Polling Hot Reload (v1 上线必备) [phase:2-C] [owner:codex] [status:in-progress]
+
+Started: 2026-05-23 00:00 Asia/Shanghai
 
 ⚠️ **Docker-only (AGENTS.md §3.3a)**：所有 `go vet` / `go test -race` / migration / e2e / 前端构建一律 `docker compose run --rm`。**禁 Windows host 跑 make / golangci-lint / `go test -race` / npm**。违反一次 = R-* 直判 HIGH 退回。
 

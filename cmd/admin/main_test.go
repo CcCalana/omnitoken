@@ -21,6 +21,7 @@ import (
 	"github.com/omnitoken/omnitoken/internal/auth"
 	"github.com/omnitoken/omnitoken/internal/config"
 	"github.com/omnitoken/omnitoken/internal/credentials"
+	omnicrypto "github.com/omnitoken/omnitoken/internal/crypto"
 	"github.com/omnitoken/omnitoken/internal/rbac"
 	usageanomaly "github.com/omnitoken/omnitoken/internal/usage/anomaly"
 )
@@ -545,6 +546,154 @@ func TestCredentialsAliasRoute(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+}
+
+func TestCreateCredentialEndpointValidatesStoresAndAudits(t *testing.T) {
+	t.Parallel()
+
+	credentialID := uuid.New().String()
+	store := &fakeOverviewStore{
+		createCredentialResult: credentials.PublicCredential{
+			ID:          credentialID,
+			Provider:    "deepseek",
+			BaseURL:     "https://api.deepseek.com/v1",
+			Priority:    2,
+			Weight:      1,
+			Status:      credentials.StatusActive,
+			HealthState: credentials.HealthHealthy,
+			Metadata:    json.RawMessage(`{"alias":"deepseek-admin"}`),
+			CreatedAt:   time.Date(2026, 5, 23, 9, 0, 0, 0, time.UTC),
+			UpdatedAt:   time.Date(2026, 5, 23, 9, 0, 0, 0, time.UTC),
+		},
+	}
+	recorder := newAdminAuditRecorder()
+	cfg := testAdminConfig()
+	cfg.BootstrapToken = "dev-bootstrap"
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/credentials", strings.NewReader(`{
+		"provider":"deepseek",
+		"alias":"deepseek-admin",
+		"priority":2,
+		"base_url":"https://api.deepseek.com/v1",
+		"key":"must-not-leak"
+	}`))
+	req.Header.Set("Authorization", "Bearer dev-bootstrap")
+	rec := httptest.NewRecorder()
+
+	newMux(testLogger(), cfg, store, nil, nil, recorder).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "must-not-leak") || strings.Contains(rec.Body.String(), "encrypted_secret") {
+		t.Fatalf("credential response leaked secret material: %s", rec.Body.String())
+	}
+	if store.createCredentialParams.Provider != "deepseek" ||
+		store.createCredentialParams.Alias != "deepseek-admin" ||
+		store.createCredentialParams.Secret != "must-not-leak" {
+		t.Fatalf("unexpected create params: %+v", store.createCredentialParams)
+	}
+	entry := recorder.wait(t)
+	if entry.Action != rbac.ActionCreateCredential || entry.ResourceType != "upstream_credential" || entry.ResourceID != credentialID {
+		t.Fatalf("unexpected audit entry: %+v", entry)
+	}
+}
+
+func TestCreateCredentialEndpointRejectsInvalidInput(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+		code string
+	}{
+		{name: "bad provider", body: `{"provider":"openai","alias":"a","priority":1,"base_url":"https://example.com","key":"secret"}`, code: "invalid_credential"},
+		{name: "bad base url", body: `{"provider":"ark","alias":"a","priority":1,"base_url":"ftp://example.com","key":"secret"}`, code: "invalid_credential"},
+		{name: "bad priority", body: `{"provider":"ark","alias":"a","priority":0,"base_url":"https://example.com","key":"secret"}`, code: "invalid_credential"},
+		{name: "empty key", body: `{"provider":"ark","alias":"a","priority":1,"base_url":"https://example.com","key":" "}`, code: "invalid_credential"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			req := httptest.NewRequest(http.MethodPost, "/api/admin/credentials", strings.NewReader(tt.body))
+			rec := httptest.NewRecorder()
+			makeCreateCredentialHandler(testLogger(), &fakeOverviewStore{}).ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected status %d, got %d body=%s", http.StatusBadRequest, rec.Code, rec.Body.String())
+			}
+			assertErrorCode(t, rec, tt.code)
+		})
+	}
+}
+
+func TestCreateCredentialEndpointMapsStoreErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantCode   string
+	}{
+		{name: "missing master key", err: omnicrypto.ErrMasterKeyMissing, wantStatus: http.StatusInternalServerError, wantCode: "master_key_missing"},
+		{name: "alias conflict", err: credentials.ErrAliasExists, wantStatus: http.StatusConflict, wantCode: "credential_alias_exists"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := &fakeOverviewStore{createCredentialErr: tt.err}
+			req := httptest.NewRequest(http.MethodPost, "/api/admin/credentials", strings.NewReader(`{"provider":"ark","alias":"ark-a","priority":1,"base_url":"https://ark.example/v3","key":"secret"}`))
+			rec := httptest.NewRecorder()
+
+			makeCreateCredentialHandler(testLogger(), store).ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("expected status %d, got %d body=%s", tt.wantStatus, rec.Code, rec.Body.String())
+			}
+			assertErrorCode(t, rec, tt.wantCode)
+		})
+	}
+}
+
+func TestDisableCredentialEndpointIsIdempotentAndAudited(t *testing.T) {
+	t.Parallel()
+
+	credentialID := uuid.New().String()
+	store := &fakeOverviewStore{
+		disableCredentialResult: credentials.PublicCredential{
+			ID:          credentialID,
+			Provider:    "ark",
+			BaseURL:     "https://ark.example/v3",
+			Priority:    1,
+			Weight:      1,
+			Status:      credentials.StatusDisabled,
+			HealthState: credentials.HealthHealthy,
+			Metadata:    json.RawMessage(`{"alias":"ark-admin"}`),
+		},
+	}
+	recorder := newAdminAuditRecorder()
+	cfg := testAdminConfig()
+	cfg.BootstrapToken = "dev-bootstrap"
+	req := httptest.NewRequest(http.MethodPatch, "/api/admin/credentials/"+credentialID+"/disable", nil)
+	req.Header.Set("Authorization", "Bearer dev-bootstrap")
+	rec := httptest.NewRecorder()
+
+	newMux(testLogger(), cfg, store, nil, nil, recorder).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	if store.disableCredentialID != credentialID {
+		t.Fatalf("disable id = %q want %q", store.disableCredentialID, credentialID)
+	}
+	entry := recorder.wait(t)
+	if entry.Action != rbac.ActionDisableCredential || entry.ResourceID != credentialID {
+		t.Fatalf("unexpected audit entry: %+v", entry)
 	}
 }
 
@@ -1431,34 +1580,40 @@ func (r *adminAuditRecorder) expectNoRecord(t *testing.T) {
 }
 
 type fakeOverviewStore struct {
-	response          overviewResponse
-	users             usersResponse
-	models            modelsResponse
-	auditLogs         []adminAuditLog
-	updateResult      updateUserBudgetResult
-	err               error
-	usersErr          error
-	modelsErr         error
-	auditLogsErr      error
-	updateErr         error
-	called            bool
-	usersCalled       bool
-	modelsCalled      bool
-	auditLogsCalled   bool
-	updateCalled      bool
-	now               time.Time
-	usersNow          time.Time
-	modelsNow         time.Time
-	auditLogFilters   auditLogFilters
-	updateUserID      uuid.UUID
-	updateBudgetCents *int64
-	updateAt          time.Time
-	authUserID        uuid.UUID
-	authOrgID         uuid.UUID
-	authRole          string
-	authErr           error
-	credentials       credentialsResponse
-	credentialsErr    error
+	response                overviewResponse
+	users                   usersResponse
+	models                  modelsResponse
+	auditLogs               []adminAuditLog
+	updateResult            updateUserBudgetResult
+	err                     error
+	usersErr                error
+	modelsErr               error
+	auditLogsErr            error
+	updateErr               error
+	called                  bool
+	usersCalled             bool
+	modelsCalled            bool
+	auditLogsCalled         bool
+	updateCalled            bool
+	now                     time.Time
+	usersNow                time.Time
+	modelsNow               time.Time
+	auditLogFilters         auditLogFilters
+	updateUserID            uuid.UUID
+	updateBudgetCents       *int64
+	updateAt                time.Time
+	authUserID              uuid.UUID
+	authOrgID               uuid.UUID
+	authRole                string
+	authErr                 error
+	credentials             credentialsResponse
+	credentialsErr          error
+	createCredentialResult  credentials.PublicCredential
+	createCredentialErr     error
+	createCredentialParams  credentials.CreateParams
+	disableCredentialResult credentials.PublicCredential
+	disableCredentialErr    error
+	disableCredentialID     string
 }
 
 func (f *fakeOverviewStore) Authenticate(ctx context.Context, email, password string) (uuid.UUID, uuid.UUID, string, error) {
@@ -1475,6 +1630,16 @@ func (f *fakeOverviewStore) LoadVirtualModels(ctx context.Context) (virtualModel
 
 func (f *fakeOverviewStore) LoadCredentials(ctx context.Context) (credentialsResponse, error) {
 	return f.credentials, f.credentialsErr
+}
+
+func (f *fakeOverviewStore) CreateCredential(_ context.Context, params credentials.CreateParams) (credentials.PublicCredential, error) {
+	f.createCredentialParams = params
+	return f.createCredentialResult, f.createCredentialErr
+}
+
+func (f *fakeOverviewStore) DisableCredential(_ context.Context, id string) (credentials.PublicCredential, error) {
+	f.disableCredentialID = id
+	return f.disableCredentialResult, f.disableCredentialErr
 }
 
 func (f *fakeOverviewStore) LoadOverview(_ context.Context, now time.Time) (overviewResponse, error) {

@@ -12,6 +12,7 @@
   <script defer src="./src/views/users.js"></script>
   <script defer src="./src/views/models.js"></script>
   <script defer src="./src/views/virtual_models.js"></script>
+  <script defer src="./src/views/credentials.js"></script>
   <script defer src="./src/views/audit.js"></script>
   <script defer src="./src/views/login.js"></script>
   <script defer src="./src/app.js"></script>
@@ -42,6 +43,10 @@
       <button class="nav-link" type="button" data-tab="virtualModels">
         <span class="nav-icon" aria-hidden="true">▤</span>
         <span>虚拟模型映射</span>
+      </button>
+      <button class="nav-link" type="button" data-tab="credentials">
+        <span class="nav-icon" aria-hidden="true">K</span>
+        <span>Upstream Credentials</span>
       </button>
       <button class="nav-link" type="button" data-tab="audit">
         <span class="nav-icon" aria-hidden="true">◇</span>
@@ -219,6 +224,73 @@
           </table>
         </div>
       </article>
+    </section>
+
+    <section id="view-credentials" class="view">
+      <div class="view-intro">
+        <p>Provider keys are stored encrypted. Additions and disables are picked up by gateway polling.</p>
+        <button class="primary-button" type="button" data-action="open-credential-modal">Add</button>
+      </div>
+      <div id="credentials-banner" class="alert alert-loading is-hidden"></div>
+      <div id="credentials-alert" class="alert is-hidden"></div>
+
+      <article class="panel table-panel">
+        <div class="table-wrap">
+          <table class="audit-table">
+            <thead>
+              <tr>
+                <th>Provider / Alias</th>
+                <th>Priority</th>
+                <th>Base URL</th>
+                <th>Status</th>
+                <th>Health</th>
+                <th class="align-right">Action</th>
+              </tr>
+            </thead>
+            <tbody id="credentials-table-body">
+              <tr><td colspan="6" class="table-state">Waiting for credentials</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+
+      <div id="credential-modal" class="modal-backdrop is-hidden" role="dialog" aria-modal="true" aria-labelledby="credential-modal-title">
+        <form id="credential-form" class="modal-panel">
+          <div class="panel-header">
+            <h2 id="credential-modal-title">Add Credential</h2>
+            <button class="ghost-button" type="button" data-action="close-credential-modal">Close</button>
+          </div>
+          <div class="form-grid">
+            <label>
+              <span>Provider</span>
+              <select id="credential-provider" required>
+                <option value="ark">ark</option>
+                <option value="deepseek">deepseek</option>
+              </select>
+            </label>
+            <label>
+              <span>Alias</span>
+              <input id="credential-alias" type="text" required>
+            </label>
+            <label>
+              <span>Priority</span>
+              <input id="credential-priority" type="number" min="1" value="1" required>
+            </label>
+            <label>
+              <span>Base URL</span>
+              <input id="credential-base-url" type="url" value="https://api.deepseek.com/v1" required>
+            </label>
+            <label class="form-field-wide">
+              <span>Key</span>
+              <input id="credential-key" type="password" autocomplete="off" required>
+            </label>
+          </div>
+          <div class="modal-actions">
+            <button class="secondary-button" type="button" data-action="close-credential-modal">Cancel</button>
+            <button class="primary-button" type="submit">Add</button>
+          </div>
+        </form>
+      </div>
     </section>
 
     <section id="view-audit" class="view">

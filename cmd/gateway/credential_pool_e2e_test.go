@@ -21,6 +21,7 @@ import (
 	"github.com/omnitoken/omnitoken/internal/auth"
 	"github.com/omnitoken/omnitoken/internal/config"
 	"github.com/omnitoken/omnitoken/internal/credentials"
+	omnicrypto "github.com/omnitoken/omnitoken/internal/crypto"
 	"github.com/omnitoken/omnitoken/internal/httpx"
 	"github.com/omnitoken/omnitoken/internal/proxy"
 	"github.com/omnitoken/omnitoken/internal/usage"
@@ -172,9 +173,124 @@ func TestCredentialPoolE2ECrossProviderFallback(t *testing.T) {
 	waitForCredentialUsageProvider(t, db, subject.APIKeyID, arkID, "ark")
 }
 
+func TestCredentialPollingE2ERoutesNewCredential(t *testing.T) {
+	databaseURL := strings.TrimSpace(os.Getenv("OMNITOKEN_TEST_DATABASE_URL"))
+	if databaseURL == "" {
+		t.Skip("OMNITOKEN_TEST_DATABASE_URL is required for credential polling e2e")
+	}
+	masterKey, err := omnicrypto.LoadMasterKey(os.Getenv("OMNITOKEN_MASTER_KEY_FILE"), os.Getenv("OMNITOKEN_MASTER_KEY"))
+	if err != nil {
+		t.Skipf("master key is required for credential polling e2e: %v", err)
+	}
+	envelope, err := omnicrypto.NewEnvelope(masterKey)
+	if err != nil {
+		t.Fatalf("new envelope: %v", err)
+	}
+	db, err := sql.Open("postgres", databaseURL)
+	if err != nil {
+		t.Fatalf("open postgres: %v", err)
+	}
+
+	upstream := newCredentialPoolMockUpstream()
+	server := httptest.NewServer(upstream)
+	t.Cleanup(server.Close)
+
+	credentialID := uuid.MustParse("00000000-0000-0000-0000-0000000000f1")
+	t.Cleanup(func() {
+		deleteCredentialPoolE2ECredentials(t, db, credentialID)
+		_ = db.Close()
+	})
+	deleteCredentialPoolE2ECredentials(t, db, credentialID)
+	subject := insertCredentialPoolE2EIdentity(t, db)
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	selector := credentials.NewSelector(nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	startCredentialPolling(ctx, logger, credentials.NewPostgresStore(db, envelope), selector, 5*time.Millisecond)
+
+	upsertEncryptedCredentialPoolE2ECredential(t, db, envelope, credentialID, "deepseek", server.URL, "polling-e2e-deepseek", 1, "seed-polling")
+	waitForSelectorCredential(t, selector, credentialID.String())
+
+	handler := usage.Middleware(
+		usage.NewRecorder(usage.NewPostgresStore(db), logger),
+		usage.MiddlewareConfig{
+			Provider:      "ark",
+			ModelFallback: config.DefaultArkModel,
+			Logger:        logger,
+		},
+	)(proxy.NewArkChatProxy(proxy.ArkChatConfig{
+		DefaultModel:         config.DefaultArkModel,
+		CredentialSelector:   selector,
+		MaxCredentialRetries: 1,
+	}, logger, nil))
+
+	rec := httptest.NewRecorder()
+	httpx.RequestID(handler).ServeHTTP(rec, credentialPoolE2ERequestWithProvider(subject, "deepseek"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("polling credential status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	hits := upstream.snapshotHits()
+	if hits["seed-polling"] == 0 {
+		t.Fatalf("expected polling credential to serve request, hits=%v", hits)
+	}
+	waitForCredentialUsageProvider(t, db, subject.APIKeyID, credentialID, "deepseek")
+}
+
 type credentialPoolMockUpstream struct {
 	mu   sync.Mutex
 	hits map[string]int
+}
+
+func upsertEncryptedCredentialPoolE2ECredential(t *testing.T, db *sql.DB, envelope *omnicrypto.Envelope, id uuid.UUID, provider string, baseURL string, alias string, priority int, secret string) {
+	t.Helper()
+
+	encrypted, err := envelope.Encrypt([]byte(secret))
+	if err != nil {
+		t.Fatalf("encrypt credential %s: %v", id, err)
+	}
+	if _, err := db.ExecContext(context.Background(), `
+INSERT INTO upstream_credentials (
+  id,
+  provider,
+  base_url,
+  encrypted_secret,
+  priority,
+  weight,
+  status,
+  health_state,
+  metadata
+)
+VALUES ($1, $2, $3, $4, $5, 1, 'active', 'healthy', jsonb_build_object('alias', $6::text))
+ON CONFLICT (id) DO UPDATE
+SET base_url = EXCLUDED.base_url,
+    provider = EXCLUDED.provider,
+    encrypted_secret = EXCLUDED.encrypted_secret,
+    priority = EXCLUDED.priority,
+    weight = EXCLUDED.weight,
+    status = EXCLUDED.status,
+    health_state = EXCLUDED.health_state,
+    metadata = EXCLUDED.metadata,
+    updated_at = now()
+`, id, provider, baseURL, encrypted, priority, alias); err != nil {
+		t.Fatalf("upsert encrypted credential %s: %v", id, err)
+	}
+}
+
+func waitForSelectorCredential(t *testing.T, selector *credentials.Selector, credentialID string) {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		item, ok := selector.NextForProvider(context.Background(), "deepseek", nil)
+		if ok && item.ID == credentialID {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for selector credential %s", credentialID)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 func newCredentialPoolMockUpstream() *credentialPoolMockUpstream {

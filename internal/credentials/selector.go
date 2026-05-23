@@ -27,27 +27,9 @@ func NewSelectorWithClock(items []Credential, clock func() time.Time) *Selector 
 	if clock == nil {
 		clock = time.Now
 	}
-	credentials := append([]Credential(nil), items...)
-	for i := range credentials {
-		if credentials[i].Weight <= 0 {
-			credentials[i].Weight = 1
-		}
-		if credentials[i].Status == "" {
-			credentials[i].Status = StatusActive
-		}
-		if credentials[i].HealthState == "" {
-			credentials[i].HealthState = HealthHealthy
-		}
-	}
-	sort.SliceStable(credentials, func(i, j int) bool {
-		if credentials[i].Priority != credentials[j].Priority {
-			return credentials[i].Priority < credentials[j].Priority
-		}
-		return credentials[i].ID < credentials[j].ID
-	})
 	return &Selector{
 		clock:       clock,
-		credentials: credentials,
+		credentials: normalizeCredentials(items),
 		positions:   map[string]int{},
 		degraded:    map[string]time.Time{},
 	}
@@ -60,6 +42,20 @@ func (s *Selector) Len() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.credentials)
+}
+
+func (s *Selector) Replace(items []Credential) int {
+	if s == nil {
+		return 0
+	}
+	credentials := normalizeCredentials(items)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := len(s.credentials)
+	s.credentials = credentials
+	s.positions = map[string]int{}
+	s.degraded = pruneDegraded(s.degraded, credentials)
+	return len(credentials) - previous
 }
 
 func (s *Selector) Next(ctx context.Context, exclude map[string]struct{}) (Credential, bool) {
@@ -180,4 +176,46 @@ func normalizedProvider(provider string) string {
 
 func eligible(item Credential) bool {
 	return item.Status == StatusActive && item.HealthState == HealthHealthy
+}
+
+func normalizeCredentials(items []Credential) []Credential {
+	credentials := append([]Credential(nil), items...)
+	for i := range credentials {
+		if credentials[i].Weight <= 0 {
+			credentials[i].Weight = 1
+		}
+		if credentials[i].Status == "" {
+			credentials[i].Status = StatusActive
+		}
+		if credentials[i].HealthState == "" {
+			credentials[i].HealthState = HealthHealthy
+		}
+	}
+	sort.SliceStable(credentials, func(i, j int) bool {
+		if credentials[i].Provider != credentials[j].Provider {
+			return credentials[i].Provider < credentials[j].Provider
+		}
+		if credentials[i].Priority != credentials[j].Priority {
+			return credentials[i].Priority < credentials[j].Priority
+		}
+		return credentials[i].ID < credentials[j].ID
+	})
+	return credentials
+}
+
+func pruneDegraded(degraded map[string]time.Time, credentials []Credential) map[string]time.Time {
+	if len(degraded) == 0 {
+		return map[string]time.Time{}
+	}
+	keep := make(map[string]struct{}, len(credentials))
+	for _, item := range credentials {
+		keep[item.ID] = struct{}{}
+	}
+	out := map[string]time.Time{}
+	for id, until := range degraded {
+		if _, ok := keep[id]; ok {
+			out[id] = until
+		}
+	}
+	return out
 }

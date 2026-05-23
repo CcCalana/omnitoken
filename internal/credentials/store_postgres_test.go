@@ -72,6 +72,78 @@ func TestPostgresStoreListPublicOmitsEncryptedSecret(t *testing.T) {
 	}
 }
 
+func TestPostgresStoreCreateEncryptsAndReturnsPublicCredential(t *testing.T) {
+	db := openCredentialFakeDB(t)
+	envelope := testEnvelope(t)
+	now := time.Date(2026, 5, 23, 10, 0, 0, 0, time.UTC)
+	setCredentialFakeState(fakeCredentialDBState{rows: [][]driver.Value{{
+		uuid.New().String(), "deepseek", "https://api.deepseek.com/v1", "", int64(3), int64(1),
+		StatusActive, HealthHealthy, "", []byte(`{}`), []byte(`{"alias":"deepseek-a"}`), now, now,
+	}}})
+
+	item, err := NewPostgresStore(db, envelope).Create(context.Background(), CreateParams{
+		Provider: "deepseek",
+		Alias:    "deepseek-a",
+		BaseURL:  "https://api.deepseek.com/v1",
+		Secret:   "secret-value",
+		Priority: 3,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if item.Provider != "deepseek" || item.Status != StatusActive || string(item.Metadata) != `{"alias":"deepseek-a"}` {
+		t.Fatalf("unexpected created public credential: %+v", item)
+	}
+	state := currentCredentialFakeState()
+	if !strings.Contains(state.query, "INSERT INTO upstream_credentials") || strings.Contains(state.query, "secret-value") {
+		t.Fatalf("unexpected create query: %s", state.query)
+	}
+	if len(state.args) < 4 {
+		t.Fatalf("expected create args, got %#v", state.args)
+	}
+	encrypted, ok := state.args[3].([]byte)
+	if !ok || bytes.Contains(encrypted, []byte("secret-value")) {
+		t.Fatalf("secret was not encrypted before storage: %#v", state.args[3])
+	}
+}
+
+func TestPostgresStoreCreateDetectsAliasConflict(t *testing.T) {
+	db := openCredentialFakeDB(t)
+	setCredentialFakeState(fakeCredentialDBState{})
+
+	_, err := NewPostgresStore(db, testEnvelope(t)).Create(context.Background(), CreateParams{
+		Provider: "ark",
+		Alias:    "ark-a",
+		BaseURL:  "https://ark.example/v3",
+		Secret:   "secret",
+		Priority: 1,
+	})
+	if !errors.Is(err, ErrAliasExists) {
+		t.Fatalf("expected alias conflict, got %v", err)
+	}
+}
+
+func TestPostgresStoreDisableReturnsPublicCredential(t *testing.T) {
+	db := openCredentialFakeDB(t)
+	now := time.Date(2026, 5, 23, 10, 0, 0, 0, time.UTC)
+	id := uuid.New().String()
+	setCredentialFakeState(fakeCredentialDBState{rows: [][]driver.Value{{
+		id, "ark", "https://ark.example/v3", "", int64(1), int64(1),
+		StatusDisabled, HealthHealthy, "", []byte(`{}`), []byte(`{"alias":"ark-a"}`), now, now,
+	}}})
+
+	item, err := NewPostgresStore(db, nil).Disable(context.Background(), id)
+	if err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	if item.ID != id || item.Status != StatusDisabled {
+		t.Fatalf("unexpected disabled credential: %+v", item)
+	}
+	if !strings.Contains(currentCredentialFakeState().query, "SET status = 'disabled'") {
+		t.Fatalf("unexpected disable query: %s", currentCredentialFakeState().query)
+	}
+}
+
 func TestPostgresStoreLoadHandlesErrors(t *testing.T) {
 	db := openCredentialFakeDB(t)
 	envelope := testEnvelope(t)
@@ -137,6 +209,7 @@ func currentCredentialFakeState() fakeCredentialDBState {
 
 type fakeCredentialDBState struct {
 	query string
+	args  []driver.Value
 	rows  [][]driver.Value
 	err   error
 }
@@ -157,10 +230,14 @@ func (fakeCredentialConn) Close() error { return nil }
 
 func (fakeCredentialConn) Begin() (driver.Tx, error) { return nil, errors.New("begin not supported") }
 
-func (fakeCredentialConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+func (fakeCredentialConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	credentialFakeMu.Lock()
 	defer credentialFakeMu.Unlock()
 	credentialFakeState.query = query
+	credentialFakeState.args = make([]driver.Value, len(args))
+	for i, arg := range args {
+		credentialFakeState.args[i] = arg.Value
+	}
 	if credentialFakeState.err != nil {
 		return nil, credentialFakeState.err
 	}

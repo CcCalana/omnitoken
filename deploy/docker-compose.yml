@@ -125,10 +125,11 @@ services:
     environment:
       OMNITOKEN_GATEWAY_ADDR: ":8080"
       OMNITOKEN_DATABASE_URL: "postgres://omnitoken:omnitoken@postgres:5432/omnitoken?sslmode=disable"
-      # Gateway loads encrypted upstream credentials once at startup.
-      # After credential-seed changes, restart gateway to reload the pool.
+      # Gateway and admin must share the same master key so admin-created
+      # credentials can be decrypted by the gateway polling reloader.
       OMNITOKEN_MASTER_KEY_FILE: "${OMNITOKEN_MASTER_KEY_FILE:-}"
       OMNITOKEN_MASTER_KEY: "${OMNITOKEN_MASTER_KEY:-}"
+      OMNITOKEN_CREDENTIAL_POLL_INTERVAL: "${OMNITOKEN_CREDENTIAL_POLL_INTERVAL:-30s}"
       OMNITOKEN_ARK_API_KEY: "${OMNITOKEN_ARK_API_KEY:-}"
       OMNITOKEN_ARK_OPENAI_BASE_URL: "${OMNITOKEN_ARK_OPENAI_BASE_URL:-https://ark.cn-beijing.volces.com/api/coding/v3}"
       OMNITOKEN_ARK_ANTHROPIC_BASE_URL: "${OMNITOKEN_ARK_ANTHROPIC_BASE_URL:-https://ark.cn-beijing.volces.com/api/coding}"
@@ -155,6 +156,9 @@ services:
       OMNITOKEN_ADMIN_ADDR: ":8081"
       OMNITOKEN_DATABASE_URL: "postgres://omnitoken:omnitoken@postgres:5432/omnitoken?sslmode=disable"
       OMNITOKEN_ADMIN_BOOTSTRAP_TOKEN: "${OMNITOKEN_ADMIN_BOOTSTRAP_TOKEN:-}"
+      # Admin encrypts newly added upstream credentials with this same key.
+      OMNITOKEN_MASTER_KEY_FILE: "${OMNITOKEN_MASTER_KEY_FILE:-}"
+      OMNITOKEN_MASTER_KEY: "${OMNITOKEN_MASTER_KEY:-}"
       OMNITOKEN_ADMIN_SESSION_TTL: "${OMNITOKEN_ADMIN_SESSION_TTL:-24h}"
       OMNITOKEN_ADMIN_KEY_ANOMALY_RPM_5M: "${OMNITOKEN_ADMIN_KEY_ANOMALY_RPM_5M:-60}"
       OMNITOKEN_ADMIN_CORS_ORIGINS: "${OMNITOKEN_ADMIN_CORS_ORIGINS:-http://localhost:3000}"
@@ -181,6 +185,8 @@ services:
       GOTELEMETRY: "off"
       OMNITOKEN_TEST_DATABASE_URL: "postgres://omnitoken:omnitoken@postgres:5432/omnitoken?sslmode=disable"
       OMNITOKEN_ADMIN_BOOTSTRAP_TOKEN: "${OMNITOKEN_ADMIN_BOOTSTRAP_TOKEN:-}"
+      OMNITOKEN_MASTER_KEY_FILE: "${OMNITOKEN_MASTER_KEY_FILE:-}"
+      OMNITOKEN_MASTER_KEY: "${OMNITOKEN_MASTER_KEY:-}"
       OMNITOKEN_DEEPSEEK_KEYS_1: "${OMNITOKEN_DEEPSEEK_KEYS_1:-}"
       OMNITOKEN_DEEPSEEK_KEYS_2: "${OMNITOKEN_DEEPSEEK_KEYS_2:-}"
       OMNITOKEN_DEEPSEEK_KEYS_3: "${OMNITOKEN_DEEPSEEK_KEYS_3:-}"

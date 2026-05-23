@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/omnitoken/omnitoken/internal/auth"
+	"github.com/omnitoken/omnitoken/internal/credentials"
 	"github.com/omnitoken/omnitoken/internal/proxy"
 	"github.com/omnitoken/omnitoken/internal/quota"
 )
@@ -198,6 +199,36 @@ func TestPostgresURLWithApplicationNameKeywordDSN(t *testing.T) {
 	}
 }
 
+func TestCredentialPollingReloadsSelector(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeCredentialLoader{items: []credentials.Credential{{
+		ID:          "fresh",
+		Provider:    "deepseek",
+		BaseURL:     "https://api.deepseek.com/v1",
+		Secret:      "secret",
+		Priority:    1,
+		Status:      credentials.StatusActive,
+		HealthState: credentials.HealthHealthy,
+	}}}
+	selector := credentials.NewSelector(nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	startCredentialPolling(ctx, testLogger(), store, selector, time.Millisecond)
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		item, ok := selector.NextForProvider(context.Background(), "deepseek", nil)
+		if ok && item.ID == "fresh" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for credential reload, len=%d", selector.Len())
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
@@ -251,6 +282,14 @@ type fakeBudgetChecker struct {
 	decision quota.Decision
 	err      error
 	calls    int
+}
+
+type fakeCredentialLoader struct {
+	items []credentials.Credential
+}
+
+func (s *fakeCredentialLoader) Load(context.Context) ([]credentials.Credential, error) {
+	return append([]credentials.Credential(nil), s.items...), nil
 }
 
 func (c *fakeBudgetChecker) Check(context.Context, auth.Subject, time.Time) (quota.Decision, error) {

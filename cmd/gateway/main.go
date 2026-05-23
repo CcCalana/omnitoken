@@ -78,7 +78,10 @@ func main() {
 	}()
 
 	resolver := router.NewPostgresStore(db)
-	selector := loadCredentialSelector(context.Background(), logger, db, cfg)
+	credentialStore, selector := loadCredentialSelector(context.Background(), logger, db, cfg)
+	if selector != nil {
+		startCredentialPolling(context.Background(), logger, credentialStore, selector, credentialPollInterval(logger))
+	}
 
 	server := &http.Server{
 		Addr:              cfg.Gateway.Addr,
@@ -118,31 +121,70 @@ func newMux(logger *slog.Logger, store auth.VirtualKeyStore, budgetChecker quota
 	return httpx.RequestID(httpx.RequestLogger(logger)(mux))
 }
 
-func loadCredentialSelector(ctx context.Context, logger *slog.Logger, db *sql.DB, cfg config.Config) *credentials.Selector {
+type credentialLoader interface {
+	Load(context.Context) ([]credentials.Credential, error)
+}
+
+func loadCredentialSelector(ctx context.Context, logger *slog.Logger, db *sql.DB, cfg config.Config) (credentialLoader, *credentials.Selector) {
 	masterKey, err := omnicrypto.LoadMasterKey(cfg.MasterKeyFile, cfg.MasterKey)
 	if err != nil {
 		if cfg.Ark.Enabled() {
 			logger.Warn("upstream credential pool disabled; falling back to OMNITOKEN_ARK_API_KEY")
-			return nil
+			return nil, nil
 		}
 		logger.Warn("upstream credential pool disabled", "err", err)
-		return nil
+		return nil, nil
 	}
 	envelope, err := omnicrypto.NewEnvelope(masterKey)
 	if err != nil {
 		logger.Warn("upstream credential pool disabled", "err", err)
-		return nil
+		return nil, nil
 	}
-	items, err := credentials.NewPostgresStore(db, envelope).Load(ctx)
+	store := credentials.NewPostgresStore(db, envelope)
+	items, err := store.Load(ctx)
 	if err != nil {
 		logger.Error("load upstream credentials", "err", err)
-		return nil
+		return nil, nil
 	}
 	logger.Info("loaded upstream credentials", "count", len(items))
-	if len(items) == 0 {
-		return nil
+	return store, credentials.NewSelector(items)
+}
+
+func startCredentialPolling(ctx context.Context, logger *slog.Logger, store credentialLoader, selector *credentials.Selector, interval time.Duration) {
+	if store == nil || selector == nil || interval <= 0 {
+		return
 	}
-	return credentials.NewSelector(items)
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				items, err := store.Load(ctx)
+				if err != nil {
+					logger.Warn("credential pool reload failed", "err", err)
+					continue
+				}
+				delta := selector.Replace(items)
+				logger.Info("credential pool reloaded", "count", len(items), "delta", delta)
+			}
+		}
+	}()
+}
+
+func credentialPollInterval(logger *slog.Logger) time.Duration {
+	raw := strings.TrimSpace(os.Getenv("OMNITOKEN_CREDENTIAL_POLL_INTERVAL"))
+	if raw == "" {
+		return 30 * time.Second
+	}
+	interval, err := time.ParseDuration(raw)
+	if err != nil || interval < 0 {
+		logger.Warn("invalid credential poll interval", "env", "OMNITOKEN_CREDENTIAL_POLL_INTERVAL", "value", raw, "default", "30s")
+		return 30 * time.Second
+	}
+	return interval
 }
 
 func newArkChatProxy(cfg config.Config, logger *slog.Logger, selector *credentials.Selector) http.Handler {

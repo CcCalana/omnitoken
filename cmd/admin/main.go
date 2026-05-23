@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	"github.com/omnitoken/omnitoken/internal/auth"
 	"github.com/omnitoken/omnitoken/internal/config"
 	"github.com/omnitoken/omnitoken/internal/credentials"
+	omnicrypto "github.com/omnitoken/omnitoken/internal/crypto"
 	"github.com/omnitoken/omnitoken/internal/httpx"
 	"github.com/omnitoken/omnitoken/internal/rbac"
 	usageanomaly "github.com/omnitoken/omnitoken/internal/usage/anomaly"
@@ -90,6 +92,14 @@ type virtualModelsResponse struct {
 
 type credentialsResponse struct {
 	Credentials []credentials.PublicCredential `json:"credentials"`
+}
+
+type createCredentialRequest struct {
+	Provider string `json:"provider"`
+	Alias    string `json:"alias"`
+	Priority int    `json:"priority"`
+	BaseURL  string `json:"base_url"`
+	Key      string `json:"key"`
 }
 
 type adminVirtualModel struct {
@@ -198,6 +208,8 @@ type overviewStore interface {
 	UpdateUserBudget(context.Context, uuid.UUID, *int64, time.Time) (updateUserBudgetResult, error)
 	LoadVirtualModels(context.Context) (virtualModelsResponse, error)
 	LoadCredentials(context.Context) (credentialsResponse, error)
+	CreateCredential(context.Context, credentials.CreateParams) (credentials.PublicCredential, error)
+	DisableCredential(context.Context, string) (credentials.PublicCredential, error)
 	Authenticate(ctx context.Context, email, password string) (uuid.UUID, uuid.UUID, string, error)
 }
 
@@ -208,7 +220,9 @@ type postgresVirtualKeyCreator struct {
 }
 
 type postgresOverviewStore struct {
-	db *sql.DB
+	db          *sql.DB
+	envelope    *omnicrypto.Envelope
+	envelopeErr error
 }
 
 func main() {
@@ -222,7 +236,7 @@ func main() {
 	db, closeDB := newAdminDB(logger, cfg)
 	defer closeDB()
 	creator := newVirtualKeyCreator(logger, cfg, db)
-	overview := newOverviewStore(db)
+	overview := newOverviewStore(logger, cfg, db)
 	auditRecorder := newAuditRecorder(logger, db)
 	runCtx, stopBackground := context.WithCancel(context.Background())
 	defer stopBackground()
@@ -277,11 +291,26 @@ func postgresURLWithApplicationName(databaseURL, applicationName string) string 
 	return dsn + " application_name=" + name
 }
 
-func newOverviewStore(db *sql.DB) overviewStore {
+func newOverviewStore(logger *slog.Logger, cfg config.Config, db *sql.DB) overviewStore {
 	if db == nil {
 		return nil
 	}
-	return &postgresOverviewStore{db: db}
+	store := &postgresOverviewStore{db: db}
+	masterKey, err := omnicrypto.LoadMasterKey(cfg.MasterKeyFile, cfg.MasterKey)
+	if err != nil {
+		store.envelopeErr = err
+		return store
+	}
+	envelope, err := omnicrypto.NewEnvelope(masterKey)
+	if err != nil {
+		store.envelopeErr = err
+		if logger != nil {
+			logger.Warn("admin credential encryption disabled", "err", err)
+		}
+		return store
+	}
+	store.envelope = envelope
+	return store
 }
 
 func newAuditRecorder(logger *slog.Logger, db *sql.DB) audit.Recorder {
@@ -405,6 +434,12 @@ func newMux(logger *slog.Logger, cfg config.AdminConfig, overview overviewStore,
 	credentialsHandler := protectedRead(http.HandlerFunc(makeCredentialsHandler(logger, overview)))
 	mux.Handle("GET /admin/credentials", credentialsHandler)
 	mux.Handle("GET /api/admin/credentials", credentialsHandler)
+	createCredentialHandler := protectedWrite(rbac.ActionCreateCredential, http.HandlerFunc(makeCreateCredentialHandler(logger, overview)))
+	mux.Handle("POST /admin/credentials", createCredentialHandler)
+	mux.Handle("POST /api/admin/credentials", createCredentialHandler)
+	disableCredentialHandler := protectedWrite(rbac.ActionDisableCredential, http.HandlerFunc(makeDisableCredentialHandler(logger, overview)))
+	mux.Handle("PATCH /admin/credentials/{id}/disable", disableCredentialHandler)
+	mux.Handle("PATCH /api/admin/credentials/{id}/disable", disableCredentialHandler)
 	mux.Handle("GET /api/admin/audit-logs", protectedRead(http.HandlerFunc(makeAuditLogsHandler(logger, overview))))
 	mux.Handle("PATCH /api/admin/users/{id}/quota", protectedWrite(rbac.ActionUpdateQuota, http.HandlerFunc(makeUpdateUserQuotaHandler(logger, overview))))
 	if creator != nil {
@@ -526,6 +561,135 @@ func makeCredentialsHandler(logger *slog.Logger, store overviewStore) http.Handl
 		}
 		httpx.WriteJSON(w, http.StatusOK, response)
 	}
+}
+
+func makeCreateCredentialHandler(logger *slog.Logger, store overviewStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		audit.SetAction(r.Context(), rbac.ActionCreateCredential)
+		audit.SetResource(r.Context(), "upstream_credential", "")
+
+		var body createCredentialRequest
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
+			httpx.WriteJSON(w, http.StatusBadRequest, errorEnvelope("invalid request body", "invalid_request", "invalid_json"))
+			return
+		}
+		params, err := parseCreateCredentialRequest(body)
+		if err != nil {
+			httpx.WriteJSON(w, http.StatusBadRequest, errorEnvelope(err.Error(), "invalid_request", "invalid_credential"))
+			return
+		}
+		audit.SetBefore(r.Context(), nil)
+		audit.SetAfter(r.Context(), credentialAuditView(params.Provider, params.Alias, params.Priority, params.BaseURL, credentials.StatusActive, credentials.HealthHealthy))
+
+		if store == nil {
+			logger.Error("create credential without admin store")
+			httpx.WriteJSON(w, http.StatusServiceUnavailable, errorEnvelope("admin store is not configured", "server_error", "admin_store_not_configured"))
+			return
+		}
+		created, err := store.CreateCredential(r.Context(), params)
+		if err != nil {
+			if errors.Is(err, omnicrypto.ErrMasterKeyMissing) {
+				httpx.WriteJSON(w, http.StatusInternalServerError, errorEnvelope("master key is required to encrypt credentials", "server_error", "master_key_missing"))
+				return
+			}
+			if errors.Is(err, credentials.ErrAliasExists) {
+				httpx.WriteJSON(w, http.StatusConflict, errorEnvelope("alias already exists for provider", "invalid_request", "credential_alias_exists"))
+				return
+			}
+			logger.Error("create credential", "provider", params.Provider, "alias", params.Alias, "error", err)
+			httpx.WriteJSON(w, http.StatusInternalServerError, errorEnvelope("failed to create credential", "server_error", "create_credential_failed"))
+			return
+		}
+		audit.SetResource(r.Context(), "upstream_credential", created.ID)
+		audit.SetAfter(r.Context(), credentialAuditView(created.Provider, aliasFromMetadata(created.Metadata), created.Priority, created.BaseURL, created.Status, created.HealthState))
+		httpx.WriteJSON(w, http.StatusCreated, created)
+	}
+}
+
+func makeDisableCredentialHandler(logger *slog.Logger, store overviewStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := strings.TrimSpace(r.PathValue("id"))
+		if _, err := uuid.Parse(id); err != nil {
+			httpx.WriteJSON(w, http.StatusBadRequest, errorEnvelope("credential id must be a valid UUID", "invalid_request", "invalid_credential_id"))
+			return
+		}
+		audit.SetAction(r.Context(), rbac.ActionDisableCredential)
+		audit.SetResource(r.Context(), "upstream_credential", id)
+
+		if store == nil {
+			logger.Error("disable credential without admin store", "credential_id", id)
+			httpx.WriteJSON(w, http.StatusServiceUnavailable, errorEnvelope("admin store is not configured", "server_error", "admin_store_not_configured"))
+			return
+		}
+		disabled, err := store.DisableCredential(r.Context(), id)
+		if err != nil {
+			if errors.Is(err, credentials.ErrCredentialMissing) {
+				httpx.WriteJSON(w, http.StatusNotFound, errorEnvelope("credential not found", "invalid_request", "credential_not_found"))
+				return
+			}
+			logger.Error("disable credential", "credential_id", id, "error", err)
+			httpx.WriteJSON(w, http.StatusInternalServerError, errorEnvelope("failed to disable credential", "server_error", "disable_credential_failed"))
+			return
+		}
+		audit.SetAfter(r.Context(), credentialAuditView(disabled.Provider, aliasFromMetadata(disabled.Metadata), disabled.Priority, disabled.BaseURL, disabled.Status, disabled.HealthState))
+		httpx.WriteJSON(w, http.StatusOK, disabled)
+	}
+}
+
+func parseCreateCredentialRequest(body createCredentialRequest) (credentials.CreateParams, error) {
+	provider := strings.TrimSpace(body.Provider)
+	switch provider {
+	case "ark", "deepseek":
+	default:
+		return credentials.CreateParams{}, fmt.Errorf("provider must be ark or deepseek")
+	}
+	alias := strings.TrimSpace(body.Alias)
+	if alias == "" {
+		return credentials.CreateParams{}, fmt.Errorf("alias is required")
+	}
+	baseURL := strings.TrimSpace(body.BaseURL)
+	parsed, err := url.Parse(baseURL)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return credentials.CreateParams{}, fmt.Errorf("base_url must be http(s)://")
+	}
+	if body.Priority < 1 {
+		return credentials.CreateParams{}, fmt.Errorf("priority must be at least 1")
+	}
+	key := strings.TrimSpace(body.Key)
+	if key == "" {
+		return credentials.CreateParams{}, fmt.Errorf("key is required")
+	}
+	return credentials.CreateParams{
+		Provider: provider,
+		Alias:    alias,
+		BaseURL:  baseURL,
+		Priority: body.Priority,
+		Secret:   key,
+	}, nil
+}
+
+func credentialAuditView(provider, alias string, priority int, baseURL string, status string, healthState string) map[string]any {
+	return map[string]any{
+		"provider":     provider,
+		"alias":        alias,
+		"priority":     priority,
+		"base_url":     baseURL,
+		"status":       status,
+		"health_state": healthState,
+	}
+}
+
+func aliasFromMetadata(metadata json.RawMessage) string {
+	if len(metadata) == 0 {
+		return ""
+	}
+	var body struct {
+		Alias string `json:"alias"`
+	}
+	if err := json.Unmarshal(metadata, &body); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(body.Alias)
 }
 
 func makeAuditLogsHandler(logger *slog.Logger, store overviewStore) http.HandlerFunc {
@@ -967,6 +1131,23 @@ func (s *postgresOverviewStore) LoadCredentials(ctx context.Context) (credential
 		items = []credentials.PublicCredential{}
 	}
 	return credentialsResponse{Credentials: items}, nil
+}
+
+func (s *postgresOverviewStore) CreateCredential(ctx context.Context, params credentials.CreateParams) (credentials.PublicCredential, error) {
+	if s == nil || s.envelope == nil {
+		if s != nil && s.envelopeErr != nil {
+			return credentials.PublicCredential{}, s.envelopeErr
+		}
+		return credentials.PublicCredential{}, omnicrypto.ErrMasterKeyMissing
+	}
+	return credentials.NewPostgresStore(s.db, s.envelope).Create(ctx, params)
+}
+
+func (s *postgresOverviewStore) DisableCredential(ctx context.Context, id string) (credentials.PublicCredential, error) {
+	if s == nil || s.db == nil {
+		return credentials.PublicCredential{}, credentials.ErrCredentialMissing
+	}
+	return credentials.NewPostgresStore(s.db, nil).Disable(ctx, id)
 }
 
 func (s *postgresOverviewStore) LoadAuditLogs(ctx context.Context, filters auditLogFilters) ([]adminAuditLog, error) {

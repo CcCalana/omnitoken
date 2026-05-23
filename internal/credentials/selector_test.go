@@ -2,6 +2,7 @@ package credentials
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 )
@@ -91,4 +92,34 @@ func TestSelectorHandlesNilAndDefaults(t *testing.T) {
 		t.Fatalf("defaulted credential = %+v ok=%t", item, ok)
 	}
 	selector.MarkDegraded("", time.Second)
+}
+
+func TestSelectorReplaceSwapsPoolAtomically(t *testing.T) {
+	now := time.Date(2026, 5, 23, 9, 0, 0, 0, time.UTC)
+	selector := NewSelectorWithClock([]Credential{
+		{ID: "old", Provider: "ark", Priority: 1, Status: StatusActive, HealthState: HealthHealthy},
+	}, func() time.Time { return now })
+
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				_, _ = selector.NextForProvider(context.Background(), "deepseek", nil)
+			}
+		}()
+	}
+	delta := selector.Replace([]Credential{
+		{ID: "new", Provider: "deepseek", Priority: 1, Status: StatusActive, HealthState: HealthHealthy},
+	})
+	wg.Wait()
+
+	if delta != 0 {
+		t.Fatalf("replace delta = %d want 0", delta)
+	}
+	item, ok := selector.NextForProvider(context.Background(), "deepseek", nil)
+	if !ok || item.ID != "new" {
+		t.Fatalf("expected new credential after replace, got %+v ok=%t", item, ok)
+	}
 }

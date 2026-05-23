@@ -21,6 +21,8 @@ const (
 	ActionViewOwnUsage      = "view_own_usage"
 	ActionCreateVirtualKey  = "create_virtual_key"
 	ActionDisableVirtualKey = "disable_virtual_key"
+	ActionCreateCredential  = "create_provider_credential"
+	ActionDisableCredential = "disable_provider_credential"
 	ActionUpdateQuota       = "update_quota"
 
 	ReasonAllowedByAdmin     = "allowed_by_admin"
@@ -56,5 +58,7 @@ var AllActions = []string{
 	ActionViewOwnUsage,
 	ActionCreateVirtualKey,
 	ActionDisableVirtualKey,
+	ActionCreateCredential,
+	ActionDisableCredential,
 	ActionUpdateQuota,
 }

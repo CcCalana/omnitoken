@@ -22,6 +22,8 @@ func TestAuthorizeRoleActionMatrix(t *testing.T) {
 			ActionViewOwnUsage:      true,
 			ActionCreateVirtualKey:  true,
 			ActionDisableVirtualKey: true,
+			ActionCreateCredential:  true,
+			ActionDisableCredential: true,
 			ActionUpdateQuota:       true,
 		},
 		RoleViewer: {
@@ -32,6 +34,8 @@ func TestAuthorizeRoleActionMatrix(t *testing.T) {
 			ActionViewOwnUsage:      false,
 			ActionCreateVirtualKey:  false,
 			ActionDisableVirtualKey: false,
+			ActionCreateCredential:  false,
+			ActionDisableCredential: false,
 			ActionUpdateQuota:       false,
 		},
 		RoleMember: {
@@ -42,6 +46,8 @@ func TestAuthorizeRoleActionMatrix(t *testing.T) {
 			ActionViewOwnUsage:      true,
 			ActionCreateVirtualKey:  false,
 			ActionDisableVirtualKey: false,
+			ActionCreateCredential:  false,
+			ActionDisableCredential: false,
 			ActionUpdateQuota:       false,
 		},
 	}

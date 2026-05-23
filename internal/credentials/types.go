@@ -2,6 +2,7 @@ package credentials
 
 import (
 	"encoding/json"
+	"errors"
 	"time"
 )
 
@@ -12,6 +13,11 @@ const (
 	HealthHealthy     = "healthy"
 	HealthDegraded    = "degraded"
 	HealthQuarantined = "quarantined"
+)
+
+var (
+	ErrAliasExists       = errors.New("credential alias already exists")
+	ErrCredentialMissing = errors.New("credential not found")
 )
 
 type Credential struct {
@@ -29,6 +35,14 @@ type Credential struct {
 	Metadata    json.RawMessage
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+}
+
+type CreateParams struct {
+	Provider string
+	Alias    string
+	BaseURL  string
+	Secret   string
+	Priority int
 }
 
 type PublicCredential struct {

@@ -231,7 +231,7 @@ func (p *ArkChatProxy) doWithRetries(w http.ResponseWriter, r *http.Request, bod
 	if maxAttempts <= 0 {
 		maxAttempts = 1
 	}
-	if p.cfg.CredentialSelector == nil {
+	if p.cfg.CredentialSelector == nil || p.cfg.CredentialSelector.Len() == 0 {
 		maxAttempts = 1
 	}
 
@@ -311,7 +311,7 @@ func (p *ArkChatProxy) doWithRetries(w http.ResponseWriter, r *http.Request, bod
 }
 
 func (p *ArkChatProxy) nextCredential(ctx context.Context, exclude map[string]struct{}) (credentials.Credential, bool) {
-	if p.cfg.CredentialSelector != nil {
+	if p.cfg.CredentialSelector != nil && p.cfg.CredentialSelector.Len() > 0 {
 		return p.cfg.CredentialSelector.NextForProvider(ctx, httpx.ProviderRoutedFromContext(ctx), exclude)
 	}
 	return credentials.Credential{

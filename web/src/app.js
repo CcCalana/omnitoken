@@ -1,6 +1,6 @@
 (function () {
 const { createAdminAPI } = window.OmniTokenAPI;
-const { createAuditView, createModelsView, createOverviewView, createUsersView, createVirtualModelsView, createLoginView } = window.OmniTokenViews;
+const { createAuditView, createCredentialsView, createModelsView, createOverviewView, createUsersView, createVirtualModelsView, createLoginView } = window.OmniTokenViews;
 
 const api = createAdminAPI();
 const state = {
@@ -11,6 +11,7 @@ const views = {
   users: createUsersView(api, { getRole: () => state.role }),
   models: createModelsView(api),
   virtualModels: createVirtualModelsView ? createVirtualModelsView(api) : null,
+  credentials: createCredentialsView ? createCredentialsView(api) : null,
   audit: createAuditView(api),
   login: createLoginView ? createLoginView(api) : null,
 };
@@ -31,6 +32,10 @@ const titles = {
   virtualModels: {
     title: "Virtual Models",
     subtitle: "Gateway routing aliases mapped to real Ark model identifiers.",
+  },
+  credentials: {
+    title: "Upstream Credentials",
+    subtitle: "Add or disable provider keys; the gateway reloads the pool on its polling interval.",
   },
   audit: {
     title: "Audit Logs",

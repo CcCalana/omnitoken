@@ -11,6 +11,8 @@ var defaultPolicy = policy{
 		ActionViewOwnUsage:      true,
 		ActionCreateVirtualKey:  true,
 		ActionDisableVirtualKey: true,
+		ActionCreateCredential:  true,
+		ActionDisableCredential: true,
 		ActionUpdateQuota:       true,
 	},
 	RoleViewer: {
@@ -21,6 +23,8 @@ var defaultPolicy = policy{
 		ActionViewOwnUsage:      false,
 		ActionCreateVirtualKey:  false,
 		ActionDisableVirtualKey: false,
+		ActionCreateCredential:  false,
+		ActionDisableCredential: false,
 		ActionUpdateQuota:       false,
 	},
 	RoleMember: {
@@ -31,6 +35,8 @@ var defaultPolicy = policy{
 		ActionViewOwnUsage:      true,
 		ActionCreateVirtualKey:  false,
 		ActionDisableVirtualKey: false,
+		ActionCreateCredential:  false,
+		ActionDisableCredential: false,
 		ActionUpdateQuota:       false,
 	},
 }
