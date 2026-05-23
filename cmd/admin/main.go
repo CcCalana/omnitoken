@@ -144,6 +144,40 @@ type adminAuditLog struct {
 	CreatedAt    string          `json:"created_at"`
 }
 
+type userUsageFilters struct {
+	Since *time.Time
+	Until *time.Time
+	TopN  int
+}
+
+type userUsagePeriod struct {
+	Name  string `json:"name"`
+	Since string `json:"since"`
+	Until string `json:"until"`
+}
+
+type userUsageResponse struct {
+	UserID             string                `json:"user_id"`
+	Period             userUsagePeriod       `json:"period"`
+	ModelTop           []userUsageModelTop   `json:"model_top"`
+	HourlyDistribution []int64               `json:"hourly_distribution"`
+	RecentCalls        []userUsageRecentCall `json:"recent_calls"`
+}
+
+type userUsageModelTop struct {
+	Model     string `json:"model"`
+	Tokens    int64  `json:"tokens"`
+	CallCount int64  `json:"call_count"`
+}
+
+type userUsageRecentCall struct {
+	CreatedAt   string `json:"created_at"`
+	Model       string `json:"model"`
+	StatusCode  int    `json:"status_code"`
+	TotalTokens int64  `json:"total_tokens"`
+	Streaming   bool   `json:"streaming"`
+}
+
 type createVirtualKeyRequest struct {
 	OrganizationID string     `json:"organization_id"`
 	UserID         string     `json:"user_id"`
@@ -205,6 +239,7 @@ type overviewStore interface {
 	LoadUsers(context.Context, time.Time) (usersResponse, error)
 	LoadModels(context.Context, time.Time) (modelsResponse, error)
 	LoadAuditLogs(context.Context, auditLogFilters) ([]adminAuditLog, error)
+	LoadUserUsage(context.Context, uuid.UUID, userUsageFilters, time.Time) (userUsageResponse, error)
 	UpdateUserBudget(context.Context, uuid.UUID, *int64, time.Time) (updateUserBudgetResult, error)
 	LoadVirtualModels(context.Context) (virtualModelsResponse, error)
 	LoadCredentials(context.Context) (credentialsResponse, error)
@@ -441,6 +476,7 @@ func newMux(logger *slog.Logger, cfg config.AdminConfig, overview overviewStore,
 	mux.Handle("PATCH /admin/credentials/{id}/disable", disableCredentialHandler)
 	mux.Handle("PATCH /api/admin/credentials/{id}/disable", disableCredentialHandler)
 	mux.Handle("GET /api/admin/audit-logs", protectedRead(http.HandlerFunc(makeAuditLogsHandler(logger, overview))))
+	mux.Handle("GET /api/admin/users/{id}/usage", protectedRead(http.HandlerFunc(makeUserUsageHandler(logger, overview, time.Now))))
 	mux.Handle("PATCH /api/admin/users/{id}/quota", protectedWrite(rbac.ActionUpdateQuota, http.HandlerFunc(makeUpdateUserQuotaHandler(logger, overview))))
 	if creator != nil {
 		// Demo-Ready 简化版: this admin-port-only endpoint lives on
@@ -715,6 +751,38 @@ func makeAuditLogsHandler(logger *slog.Logger, store overviewStore) http.Handler
 	}
 }
 
+func makeUserUsageHandler(logger *slog.Logger, store overviewStore, now func() time.Time) http.HandlerFunc {
+	if now == nil {
+		now = time.Now
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, err := uuid.Parse(strings.TrimSpace(r.PathValue("id")))
+		if err != nil {
+			httpx.WriteJSON(w, http.StatusBadRequest, errorEnvelope("user id must be a valid UUID", "invalid_request", "invalid_user_id"))
+			return
+		}
+		filters, err := parseUserUsageFilters(r)
+		if err != nil {
+			httpx.WriteJSON(w, http.StatusBadRequest, errorEnvelope(err.Error(), "invalid_request", "invalid_user_usage_filters"))
+			return
+		}
+		if store == nil {
+			httpx.WriteJSON(w, http.StatusOK, emptyUserUsageResponse(userID, filters, now()))
+			return
+		}
+
+		usage, err := store.LoadUserUsage(r.Context(), userID, filters, now())
+		if err != nil {
+			logger.Error("load user usage", "user_id", userID.String(), "error", err)
+			httpx.WriteJSON(w, http.StatusInternalServerError, errorEnvelope("failed to load user usage", "server_error", "user_usage_query_failed"))
+			return
+		}
+
+		httpx.WriteJSON(w, http.StatusOK, usage)
+	}
+}
+
 func zeroOverview(now time.Time) overviewResponse {
 	return overviewResponse{
 		Period:            now.UTC().Format("2006-01"),
@@ -730,6 +798,21 @@ func emptyUsersResponse() usersResponse {
 
 func emptyModelsResponse() modelsResponse {
 	return modelsResponse{Models: []adminModelUsage{}}
+}
+
+func emptyUserUsageResponse(userID uuid.UUID, filters userUsageFilters, now time.Time) userUsageResponse {
+	since, until, name := userUsageWindow(filters, now)
+	return userUsageResponse{
+		UserID: userID.String(),
+		Period: userUsagePeriod{
+			Name:  name,
+			Since: since.Format(time.RFC3339),
+			Until: until.Format(time.RFC3339),
+		},
+		ModelTop:           []userUsageModelTop{},
+		HourlyDistribution: make([]int64, 24),
+		RecentCalls:        []userUsageRecentCall{},
+	}
 }
 
 func parseAuditLogFilters(r *http.Request) (auditLogFilters, error) {
@@ -763,6 +846,57 @@ func parseAuditLogFilters(r *http.Request) (auditLogFilters, error) {
 	filters.Since = since
 	filters.Until = until
 	return filters, nil
+}
+
+func parseUserUsageFilters(r *http.Request) (userUsageFilters, error) {
+	query := r.URL.Query()
+	filters := userUsageFilters{TopN: 10}
+	if raw := strings.TrimSpace(query.Get("top_n")); raw != "" {
+		topN, err := parsePositiveInt(raw)
+		if err != nil {
+			return userUsageFilters{}, fmt.Errorf("invalid top_n")
+		}
+		if topN > 50 {
+			topN = 50
+		}
+		filters.TopN = topN
+	}
+	if raw := strings.TrimSpace(query.Get("since")); raw != "" {
+		since, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			return userUsageFilters{}, fmt.Errorf("invalid since")
+		}
+		since = since.UTC()
+		filters.Since = &since
+	}
+	if raw := strings.TrimSpace(query.Get("until")); raw != "" {
+		until, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			return userUsageFilters{}, fmt.Errorf("invalid until")
+		}
+		until = until.UTC()
+		filters.Until = &until
+	}
+	if filters.Since != nil && filters.Until != nil && !filters.Until.After(*filters.Since) {
+		return userUsageFilters{}, fmt.Errorf("until must be after since")
+	}
+	return filters, nil
+}
+
+func userUsageWindow(filters userUsageFilters, now time.Time) (time.Time, time.Time, string) {
+	monthStart, monthEnd := monthWindow(now)
+	since := monthStart
+	until := monthEnd
+	name := "current_month"
+	if filters.Since != nil {
+		since = filters.Since.UTC()
+		name = "custom"
+	}
+	if filters.Until != nil {
+		until = filters.Until.UTC()
+		name = "custom"
+	}
+	return since, until, name
 }
 
 func parseOptionalRFC3339(value string) (*time.Time, error) {
@@ -1039,6 +1173,152 @@ ORDER BY total_tokens DESC, model ASC`
 		return modelsResponse{}, fmt.Errorf("iterate admin models: %w", err)
 	}
 	return response, nil
+}
+
+func (s *postgresOverviewStore) LoadUserUsage(ctx context.Context, userID uuid.UUID, filters userUsageFilters, now time.Time) (userUsageResponse, error) {
+	since, until, name := userUsageWindow(filters, now)
+	response := userUsageResponse{
+		UserID: userID.String(),
+		Period: userUsagePeriod{
+			Name:  name,
+			Since: since.Format(time.RFC3339),
+			Until: until.Format(time.RFC3339),
+		},
+		ModelTop:           []userUsageModelTop{},
+		HourlyDistribution: make([]int64, 24),
+		RecentCalls:        []userUsageRecentCall{},
+	}
+
+	modelTop, err := s.loadUserUsageModelTop(ctx, userID, since, until, filters.TopN)
+	if err != nil {
+		return userUsageResponse{}, err
+	}
+	response.ModelTop = modelTop
+
+	hourly, err := s.loadUserUsageHourly(ctx, userID, since, until)
+	if err != nil {
+		return userUsageResponse{}, err
+	}
+	response.HourlyDistribution = hourly
+
+	recent, err := s.loadUserUsageRecentCalls(ctx, userID, since, until)
+	if err != nil {
+		return userUsageResponse{}, err
+	}
+	response.RecentCalls = recent
+
+	return response, nil
+}
+
+func (s *postgresOverviewStore) loadUserUsageModelTop(ctx context.Context, userID uuid.UUID, since time.Time, until time.Time, topN int) ([]userUsageModelTop, error) {
+	if topN <= 0 {
+		topN = 10
+	}
+	const query = `
+SELECT
+  COALESCE(NULLIF(ue.model_routed, ''), 'unknown') AS model,
+  COALESCE(SUM(utb.total_tokens), 0)::bigint AS total_tokens,
+  COUNT(*)::bigint AS call_count
+FROM usage_events ue
+LEFT JOIN usage_token_breakdown utb ON utb.usage_event_id = ue.id
+WHERE ue.user_id = $1
+  AND ue.created_at >= $2
+  AND ue.created_at < $3
+GROUP BY COALESCE(NULLIF(ue.model_routed, ''), 'unknown')
+ORDER BY total_tokens DESC, model ASC
+LIMIT $4`
+
+	rows, err := s.db.QueryContext(ctx, query, userID, since.UTC(), until.UTC(), topN)
+	if err != nil {
+		return nil, fmt.Errorf("query user usage model top: %w", err)
+	}
+	defer rows.Close()
+
+	out := []userUsageModelTop{}
+	for rows.Next() {
+		var item userUsageModelTop
+		if err := rows.Scan(&item.Model, &item.Tokens, &item.CallCount); err != nil {
+			return nil, fmt.Errorf("scan user usage model top: %w", err)
+		}
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate user usage model top: %w", err)
+	}
+	return out, nil
+}
+
+func (s *postgresOverviewStore) loadUserUsageHourly(ctx context.Context, userID uuid.UUID, since time.Time, until time.Time) ([]int64, error) {
+	const query = `
+SELECT
+  EXTRACT(HOUR FROM ue.created_at AT TIME ZONE 'UTC')::int AS hour_utc,
+  COUNT(*)::bigint AS call_count
+FROM usage_events ue
+WHERE ue.user_id = $1
+  AND ue.created_at >= $2
+  AND ue.created_at < $3
+GROUP BY EXTRACT(HOUR FROM ue.created_at AT TIME ZONE 'UTC')::int
+ORDER BY hour_utc ASC`
+
+	rows, err := s.db.QueryContext(ctx, query, userID, since.UTC(), until.UTC())
+	if err != nil {
+		return nil, fmt.Errorf("query user usage hourly distribution: %w", err)
+	}
+	defer rows.Close()
+
+	hourly := make([]int64, 24)
+	for rows.Next() {
+		var hour int
+		var count int64
+		if err := rows.Scan(&hour, &count); err != nil {
+			return nil, fmt.Errorf("scan user usage hourly distribution: %w", err)
+		}
+		if hour >= 0 && hour < len(hourly) {
+			hourly[hour] = count
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate user usage hourly distribution: %w", err)
+	}
+	return hourly, nil
+}
+
+func (s *postgresOverviewStore) loadUserUsageRecentCalls(ctx context.Context, userID uuid.UUID, since time.Time, until time.Time) ([]userUsageRecentCall, error) {
+	const query = `
+SELECT
+  ue.created_at,
+  COALESCE(NULLIF(ue.model_routed, ''), 'unknown') AS model,
+  COALESCE(ue.status_code, 0)::int AS status_code,
+  COALESCE(utb.total_tokens, 0)::bigint AS total_tokens,
+  ue.streaming
+FROM usage_events ue
+LEFT JOIN usage_token_breakdown utb ON utb.usage_event_id = ue.id
+WHERE ue.user_id = $1
+  AND ue.created_at >= $2
+  AND ue.created_at < $3
+ORDER BY ue.created_at DESC
+LIMIT 50`
+
+	rows, err := s.db.QueryContext(ctx, query, userID, since.UTC(), until.UTC())
+	if err != nil {
+		return nil, fmt.Errorf("query user usage recent calls: %w", err)
+	}
+	defer rows.Close()
+
+	out := []userUsageRecentCall{}
+	for rows.Next() {
+		var createdAt time.Time
+		var item userUsageRecentCall
+		if err := rows.Scan(&createdAt, &item.Model, &item.StatusCode, &item.TotalTokens, &item.Streaming); err != nil {
+			return nil, fmt.Errorf("scan user usage recent calls: %w", err)
+		}
+		item.CreatedAt = createdAt.UTC().Format(time.RFC3339Nano)
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate user usage recent calls: %w", err)
+	}
+	return out, nil
 }
 
 var (

@@ -55,6 +55,7 @@ func TestAdminReadRoutesRequireBootstrapToken(t *testing.T) {
 	paths := []string{
 		"/api/admin/overview",
 		"/api/admin/users",
+		"/api/admin/users/00000000-0000-0000-0000-000000000201/usage",
 		"/api/admin/models",
 		"/api/admin/audit-logs",
 	}
@@ -315,6 +316,71 @@ func TestUsersStoreErrorReturns500(t *testing.T) {
 	if body["error"]["code"] != "users_query_failed" {
 		t.Fatalf("unexpected error body: %#v", body)
 	}
+}
+
+func TestUserUsageReturnsStoreData(t *testing.T) {
+	t.Parallel()
+
+	userID := uuid.New()
+	since := "2026-05-01T00:00:00Z"
+	until := "2026-06-01T00:00:00Z"
+	now := time.Date(2026, 5, 12, 9, 0, 0, 0, time.UTC)
+	store := &fakeOverviewStore{
+		userUsage: userUsageResponse{
+			UserID: userID.String(),
+			Period: userUsagePeriod{
+				Name:  "custom",
+				Since: since,
+				Until: until,
+			},
+			ModelTop: []userUsageModelTop{
+				{Model: "kimi-k2.6", Tokens: 120, CallCount: 2},
+			},
+			HourlyDistribution: []int64{0, 2},
+			RecentCalls: []userUsageRecentCall{
+				{CreatedAt: "2026-05-11T10:00:00Z", Model: "kimi-k2.6", StatusCode: 200, TotalTokens: 120, Streaming: true},
+			},
+		},
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/users/"+userID.String()+"/usage?since="+since+"&until="+until+"&top_n=2", nil)
+	req.SetPathValue("id", userID.String())
+	rec := httptest.NewRecorder()
+
+	makeUserUsageHandler(testLogger(), store, func() time.Time { return now }).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	if !store.userUsageCalled || store.userUsageUserID != userID || !store.userUsageNow.Equal(now) {
+		t.Fatalf("store was not called with fixed args: called=%v user=%s now=%s", store.userUsageCalled, store.userUsageUserID, store.userUsageNow)
+	}
+	if store.userUsageFilters.TopN != 2 || store.userUsageFilters.Since == nil || store.userUsageFilters.Until == nil {
+		t.Fatalf("unexpected filters: %+v", store.userUsageFilters)
+	}
+	var body userUsageResponse
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode user usage response: %v", err)
+	}
+	if body.UserID != userID.String() || len(body.ModelTop) != 1 || body.ModelTop[0].Model != "kimi-k2.6" ||
+		len(body.HourlyDistribution) != 2 || len(body.RecentCalls) != 1 {
+		t.Fatalf("unexpected user usage response: %+v", body)
+	}
+}
+
+func TestUserUsageRejectsInvalidWindow(t *testing.T) {
+	t.Parallel()
+
+	userID := uuid.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/users/"+userID.String()+"/usage?since=2026-06-01T00:00:00Z&until=2026-05-01T00:00:00Z", nil)
+	req.SetPathValue("id", userID.String())
+	rec := httptest.NewRecorder()
+
+	makeUserUsageHandler(testLogger(), &fakeOverviewStore{}, time.Now).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusBadRequest, rec.Code, rec.Body.String())
+	}
+	assertErrorCode(t, rec, "invalid_user_usage_filters")
 }
 
 func TestUpdateUserQuotaCreatesAuditRecord(t *testing.T) {
@@ -1125,6 +1191,108 @@ func TestPostgresOverviewStoreLoadModelsEmptyResults(t *testing.T) {
 	}
 }
 
+func TestPostgresOverviewStoreLoadUserUsageMapsSQLResults(t *testing.T) {
+	userID := uuid.MustParse("00000000-0000-0000-0000-000000000201")
+	now := time.Date(2026, 5, 12, 10, 30, 0, 0, time.UTC)
+	createdAt := time.Date(2026, 5, 11, 12, 30, 0, 123, time.UTC)
+	db := openFakeAdminDB(t, []adminFakeSQLResponse{
+		{
+			columns: []string{"model", "total_tokens", "call_count"},
+			rows: [][]driver.Value{
+				{"kimi-k2.6", int64(300), int64(3)},
+				{"unknown", int64(10), int64(1)},
+			},
+		},
+		{
+			columns: []string{"hour_utc", "call_count"},
+			rows: [][]driver.Value{
+				{int64(0), int64(1)},
+				{int64(12), int64(3)},
+			},
+		},
+		{
+			columns: []string{"created_at", "model", "status_code", "total_tokens", "streaming"},
+			rows: [][]driver.Value{
+				{createdAt, "kimi-k2.6", int64(200), int64(120), true},
+			},
+		},
+	})
+	store := &postgresOverviewStore{db: db}
+	since := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	until := time.Date(2026, 5, 8, 0, 0, 0, 0, time.UTC)
+
+	got, err := store.LoadUserUsage(context.Background(), userID, userUsageFilters{Since: &since, Until: &until, TopN: 2}, now)
+	if err != nil {
+		t.Fatalf("load user usage: %v", err)
+	}
+	if got.UserID != userID.String() || got.Period.Name != "custom" || got.Period.Since != since.Format(time.RFC3339) || got.Period.Until != until.Format(time.RFC3339) {
+		t.Fatalf("unexpected period: %+v", got)
+	}
+	if len(got.ModelTop) != 2 || got.ModelTop[0].Model != "kimi-k2.6" || got.ModelTop[0].Tokens != 300 || got.ModelTop[0].CallCount != 3 {
+		t.Fatalf("unexpected model top: %+v", got.ModelTop)
+	}
+	if len(got.HourlyDistribution) != 24 || got.HourlyDistribution[0] != 1 || got.HourlyDistribution[12] != 3 {
+		t.Fatalf("unexpected hourly distribution: %+v", got.HourlyDistribution)
+	}
+	if len(got.RecentCalls) != 1 || got.RecentCalls[0].CreatedAt != createdAt.Format(time.RFC3339Nano) ||
+		got.RecentCalls[0].Model != "kimi-k2.6" || got.RecentCalls[0].StatusCode != 200 ||
+		got.RecentCalls[0].TotalTokens != 120 || !got.RecentCalls[0].Streaming {
+		t.Fatalf("unexpected recent calls: %+v", got.RecentCalls)
+	}
+
+	queries := fakeAdminSQLSnapshot()
+	if len(queries) != 3 {
+		t.Fatalf("expected 3 queries, got %d", len(queries))
+	}
+	for i, query := range queries {
+		if !strings.Contains(query.query, "ue.user_id = $1") || !strings.Contains(query.query, "ue.created_at >= $2") || !strings.Contains(query.query, "ue.created_at < $3") {
+			t.Fatalf("query %d should filter by user and time window: %s", i, query.query)
+		}
+		if len(query.args) < 3 || fmt.Sprint(query.args[0]) != userID.String() {
+			t.Fatalf("query %d unexpected args: %#v", i, query.args)
+		}
+		assertTimeArg(t, query.args[1], since)
+		assertTimeArg(t, query.args[2], until)
+	}
+	if !strings.Contains(queries[0].query, "COALESCE(NULLIF(ue.model_routed, ''), 'unknown')") ||
+		strings.Contains(queries[0].query, "model_requested") {
+		t.Fatalf("model top must group on model_routed only: %s", queries[0].query)
+	}
+	if len(queries[0].args) != 4 || queries[0].args[3] != 2 && queries[0].args[3] != int64(2) {
+		t.Fatalf("unexpected top-n args: %#v", queries[0].args)
+	}
+	if !strings.Contains(queries[1].query, "EXTRACT(HOUR FROM ue.created_at AT TIME ZONE 'UTC')") {
+		t.Fatalf("hourly query should group by UTC hour: %s", queries[1].query)
+	}
+	if !strings.Contains(queries[2].query, "ORDER BY ue.created_at DESC") || !strings.Contains(queries[2].query, "LIMIT 50") {
+		t.Fatalf("recent query should fetch latest 50 calls: %s", queries[2].query)
+	}
+}
+
+func TestPostgresOverviewStoreLoadUserUsageEmptyUser(t *testing.T) {
+	userID := uuid.MustParse("00000000-0000-0000-0000-000000000202")
+	now := time.Date(2026, 5, 12, 10, 30, 0, 0, time.UTC)
+	db := openFakeAdminDB(t, []adminFakeSQLResponse{
+		{columns: []string{"model", "total_tokens", "call_count"}, rows: [][]driver.Value{}},
+		{columns: []string{"hour_utc", "call_count"}, rows: [][]driver.Value{}},
+		{columns: []string{"created_at", "model", "status_code", "total_tokens", "streaming"}, rows: [][]driver.Value{}},
+	})
+	store := &postgresOverviewStore{db: db}
+
+	got, err := store.LoadUserUsage(context.Background(), userID, userUsageFilters{}, now)
+	if err != nil {
+		t.Fatalf("load user usage: %v", err)
+	}
+	if got.Period.Name != "current_month" || len(got.ModelTop) != 0 || len(got.RecentCalls) != 0 || len(got.HourlyDistribution) != 24 {
+		t.Fatalf("unexpected empty user usage: %+v", got)
+	}
+	for hour, count := range got.HourlyDistribution {
+		if count != 0 {
+			t.Fatalf("expected hour %d to be zero, got %d in %+v", hour, count, got.HourlyDistribution)
+		}
+	}
+}
+
 func TestPostgresOverviewStoreLoadAuditLogsMapsSQLResults(t *testing.T) {
 	createdAt := time.Date(2026, 5, 19, 9, 30, 0, 123, time.UTC)
 	db := openFakeAdminDB(t, []adminFakeSQLResponse{
@@ -1584,21 +1752,27 @@ type fakeOverviewStore struct {
 	users                   usersResponse
 	models                  modelsResponse
 	auditLogs               []adminAuditLog
+	userUsage               userUsageResponse
 	updateResult            updateUserBudgetResult
 	err                     error
 	usersErr                error
 	modelsErr               error
 	auditLogsErr            error
+	userUsageErr            error
 	updateErr               error
 	called                  bool
 	usersCalled             bool
 	modelsCalled            bool
 	auditLogsCalled         bool
+	userUsageCalled         bool
 	updateCalled            bool
 	now                     time.Time
 	usersNow                time.Time
 	modelsNow               time.Time
+	userUsageNow            time.Time
 	auditLogFilters         auditLogFilters
+	userUsageUserID         uuid.UUID
+	userUsageFilters        userUsageFilters
 	updateUserID            uuid.UUID
 	updateBudgetCents       *int64
 	updateAt                time.Time
@@ -1664,6 +1838,14 @@ func (f *fakeOverviewStore) LoadAuditLogs(_ context.Context, filters auditLogFil
 	f.auditLogsCalled = true
 	f.auditLogFilters = filters
 	return f.auditLogs, f.auditLogsErr
+}
+
+func (f *fakeOverviewStore) LoadUserUsage(_ context.Context, userID uuid.UUID, filters userUsageFilters, now time.Time) (userUsageResponse, error) {
+	f.userUsageCalled = true
+	f.userUsageUserID = userID
+	f.userUsageFilters = filters
+	f.userUsageNow = now
+	return f.userUsage, f.userUsageErr
 }
 
 func (f *fakeOverviewStore) UpdateUserBudget(_ context.Context, userID uuid.UUID, budgetCents *int64, updatedAt time.Time) (updateUserBudgetResult, error) {
