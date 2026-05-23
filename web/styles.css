@@ -614,6 +614,38 @@ tbody tr:hover {
   margin-bottom: 18px;
 }
 
+.audit-tabs {
+  display: inline-flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.audit-tab {
+  min-height: 34px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.audit-tab.is-active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.audit-subpanel.is-hidden {
+  display: none;
+}
+
 .filter-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -628,7 +660,8 @@ tbody tr:hover {
   font-weight: 750;
 }
 
-.filter-grid input {
+.filter-grid input,
+.filter-grid select {
   min-width: 0;
   min-height: 36px;
   padding: 0 10px;
@@ -719,6 +752,27 @@ tbody tr:hover {
 
 .audit-table tbody tr {
   cursor: pointer;
+}
+
+.audit-usage-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
+  gap: 18px;
+  margin-bottom: 18px;
+}
+
+.audit-usage-header {
+  padding: 18px 18px 0;
+  margin-bottom: 0;
+}
+
+.audit-hourly-chart {
+  height: 260px;
+  min-height: 240px;
+}
+
+.audit-usage-table tbody tr {
+  cursor: default;
 }
 
 .audit-resource {
@@ -833,6 +887,7 @@ tbody tr:hover {
   }
 
   .chart-grid,
+  .audit-usage-grid,
   .filter-grid,
   .insight-grid {
     grid-template-columns: 1fr;

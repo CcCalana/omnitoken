@@ -14,12 +14,12 @@ test("audit view renders loading and empty states", async () => {
   });
 
   const pending = view.load(true);
-  assert.match(harness.element("audit-table-body").innerHTML, /正在加载审计日志/);
+  assert.match(harness.element("audit-table-body").innerHTML, /Loading admin audit logs/);
   resolveLogs([]);
   await pending;
 
-  assert.match(harness.element("audit-table-body").innerHTML, /暂无审计日志/);
-  assert.equal(harness.element("audit-alert").textContent, "暂无审计日志。");
+  assert.match(harness.element("audit-table-body").innerHTML, /No admin audit logs/);
+  assert.equal(harness.element("audit-alert").textContent, "No admin audit logs.");
 });
 
 test("audit view renders error state", async () => {
@@ -34,8 +34,37 @@ test("audit view renders error state", async () => {
 
   await view.load(true);
 
-  assert.match(harness.element("audit-table-body").innerHTML, /审计日志加载失败/);
+  assert.match(harness.element("audit-table-body").innerHTML, /Admin audit logs failed to load/);
   assert.match(harness.element("audit-alert").textContent, /network_down/);
+});
+
+test("audit usage view renders user model top and recent calls", async () => {
+  const harness = newAuditHarness();
+  const view = harness.createView({
+    getAuditLogs: async () => [],
+    getUsers: async () => ({
+      users: [{
+        user_id: "00000000-0000-0000-0000-000000000201",
+        email: "viewer@democorp.local",
+        display_name: "Viewer",
+        used_tokens: 300,
+      }],
+    }),
+    getUserUsage: async () => ({
+      user_id: "00000000-0000-0000-0000-000000000201",
+      period: { name: "current_month", since: "2026-05-01T00:00:00Z", until: "2026-06-01T00:00:00Z" },
+      model_top: [{ model: "kimi-k2.6", tokens: 300, call_count: 3 }],
+      hourly_distribution: Array.from({ length: 24 }, (_, hour) => hour === 10 ? 3 : 0),
+      recent_calls: [{ created_at: "2026-05-11T10:00:00Z", model: "kimi-k2.6", status_code: 200, total_tokens: 120, streaming: true }],
+    }),
+  });
+
+  await view.switchAuditView("usage");
+
+  assert.match(harness.element("audit-usage-user").innerHTML, /Viewer/);
+  assert.match(harness.element("audit-usage-model-body").innerHTML, /kimi-k2.6/);
+  assert.match(harness.element("audit-usage-model-body").innerHTML, /100.0%/);
+  assert.match(harness.element("audit-usage-recent-body").innerHTML, /Yes/);
 });
 
 function newAuditHarness() {
@@ -71,19 +100,34 @@ class FakeDocument {
   constructor() {
     this.elements = new Map();
     this.actions = new Map();
+    this.tabs = [];
     for (const id of [
       "audit-alert",
+      "audit-logs-panel",
+      "audit-usage-panel",
       "audit-table-body",
       "audit-filter-actor",
       "audit-filter-resource-type",
       "audit-filter-since",
       "audit-filter-until",
+      "audit-usage-alert",
+      "audit-usage-user",
+      "audit-usage-since",
+      "audit-usage-until",
+      "audit-usage-top-n",
+      "audit-usage-model-body",
+      "audit-usage-recent-body",
+      "audit-usage-hourly-chart",
+      "audit-usage-hourly-empty",
     ]) {
       this.elements.set(id, new FakeElement(id));
     }
-    for (const action of ["reload-audit", "apply-audit-filters", "clear-audit-filters"]) {
+    this.elements.get("audit-usage-top-n").value = "10";
+    for (const action of ["reload-audit", "apply-audit-filters", "clear-audit-filters", "apply-audit-usage-filters", "clear-audit-usage-filters"]) {
       this.actions.set(action, new FakeElement(action));
     }
+    this.tabs.push(new FakeElement("audit-tab-logs", { auditView: "logs" }));
+    this.tabs.push(new FakeElement("audit-tab-usage", { auditView: "usage" }));
   }
 
   getElementById(id) {
@@ -98,11 +142,17 @@ class FakeDocument {
     if (!match) return null;
     return this.actions.get(match[1]) || null;
   }
+
+  querySelectorAll(selector) {
+    if (selector === "[data-audit-view]") return this.tabs;
+    return [];
+  }
 }
 
 class FakeElement {
-  constructor(id) {
+  constructor(id, dataset = {}) {
     this.id = id;
+    this.dataset = dataset;
     this.value = "";
     this.innerHTML = "";
     this.textContent = "";

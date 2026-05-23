@@ -48,6 +48,7 @@ function createAdminAPI(baseURL = resolveAdminBaseURL()) {
     getVirtualModels: () => fetchJSON(`${base}/api/admin/virtual-models`),
     getCredentials: () => fetchJSON(`${base}/api/admin/credentials`),
     getAuditLogs: (filters = {}) => fetchJSON(`${base}/api/admin/audit-logs${toQueryString(filters)}`),
+    getUserUsage: (userID, filters = {}) => fetchJSON(`${base}/api/admin/users/${encodeURIComponent(userID)}/usage${toQueryString(filters)}`),
     createCredential: (payload) => fetchJSON(`${base}/api/admin/credentials`, {
       method: "POST",
       body: JSON.stringify(payload),
@@ -71,7 +72,7 @@ function createAdminAPI(baseURL = resolveAdminBaseURL()) {
 
 function toQueryString(filters) {
   const params = new URLSearchParams();
-  for (const key of ["actor_id", "resource_type", "resource_id", "since", "until", "limit"]) {
+  for (const key of ["actor_id", "resource_type", "resource_id", "since", "until", "limit", "top_n"]) {
     const value = filters[key];
     if (value !== undefined && value !== null && String(value).trim() !== "") {
       params.set(key, String(value).trim());
