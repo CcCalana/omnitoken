@@ -425,7 +425,9 @@ Result: `4b3d6b32` — admin credential add/disable + 30s polling hot reload lan
 
 ---
 
-## T-AUDIT-USAGE-VIEW Audit Tab 加用户使用流水（上线门 ③） [phase:v1-release] [owner:codex] [status:todo]
+## T-AUDIT-USAGE-VIEW Audit Tab 加用户使用流水（上线门 ③） [phase:v1-release] [owner:codex] [status:review]
+
+Start: 2026-05-23 17:16 +08:00
 
 **目标**: 把 audit tab 拓展为双 tab：「管理操作流水」（现有 audit_logs 视图）/「用户使用流水」（**新**，按用户聚合 usage_events）。后者展示每个用户主要使用了哪些模型、什么时段、最近调用了什么。**上线门 ③** —— 用户已明确这是 release-gate 要求。
 
@@ -491,3 +493,4 @@ Result: `4b3d6b32` — admin credential add/disable + 30s polling hot reload lan
 - `migrations/000012_upstream_credentials_v1.up.sql` 加 model_routed 列；T-CONC-COST-ATTR 已切到这一列
 - `internal/usage/` 既有 usage_events 写入路径，参考它的字段命名
 - 前端基线：`web/src/views/audit.js` (159 行) / `web/src/views/overview.js` (203 行，含 Chart.js 用法)
+Result: `7b9b0653` + `57775cae` — cmd/admin 67.4%; Docker vet/test + web view tests all green, no undeclared deviation; browser smoke skipped because in-app browser was unavailable.
