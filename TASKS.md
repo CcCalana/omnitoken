@@ -297,3 +297,61 @@ Started: 2026-05-23 00:00 Asia/Shanghai
 
 Result: `026f90ca` — multi-provider 30 conc 100.0%, DeepSeek 767/767, no undeclared deviation.
 
+---
+
+## T-016b-MIN Admin Credential CRUD UI (Min) + 30s Polling Hot Reload (v1 上线必备) [phase:2-C] [owner:codex] [status:todo]
+
+⚠️ **Docker-only (AGENTS.md §3.3a)**：所有 `go vet` / `go test -race` / migration / e2e / 前端构建一律 `docker compose run --rm`。**禁 Windows host 跑 make / golangci-lint / `go test -race` / npm**。违反一次 = R-* 直判 HIGH 退回。
+
+**目标**: 让 v1 上线后运维通过 admin web 加 / 禁用 upstream credential，无需 SSH 改 `.env`。配套 30s PG 轮询热加载，新池自动生效（无需手动 restart gateway）。ADR 0005 落地。
+
+**涉及**:
+- `cmd/admin`（POST/PATCH 端点 + master key env 加载 + validation + audit_logs 写入）
+- `cmd/gateway`（启动后台 polling goroutine；env `OMNITOKEN_CREDENTIAL_POLL_INTERVAL` 默认 `30s`，`0` 关闭）
+- `internal/credentials`（selector atomic Replace 方法 + 单测；不变 existing API）
+- `web/src/`（Upstream Credentials tab + add modal + disable button + 30s banner）
+- `deploy/docker-compose.yml`（admin service 加 `OMNITOKEN_MASTER_KEY` / `OMNITOKEN_MASTER_KEY_FILE` env，与 gateway 共享）
+- `docs/operations/master-key-rotation.md`（一段说明：v1 admin + gateway 共享 master key，trust boundary 显式；KMS 仍 v1.1+）
+
+**接受标准** (propose 跳过 — 范围由 ADR 0005 锁定):
+- [ ] `POST /admin/credentials` 端点：input `{provider, alias, priority, base_url, key}`，输出 `PublicCredential`（密文不出）。validation：provider ∈ {`ark`, `deepseek`}、`base_url` 必须 `http(s)://`、alias 同 provider 内唯一、priority ≥ 1、key 非空。失败 4xx + 标准 error envelope。
+- [ ] `PATCH /admin/credentials/:id/disable` 端点：把 row `active=false`（不删，保审计）；幂等（已 disabled 返 200 不报错）。
+- [ ] 两端点都走 RBAC admin role（T-005a 现成 middleware）+ 写一行 `audit_logs`（T-013 现成中间件）。viewer / user role 一律 403。
+- [ ] **gateway polling**: 启动 30s tick（可 env 配 interval），每 tick `SELECT FROM upstream_credentials WHERE updated_at > $last_seen`（或全量 reload，性能差异在 v1 规模可忽略）+ decrypt + 原子 swap selector 内部 slice。新增 credential 在 ≤ interval+1s 内可被路由命中。日志 INFO 一行 `credential pool reloaded count=N delta=±M`。
+- [ ] selector 增加 `Replace([]Credential)` 或 `Refresh(ctx)` 方法（看 Codex 哪个干净）；并发安全（既有 mutex 之上原子 swap）；不破坏 `Next/NextForProvider/MarkDegraded` 既有语义；单测覆盖 swap 时正在跑的请求不 panic / 不读到中间态。
+- [ ] **前端**: admin web 加 "Upstream Credentials" tab（参考既有 Audit Logs tab 结构）。列表显示 provider / alias / priority / base_url / status / health_state。"新增" 按钮弹 modal 表单。"禁用" 按钮带 confirm。Mutation 成功后顶部 red banner："已写入 DB，gateway 在 30s 内自动加载新池；如需即时生效请手动 `docker compose restart gateway`。"banner 30s 后自动消失。
+- [ ] **docker-compose**: `admin` service env 加 `OMNITOKEN_MASTER_KEY` 与 `OMNITOKEN_MASTER_KEY_FILE`（passthrough，与 gateway 同源；docker-compose.yml 写注释强调"admin 加密路径需与 gateway 同一把 master key"）。
+- [ ] e2e 测试：在 `cmd/gateway/credential_pool_e2e_test.go` 或同等位置加一条用例——admin POST 一条新 ark credential → 跑 polling tick → gateway 通过新 credential serve 请求 → usage_events 写入新 credential_id。
+- [ ] `docs/operations/master-key-rotation.md` 加一段"admin 进程也要注入 master key；rotation 时两处同步"，3-5 行即可。
+- [ ] **Docker-only 自报**：每个 commit message 附 verification 行列 `docker compose run --rm` 命令链。
+
+**不在范围**:
+- UPDATE / 编辑现有 credential（disable + 新 add 等价覆盖）
+- DELETE（disable 是审计友好的取代）
+- master key 前端管理（环境变量管，trust boundary 文档化）
+- KMS / 自动 rotation / 健康检查 worker / 多 admin role 细分
+- LISTEN/NOTIFY 热加载（用 polling 规避复杂度，v1.1 再上 LISTEN）
+- 多 provider whitelist 扩展（v1 只 ark + deepseek；新 provider 加 enum 是 v1.1 工作）
+- cost-aware routing UI / 跨 provider 优先级编辑
+
+**禁动**:
+- 既有 `GET /admin/credentials` handler 行为（增量在新增 POST/PATCH）
+- T-016 / T-MP-DEEPSEEK proxy / selector 核心路径（增量是 Replace + polling，不是改 Next 语义）
+- ADR 0003 / 0004（保留为历史，ADR 0005 引用）
+- master key 加载逻辑（复用 envelope.LoadMasterKey）
+
+**异常处理**:
+- 加 polling 后 gateway 启动期 reload 顺序不变（先 initial load 再启 ticker）
+- 如果 polling tick 时 DB 不可达：log WARN，**不 crash gateway**，下一 tick 再试
+- admin POST 时 master key 未注入：返 500 + 明确 error_code `master_key_missing`，不静默成功
+- 测试时 polling interval 不可硬编 30s，必须经 env / config（让单测能短路 1ms tick）
+
+**Codex 实施建议**（speed lever 5，切分你拍）:
+- 单 commit 把 selector Replace + gateway polling + admin POST/PATCH 后端 + docker-compose env 落地 → 后端 review
+- 单 commit 把 frontend tab + modal + banner + e2e 测试落地 → frontend review
+- 或一次性大 commit；review 时分块看
+
+**依赖**: T-016 ✅；T-MP-DEEPSEEK ✅；ADR 0005
+
+**参考**: `docs/adr/0005-admin-credential-crud-min.md`；`cmd/admin/main.go:512-529` 既有 list handler；`internal/credentials/selector.go` 既有 mutex；T-013 audit middleware；T-005a RBAC middleware
+
