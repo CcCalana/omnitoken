@@ -243,7 +243,7 @@ Result(rerun): `dff69844` — true Ark 43.0%, switch 216, no undeclared deviatio
 
 ---
 
-## T-MP-DEEPSEEK Multi-provider 池接入 DeepSeek (v1 收官) [phase:2-C] [owner:codex] [status:in-progress]
+## T-MP-DEEPSEEK Multi-provider 池接入 DeepSeek (v1 收官) [phase:2-C] [owner:codex] [status:review]
 
 Started: 2026-05-23 00:00 Asia/Shanghai
 
@@ -294,4 +294,6 @@ Started: 2026-05-23 00:00 Asia/Shanghai
 - 跑测成功率仍 < 80% → 在报告里诚实写数据 + V2 candidate，**不当场调 selector 算法**，开 follow-up 给 Claude 决策
 
 **依赖**: T-016 ✅；T-CONC-DSN ✅；T-CONC-RERUN 既有数据作历史对照；`.env` 三把 DeepSeek key ✅
+
+Result: `026f90ca` — multi-provider 30 conc 100.0%, DeepSeek 767/767, no undeclared deviation.
 
