@@ -8,6 +8,89 @@
 >
 > 本文件保留最近 review；老的归档到 docs/reviews/。
 
+## R-CONC-RERUN (T-CONC-RERUN 实施, impl `abc98a05` + status `4f371b4d`)
+
+**结论: `[~] Conditional Approve — 不关任务`** — mock baseline 全部到位、报告产出 + V2 candidates 落地、measurement-only 边界完全遵守（无 `internal/*` / `cmd/gateway` / `cmd/admin` 代码修改、无新依赖）。但**真 Ark 多 key 池验证（接受标准 #2）未跑**——这是 T-CONC-RERUN 的关键交付，不能因 mock 一半合格就关任务。**status:review 保持，不进 done**；user 配齐 3 把 Ark seed key + master key env 后由 Codex 跑 30×30 真测，结果补进 `docs/release/v1-concurrency-rerun-2026-05-22.md` 的 True Ark Rerun 段，**Result 行追加同一 commit 引用**，再二次 review。无 CRITICAL。
+
+**正面信号**:
+1. ✅ Declared deviation 处理范式正确：本可凑合用单 fallback key 跑一档画个数字交差，Codex 选了"拒跑 + 列 5 步前置条件 + 解释为什么单 key 跑会重蹈 T-CONC-CHECK 形状不能验证 T-016"——R-CONC-CHECK 是同性质 measurement-only，这一脉的诚实性继承到位。
+2. ✅ M-26 完整落地：报告 methodology 段第 24-27 行复述了我在 propose 评审里的 master-key-file 不变性要求，并显式说"`OMNITOKEN_MASTER_KEY_FILE`/`OMNITOKEN_MASTER_KEY` identical to the T-016 seed key. Otherwise existing encrypted Ark credentials cannot be decrypted"——避免后续真 Ark rerun 时密文解不开的坑。
+3. ✅ Mock-ark binary scope discipline 优秀：`cmd/loadtest/mockark/main.go` 135 行纯 std-lib、no third-party dep（`git diff go.mod` 空）、distroless `USER 65532:65632` non-root、显式拒 `stream:true` 返 `invalid_request` —— 杜绝 mock 误覆盖 SSE 路径制造假成功率；`Authorization` 必带 `Bearer ` 前缀，gateway 漏带 auth 头时 mock 会 401，不会被 gateway 内部 401 假装成 200 通过。
+4. ✅ Loadtest duration mode 加得干净：`cfg.duration > 0` 时短路 `MAX_REQUESTS` 总量校验（`main.go:154`），request-mode 老用法零回归（`TestRunSendsRequestsAndChecksOverview` 仍是 6 请求形状）；新 `TestRunDurationStopsAtMaxRequests` 显式断言"duration + maxRequests 同时存在时，issued cap 在 maxRequests"，正面验证了任务体 "real Ark `MAX_REQUESTS=900` 必须封顶" 的语义。
+5. ✅ pg_stat_statements 数据三档完整给出 `monthlyBudgetStatusSQL` calls/mean/max（170ms→391ms→464ms），直接是 T-QUOTA-CACHE-PROBE baseline 输入；Decision 4 选(a) 启 preload + `CREATE EXTENSION IF NOT EXISTS` 走通，PG container recreate 但保留 named volume 没掉数据。
+
+**H-6 (HIGH) — 真 Ark 验证未做，是任务体 #2 接受标准核心未达成**: 任务体 line 201 "真 Ark 多 key 池验证 ... 目标：成功率 > 80%（vs T-CONC-CHECK 17.1%），证明 T-016 切池机制把单 key rate limit 转成池级 rate limit" —— 此条只 mock 不算数。T-016 e2e (`credential_pool_e2e_test.go:198`) 已经在功能层证三把 key 都进了 `usage_events`，但**并发态下的"成功率提升曲线"**仍空白。**不阻塞** T-CONC-DSN / mock rerun 合并，但 **阻塞** T-CONC-RERUN 任务关闭，也阻塞 v1 §零A第1条"性价比资源"验收最后一笔签字。请 user 在本地 `.env` 补三件：`OMNITOKEN_MASTER_KEY_FILE`（与 T-016 seed 同一把）、`OMNITOKEN_ARK_KEYS_1/2/3`（三把真 Ark coding plan key），然后 Codex 复跑 `30 conc × 30s` + `MAX_REQUESTS=900` 并把数据补进同一份 release 文档的 "True Ark Rerun" 段——**不另开 commit 写新报告**，保持 release 文档单点真相。
+
+**H-7 (HIGH) — PG quota path saturation 比 V2 candidate 量级更高**: Mock 三档结果对照任务体 line 200 mock 门槛（`5xx ≤ 0.1% 且 P99 ≤ 100ms`）：
+
+| Profile | 5xx 占比 | P99 | 达成 mock 门槛 |
+| ---: | ---: | ---: | --- |
+| 50 conc | 0.07% ✓ | 639ms ✗ | 部分（5xx 过线，P99 超 6.4×） |
+| 100 conc | 42.7% ✗ | 1.052s ✗ | 否 |
+| 200 conc | 59.1% ✗ | 1.496s ✗ | 否 |
+
+即便 mock 端 < 1ms 响应、永不 429，gateway 自身在 100 conc 就被 PG 连接池 `pq: sorry, too many clients already` 击穿——这是**不依赖 Ark 的纯内部瓶颈**。`monthlyBudgetStatusSQL` 在 100 conc 已经平均 391ms（贡献绝大部分延迟）。任务体允许"未达则在报告里点明 follow-up"，所以本任务 review 不阻塞。
+
+**Decision 2026-05-23 (用户拍)**: v1 验收**不卡并发下限**（"上线优先"），只卡成功率 >80%。H-7 因此从"v1.0 ship 前决策点"**降级回 vNext 观察项 T-QUOTA-CACHE-PROBE**（任务名不变）；v1 上线报告里只需如实记录"v1 多 provider rerun 宣告档位 = N conc / X% 成功率"作为 §零A 第 1 条验收实证，PG 饱和上限作为 V2 V1.1 优化项。ADR 0004 已落实并发档位可降的接受标准（T-MP-DEEPSEEK 5 conc 兜底）。
+
+**M-27 (MEDIUM) — V2 candidate #3 表述误导**: 报告 V2 candidates 第 3 条 "the selector exhausts priority 1 before lower-priority fallback rows" 读起来像 selector bug，但按 ADR 0003 §Decision **priority-based fallback（429 触发切换）是 v1 设计**，mock 永不返 429 → priority 1 不轮换是 measurement-mode artifact 而不是 production defect。T-016 e2e (`credential_pool_e2e_test.go`) 在真 Ark 下三把 key 都出现已经反证。建议报告 V2 candidate #3 改写为："Mock observation: priority-based fallback (ADR 0003) means non-429 traffic concentrates on priority 1; this is expected by design. Round-robin or weighted variant is a v1.1+ topic, not a v1 defect." —— 顺手改，不开 commit。
+
+**M-28 (MEDIUM) — Mock 假 credential 清理证据缺失**: 报告 line 20-21 说 "Mock credential seed used a deterministic non-secret dev master key and three fake mock keys. These rows were removed after the mock run." 但没写**清理用的 SQL/命令**。`upstream_credentials` 表里残留 3 行假密文（dev master key 加密的 mock-ark fake key）是审计风险——v1.1 admin UI 上线后运维可能误以为真 Ark key。请在 release 文档附一句清理动作，例如 `DELETE FROM upstream_credentials WHERE provider IN ('mock-ark')` 之类的具体语句 + 跑完后的 `SELECT COUNT(*) FROM upstream_credentials WHERE provider != 'ark'` = 0 证据。
+
+**N-21 (NIT)**: `postgresURLWithApplicationName` 在 `cmd/admin/main.go:263-278` 和 `cmd/gateway/main.go:96-111` 是**逐字逐行**两份相同实现 (18 行 × 2)。T-CONC-DSN 任务体 scope 明确"不动 internal/db 接口"所以这次按 scope 拒抽到 internal 内是对的判断；v1.1 整理 `internal/dbutil`（或类似）时合并，不要现在拆。
+
+**N-22 (NIT)**: `postgresURLWithApplicationName` 没处理"DSN 已含 `application_name=X`"的情况——会变成两个 `application_name=` 参数。lib/pq 行为是后者覆盖前者（语义正确），但日志/`pg_stat_activity` 调试时会困惑。建议加一个 `strings.Contains(dsn, "application_name=")` 短路 fast-path，下次顺手。
+
+**与 R-CONC-RERUN-prop 闭环**:
+- Decision 1 (mock 形式) → mockark binary + Dockerfile.mockark + compose service `mock-ark` 三件齐 ✓
+- Decision 2 (并发档位) → 50/100/200 各 60s + 10s warmup 实际由 loadtest duration mode 跑通；500-spike 未做（如 propose 所拍）✓
+- Decision 3 (DSN 前置) → 独立 commit 9b44f98b 在 abc98a05 之前 ✓
+- Decision 4 (pg_stat_statements) → preload 启用 + 抓到 monthlyBudgetStatusSQL 数据 ✓
+- Decision 5 (报告位置) → 新 release 文档 v1-concurrency-rerun-2026-05-22.md ✓
+- N-19 (MAX_REQUESTS=900 具体数字) → 报告 line 22 "Planned paid Ark budget: `MAX_REQUESTS=900` for `30 x 30s`" 写进了 methodology ✓
+- N-20 (mockark docker build 路径) → `deploy/Dockerfile.mockark` 独立文件 ✓
+
+---
+
+## R-CONC-DSN (T-CONC-DSN 实施, impl `9b44f98b` + status `5954afeb`)
+
+**结论: `[+] Approved`** — R-CONC-RERUN-prop Decision 3 批准的"前置 < 1h DSN 改动"严格落地。Scope 严守：gateway/admin DSN 拼 `application_name=` + `cmd/loadtest/README.md` 采样 SQL，无 internal/db 接口变化，无新依赖。`go vet` / `go test` 自报全绿。无 HIGH/CRITICAL；2 NIT 见 R-CONC-RERUN 条目（同一函数 N-21 / N-22，避免重复）。
+
+**正面信号**:
+1. ✅ Scope 严守 propose ack 边界：propose review 写明"仅追加 `application_name=` 与 README 采样 SQL，不动 dsn 解析逻辑、不改 internal/db 接口"——9b44f98b diff 完全匹配，没夹带任何重构或别的小修小补。
+2. ✅ `postgresURLWithApplicationName` 同时支持两种 DSN 形式：URL 形式 `postgres://...?sslmode=disable` 走 `?` / `&` 拼接，keyword 形式 `host=... dbname=...` 走空格拼接（`cmd/gateway/main.go:107-110`）；测试 `TestPostgresURLWithApplicationNameKeywordDSN` 独立覆盖了 keyword DSN 分支，避免 lib/pq 用户在 keyword DSN 配置下 silent fall through 到原始字符串。
+3. ✅ 采样 SQL 直接写进 `cmd/loadtest/README.md`（4 行查询、按 `application_name` + `state` 分组），R-CONC-RERUN 的 DB 观察段拿来即用，证明这份 DSN 改动确实有下游消费——不是空翻新 DSN 字段。
+4. ✅ Result 行格式正确：`5954afeb` 状态更新指向 `9b44f98b` 实施 commit + "all green, no deviation"，符合 CLAUDE.md §3.1 "完成后修改 status:todo → status:review，并在条目末尾追加 **Result**: PR/commit hash + 自测说明"。
+
+---
+
+## R-CONC-RERUN-prop (T-CONC-RERUN PROPOSAL, commit `759458a0`)
+
+**结论: `[+] Approved`** — 5/5 决策直接答了 propose 问题，全部采纳，Codex 可开 T-CONC-RERUN 实施。Decision 3 的"前置 T-CONC-DSN 需 reviewer ack"在此明确批准（见下）。1 MEDIUM + 2 NIT 是实施期细节，不阻塞 propose 关门。
+
+**正面信号**:
+1. ✅ Decision 3 主动暴露 trade-off："this is a code change outside the measurement-only task, so it needs explicit review acknowledgement"——精准识别这是 propose 阶段唯一一个越出 measurement-only 边界的决策点，并把它单独拎出来要 ack，而不是默默吞下。**正式批准**：T-CONC-DSN 前置可做，但必须 (a) 是独立 commit、独立 Result 条目，**不并入 T-CONC-RERUN commit**；(b) 仅追加 `application_name=omnitoken-gateway` / `application_name=omnitoken-admin` 与 `cmd/loadtest/README.md` 采样 SQL，**不动 dsn 解析逻辑、不改 internal/db 接口**；(c) 跑通 `go vet` + `go test ./...` 后才能进 T-CONC-RERUN 跑测。
+2. ✅ Decision 2 主动拒绝 500-spike 给出 "acceptance gate asks for a stable curve, spike would blur startup surge / gateway headroom / quota SQL / client saturation" —— 是 v1 收官的正确取舍（先拿可信曲线再谈极限），把 500-spike 推到 V2 candidates 是体面的延迟做法。
+3. ✅ Decision 1 scope guardrail 写得非常显式："mock exists only for measurement. It must not change `internal/*`, `cmd/gateway`, or `cmd/admin`, and it must not become production routing code." —— 把 measurement-only 边界从任务体抄进 propose，避免后续诱惑越线。
+4. ✅ Decision 5 拒绝追加到 T-CONC-CHECK 报告的理由 "splitting the files keeps the comparison explicit and avoids rewriting the evidence trail behind R-CONC-CHECK" —— 把 R-CONC-CHECK 的证据链当不可变 history snapshot 处理，符合 review log 一旦签 approve 不回改的范式。
+5. ✅ Decision 4 operational note 没回避难处："enabling the extension requires a Postgres restart and may require recreating the local compose volume if preload state is stale. The report should state the exact reset/restart path used." —— Codex 显式认到了 PG preload 修改的运维代价，让 reviewer 看到 trade-off 而不是只看到选项。
+
+**M-26 (MEDIUM)**: Decision 4 提到 "recreating the local compose volume" 但没说**重建 volume 会清空已 seed 的 3 把 Ark credential**。如果跑测前真的需要 recreate `postgres_data` volume，必须按 `migrate → seed → credential-seed → gateway restart` 顺序重做，且 `OMNITOKEN_MASTER_KEY_FILE` 必须与 T-016 seed 时是同一把（master key 改了，原密文解不开）。建议 propose 实施时在报告 "methodology / setup" 段写明这一前置检查（一行即可：是否 reuse 现有 volume / 若 recreate 则记录重新 seed 的命令序列与 master key file path 不变性证明），避免事后报告里出现"3 把 key 只看到 1 把出现在 usage_events"这种被 reseed 顺序错误污染的数据。
+
+**N-19 (NIT)**: Decision 2 真 Ark 一档 "30 concurrency x 30s with MAX_REQUESTS capped to the observed request budget" —— 实施时请把"observed request budget"在报告 methodology 段写成具体数字（例如 `MAX_REQUESTS=900`），而不是留作 ambient 描述，让后续 V2 candidate 与 T-QUOTA-CACHE-PROBE 复算成本时可以直接读出。
+
+**N-20 (NIT)**: Decision 1 说 mock-ark 是 "small standard-library Go binary under `cmd/loadtest/mockark`"，但没说 docker-compose 怎么 build 它——当前 `deploy/docker-compose.yml` 没有 `Dockerfile.mockark`，gateway/admin/migrate 各有独立 Dockerfile。实施时请 propose 一句"复用 omnitoken-gateway:local 多 stage build target / 新增 Dockerfile.mockark / 直接 image: golang:alpine + command 跑 go run"中的哪个方案，避免 R-CONC-RERUN 时再争。任务体本来就把 `deploy/docker-compose.yml` 列为允许改动范围，这只是路径选择不是范围扩张。
+
+**与 R-CONC-CHECK / R-EXT-2026-05-21 闭环**:
+- H-3 (DSN application_name 失效) 通过本轮前置 T-CONC-DSN 直接清账，R-CONC-CHECK 报告的 caveat 不再继续传。
+- H-4 (单 key 17.1% 成功率) 通过 Decision 2 真 Ark 30×30 多 key 池档位回答，**目标 >80%** 与 R-CONC-CHECK 对照（T-016 实施已经在 e2e 测了三把 key 均出现，本轮是并发态二次确认）。
+- T-QUOTA-CACHE-PROBE 的 baseline 输入靠 Decision 4 的 pg_stat_statements + Decision 2 的 mock 高并发档共同给——拿到 mean/max 数值即可立任务，不在本任务做优化。
+- 外部专家 R-EXT #1 (quota SQL 推测 CRITICAL) 经本轮真测后才能决定升级 / 维持 vNext 观察。
+
+**Codex 下一步**: T-CONC-RERUN 可开实施，5 个 propose 决策点视为已锁。T-CONC-DSN 走独立 commit 在前；M-26 / N-19 / N-20 在 implementation review (R-CONC-RERUN) 时核。
+
+---
+
 ## R-016 (T-016 实施, impl `c6ee841d` + e2e `8544ce82` + status `9a219c2a`)
 
 **结论: `[+] Approved`** — T-016 接受标准 12/12 全部达成，R-016-prop 留的 4 条债（H-5/M-24/M-25/N-15）+ R-EXT-2026-05-21 折进来的 T-NIT-SSE-CLOSE 全部落地且都有显式断言，无 CRITICAL/HIGH/MEDIUM。3 NIT 不阻塞。v1 最关键的"性价比资源 = 多 upstream key 池"角到位，§零A 第 1 条落地完成。

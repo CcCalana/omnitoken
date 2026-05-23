@@ -238,15 +238,60 @@ Proposal: `docs/proposals/2026-05-21-t-conc-rerun-baseline.md`
 Result: `abc98a05` — mock rerun captured PG saturation; true Ark 30x30 blocked by missing 3-key seed/master-key env, no undeclared deviation.
 Result(rerun): `dff69844` — true Ark 43.0%, switch 216, no undeclared deviation.
 
-**Hints (R-CONC-RERUN H-6 follow-up, 2026-05-22)**: 用户已把 master key + 三把真 Ark key 落进本机 `.env`（`OMNITOKEN_MASTER_KEY` 64-hex + `OMNITOKEN_ARK_KEYS_1/2/3`），接受标准 #2 的前置条件齐了。请执行真 Ark 30×30 那一档并把结果**追加进同一份 release 文档**（`docs/release/v1-concurrency-rerun-2026-05-22.md` 的 "True Ark Rerun" 段，**不新开 release 文件、不改 mock 段已有数字**），步骤约束：
-1. `docker compose -f deploy/docker-compose.yml up -d` 让 `credential-seed` 用新 env 跑——必要时 `docker compose stop gateway credential-seed && docker compose up -d` 触发 credential-seed 重跑；不要 `-v` 抹卷（per R-CONC-RERUN M-26）。
-2. 跑前查 `upstream_credentials`：`SELECT provider, COUNT(*), MIN(priority), MAX(priority) FROM upstream_credentials WHERE active GROUP BY provider;` 应 `ark` = 3 行（mock-ark 假行 = 0；否则 M-28 清理证据缺失，先 `DELETE FROM upstream_credentials WHERE provider <> 'ark'` 并把这条命令写进报告 cleanup 段）。
-3. 用 mock 段同款命令形状跑：`cmd/loadtest -concurrency 30 -duration 30s -allow-failures` + `MAX_REQUESTS=900` + `model chat-fast` + 复用现有 demo virtual key + admin-token。完整形状参考 `cmd/loadtest/README.md`；**不修 cmd/loadtest 代码**。
-4. 跑后查证据：
-   - `usage_events` 按 `upstream_credential_id` 聚合，确认三个 credential_id 都出现；若集中在单一 priority 1，记 V2 candidate 而**不**当 defect（ADR 0003 priority-based fallback 是设计，仅 429 触发切换）。
-   - gateway log `grep "upstream credential retry"` 看 429 切换次数（观察是否发生即可，不要求下限）。
-   - 与 T-CONC-CHECK 17.1% 对照：成功率必须 > 80%（任务体接受标准 #2 硬门槛）。未达则在 True Ark Rerun 段透明披露原因 + V2 candidate，**不当场修**。
-5. 写完 release 文档 + **新 commit（不要 amend `abc98a05`）**，TASKS.md 本条 Result 行后**再追加一行** `Result(rerun): <hash> — true Ark <成功率>%, switch <次数>, no undeclared deviation.`，状态保持 `status:review` 等二审。
-6. 报告 True Ark Rerun 段必须含：跑期 timestamp / 实际 RPS / 总请求数 / 2xx / upstream_429 / gateway 5xx / P50/P95/P99 / 三把 key 各自 `count(*)` / 切换次数 / 与 T-CONC-CHECK 17.1% 对照一行结论。
-7. **禁动**：`internal/*`、`cmd/gateway`、`cmd/admin`、`cmd/loadtest` 任何代码；`docs/release/v1-concurrency-baseline-2026-05-21.md`；mock 段已有数字；ADR 0003；R-CONC-RERUN M-27 / M-28 顺手在报告里修就行，不另开 commit。
-8. **Cost 约束**：`MAX_REQUESTS=900` 是硬上限（≈ 5 元预算）；真 Ark 提前 429 / 网络异常则直接中止并把已得数据写进报告，**不重跑超 budget**。
+
+**Superseded 2026-05-23**: 候选 B 由用户直接确认（Ark coding plan 一账号一 key，三把里两把不是 coding plan）。Probe 不跑。H-6 二审改走 T-MP-DEEPSEEK：multi-provider 池跨 Ark + DeepSeek 重测 30×30，>80% 验收门槛在新形态下达成才能签。原 Ark 单 provider 路径**永久无法达成**（物理约束）。详 ADR 0004。本任务保持 status:review，等 T-MP-DEEPSEEK rerun 数据落进 `docs/release/v1-concurrency-rerun-2026-05-22.md` 新增段后一并签。
+
+---
+
+## T-MP-DEEPSEEK Multi-provider 池接入 DeepSeek (v1 收官) [phase:2-C] [owner:codex] [status:in-progress]
+
+Started: 2026-05-23 00:00 Asia/Shanghai
+
+⚠️ **Docker-only (AGENTS.md §3.3a)**：所有 `go vet` / `go test -race` / migration / loadtest 一律在 docker-compose 容器内跑。**禁 Windows host 跑 make / golangci-lint / `go test -race`**。本机用 `docker compose run --rm <service>` 模式触发。违反一次=R-* 直判 HIGH 退回。
+
+**目标**: ADR 0004 落地——把 multi-provider 池能力接进 v1，把 DeepSeek 官方 API 作为 v1 第二个 upstream provider。让 §零A 第 1 条"性价比资源"验收能在跨 provider 形态下过 >80% 门槛。`.env` 已落 `OMNITOKEN_DEEPSEEK_KEYS_1/2/3` + `OMNITOKEN_DEEPSEEK_BASE_URL=https://api.deepseek.com/v1`。
+
+**涉及**:
+- migration 000013（新增 `upstream_credentials.base_url text NOT NULL DEFAULT ''` + `virtual_models.provider text NOT NULL DEFAULT 'ark'`；Ark 旧行回填 base URL 与 provider）
+- `cmd/upstream-credential-seed`（识别 `OMNITOKEN_DEEPSEEK_KEYS_*` + `OMNITOKEN_DEEPSEEK_BASE_URL`；跨 provider 单一全局 priority 序列；audit snapshot 加 provider/base_url）
+- `internal/proxy/`（按 credential.base_url 构建上游 URL；OpenAI 兼容协议复用 Ark non-stream 路径；selector 跨 provider 轮询）
+- `deploy/postgres/002_seed.sql`（virtual_models 加 provider 列；`chat-fast` 改 provider=deepseek + real_model=deepseek-v4-flash 作为 v1 测试主路径，其它 chat-* 保 Ark fallback）
+- `docs/release/v1-concurrency-rerun-2026-05-22.md`（新增 "Multi-provider Rerun" 段，不覆盖既有段）
+- e2e 测试加一份 cross-provider credential pool 用例
+
+**接受标准** (propose 跳过——本任务范围由 ADR 0004 锁定):
+- [ ] migration 000013 up/down 双向跑过；Ark 已有数据回填后 `SELECT COUNT(*) FROM upstream_credentials WHERE provider='ark' AND base_url=''` = 0
+- [ ] `credential-seed` 跑后 `SELECT provider, COUNT(*) FROM upstream_credentials WHERE active GROUP BY provider` 给出 `ark` ≥ 1 + `deepseek` = 3
+- [ ] 跨 provider e2e: 一个测试用例验证 selector 在 Ark credential 全部 429/degraded 时 fallback 到 DeepSeek credential，反之亦然；usage_events 写入正确 provider+credential_id
+- [ ] `chat-fast` 通过 gateway 打 DeepSeek，返回 OpenAI 兼容 chat completion；usage_events 行的 `model_routed` = `deepseek-v4-flash`，`upstream_credential_id` 指向 DeepSeek 行
+- [ ] **多 provider rerun (并发档位可降)**: 起步 `cmd/loadtest -concurrency 30 -duration 30s -allow-failures` + `MAX_REQUESTS=900` + `model chat-fast`（打 DeepSeek）。**成功率 > 80% 是硬门槛、并发量无下限**——若 30 conc <80% 则降到 10 conc × 30s 再跑；仍 <80% 降到 5 conc × 30s；找到达成 >80% 的最大稳定并发即可，**不为冲 30 conc 牺牲成功率**。报告 "Multi-provider Rerun" 段每个尝试档位记 timestamp / conc / RPS / 2xx / 4xx / 5xx / upstream_429 / P50/P95/P99 / 三把 DeepSeek key 各自 `count(*)` / 切换次数；最后一行宣告 "v1 上线档位 = N conc / X% 成功率" + 与 17.1% / 43.0% 三层对照。如果 5 conc 仍 <80%，写未声明偏差 stop 报给 Claude（不当场调代码）
+- [ ] DeepSeek 跑测成本 ≤ ¥1（按 ¥1/M input + ¥2/M output 算，900 请求 × max_tokens=8 ≈ ¥0.03，加上一次 e2e ≈ ¥0.1，硬上限 ¥1 截止）
+- [ ] **Docker-only 自报**：每个 commit message 附一行 "verification: go vet via `docker compose run --rm test`" 或同等表述；review 时核
+- [ ] `go vet ./...` clean；e2e 全绿；migration up/down 验证
+
+**不在范围**:
+- 完整 Provider interface 抽象 / factory（推 v1.1）
+- Anthropic 协议适配（T-020，v1.1+）
+- OpenAI 官方 API key（T-OAI-*，v1.1+）
+- admin UI per-provider 视图（v1.1）
+- DeepSeek cache hit 优化路径（按 cache miss 算成本是 v1 安全侧默认）
+- KMS / rotation 自动化
+
+**Codex 实施建议**（不强制，speed lever 5：你拍最优切分）:
+- 单 commit 把 migration + seed + virtual_models seed 落地 → impl review
+- 单 commit 把 proxy.base_url 路径 + e2e + cross-provider rerun 落地 → impl review
+- 或一次性大 commit，由你判断 review 时一次看完还是分两次
+
+**禁动**:
+- ADR 0003（保留为历史决策；ADR 0004 通过 status 注引用）
+- 既有 Ark 路径行为（Ark credential 仍按 priority 序列工作）
+- `docs/release/v1-concurrency-baseline-2026-05-21.md`、`v1-concurrency-rerun-2026-05-22.md` 既有 mock/True Ark 段
+- T-016 / T-CONC-COST-ATTR 既有代码（增量在 schema + seed + proxy.base_url）
+
+**异常处理**:
+- DeepSeek API 返非 OpenAI 兼容形态 → 写未声明偏差停跑，不当场抽 Provider interface
+- 三把 DeepSeek key 任意一把无效 → 跑测前 health probe（curl 单 ping）跑 3 把都通过才进 loadtest；任何一把不通 stop + 报告给 Claude，不当场删 key
+- 跑测成功率仍 < 80% → 在报告里诚实写数据 + V2 candidate，**不当场调 selector 算法**，开 follow-up 给 Claude 决策
+
+**依赖**: T-016 ✅；T-CONC-DSN ✅；T-CONC-RERUN 既有数据作历史对照；`.env` 三把 DeepSeek key ✅
+
