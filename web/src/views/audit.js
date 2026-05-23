@@ -71,7 +71,11 @@ function createAuditView(api) {
 
   function switchAuditView(view) {
     activeView = view === "usage" ? "usage" : "logs";
-    nodes.tabs.forEach((tab) => tab.classList.toggle("is-active", tab.dataset.auditView === activeView));
+    nodes.tabs.forEach((tab) => {
+      const selected = tab.dataset.auditView === activeView;
+      tab.classList.toggle("is-active", selected);
+      tab.setAttribute("aria-selected", String(selected));
+    });
     nodes.logPanel?.classList.toggle("is-hidden", activeView !== "logs");
     nodes.usagePanel?.classList.toggle("is-hidden", activeView !== "usage");
     return load(false);
@@ -79,7 +83,7 @@ function createAuditView(api) {
 
   function renderRows() {
     if (!logs.length) {
-      nodes.body.innerHTML = '<tr><td colspan="5" class="table-state">No admin audit logs</td></tr>';
+      nodes.body.innerHTML = '<tr><td colspan="5" class="table-state">暂无审计日志</td></tr>';
       return;
     }
 
@@ -135,37 +139,37 @@ function createAuditView(api) {
 
   async function loadLogs(force = false) {
     if (loadedLogs && !force) return;
-    setAlert(nodes.alert, "loading", "Loading admin audit logs...");
-    nodes.body.innerHTML = '<tr><td colspan="5" class="table-state">Loading admin audit logs...</td></tr>';
+    setAlert(nodes.alert, "loading", "正在加载审计日志...");
+    nodes.body.innerHTML = '<tr><td colspan="5" class="table-state">正在加载审计日志...</td></tr>';
 
     try {
       logs = normalizeAuditLogs(await api.getAuditLogs(currentFilters()));
       loadedLogs = true;
       expandedRow = "";
-      setAlert(nodes.alert, logs.length ? "" : "empty", logs.length ? "" : "No admin audit logs.");
+      setAlert(nodes.alert, logs.length ? "" : "empty", logs.length ? "" : "暂无审计日志。");
       renderRows();
     } catch (error) {
-      setAlert(nodes.alert, "error", `Unable to load admin audit logs (${error.code || error.message}).`);
-      nodes.body.innerHTML = '<tr><td colspan="5" class="table-state">Admin audit logs failed to load</td></tr>';
+      setAlert(nodes.alert, "error", `无法加载审计日志 (${error.code || error.message})。请确认 admin 服务已启动，且 CORS 允许当前页面 origin。`);
+      nodes.body.innerHTML = '<tr><td colspan="5" class="table-state">审计日志加载失败</td></tr>';
     }
   }
 
   async function ensureUsers() {
     if (loadedUsers) return;
-    setAlert(nodes.usageAlert, "loading", "Loading users...");
+    setAlert(nodes.usageAlert, "loading", "正在加载用户列表...");
     try {
       const response = await api.getUsers();
       const users = normalizeUsers(response?.users);
       nodes.usageUser.innerHTML = users.length
         ? users.map((user) => `<option value="${escapeHTML(user.user_id)}">${escapeHTML(user.label)}</option>`).join("")
-        : '<option value="">No users</option>';
+        : '<option value="">暂无用户</option>';
       if (users.length && !users.some((user) => user.user_id === nodes.usageUser.value)) {
         nodes.usageUser.value = users[0].user_id;
       }
       loadedUsers = true;
-      setAlert(nodes.usageAlert, users.length ? "" : "empty", users.length ? "" : "No users found.");
+      setAlert(nodes.usageAlert, users.length ? "" : "empty", users.length ? "" : "暂无用户");
     } catch (error) {
-      setAlert(nodes.usageAlert, "error", `Unable to load users (${error.code || error.message}).`);
+      setAlert(nodes.usageAlert, "error", `无法加载用户列表 (${error.code || error.message})。请确认 admin 服务已启动，且 CORS 允许当前页面 origin。`);
     }
   }
 
@@ -173,28 +177,28 @@ function createAuditView(api) {
     const userID = String(nodes.usageUser?.value || "").trim();
     if (!userID) {
       renderUsage(normalizeUserUsage(null));
-      setAlert(nodes.usageAlert, "empty", "Select a user to inspect usage.");
+      setAlert(nodes.usageAlert, "empty", "请选择用户查看使用流水");
       return;
     }
     if (!force && loadedUsageUserID === userID) return;
 
-    setAlert(nodes.usageAlert, "loading", "Loading user usage...");
+    setAlert(nodes.usageAlert, "loading", "正在加载用户使用流水...");
     setUsageTablesLoading();
     try {
       const usage = normalizeUserUsage(await api.getUserUsage(userID, currentUsageFilters()));
       loadedUsageUserID = userID;
       renderUsage(usage);
-      setAlert(nodes.usageAlert, usage.recent_calls.length ? "" : "empty", usage.recent_calls.length ? "" : "No usage in this period.");
+      setAlert(nodes.usageAlert, usage.recent_calls.length ? "" : "empty", usage.recent_calls.length ? "" : "本周期内暂无用量");
     } catch (error) {
       loadedUsageUserID = "";
-      setAlert(nodes.usageAlert, "error", `Unable to load user usage (${error.code || error.message}).`);
+      setAlert(nodes.usageAlert, "error", `无法加载用户使用流水 (${error.code || error.message})。请确认 admin 服务已启动，且 CORS 允许当前页面 origin。`);
       renderUsage(normalizeUserUsage(null));
     }
   }
 
   function setUsageTablesLoading() {
-    nodes.usageModelBody.innerHTML = '<tr><td colspan="4" class="table-state">Loading user usage...</td></tr>';
-    nodes.usageRecentBody.innerHTML = '<tr><td colspan="5" class="table-state">Loading user usage...</td></tr>';
+    nodes.usageModelBody.innerHTML = '<tr><td colspan="4" class="table-state">正在加载用户使用流水...</td></tr>';
+    nodes.usageRecentBody.innerHTML = '<tr><td colspan="5" class="table-state">正在加载用户使用流水...</td></tr>';
   }
 
   function renderUsage(usage) {
@@ -205,7 +209,7 @@ function createAuditView(api) {
 
   function renderModelTop(rows) {
     if (!rows.length) {
-      nodes.usageModelBody.innerHTML = '<tr><td colspan="4" class="table-state">No model usage</td></tr>';
+      nodes.usageModelBody.innerHTML = '<tr><td colspan="4" class="table-state">暂无模型用量</td></tr>';
       return;
     }
     const total = rows.reduce((sum, row) => sum + row.tokens, 0);
@@ -224,7 +228,7 @@ function createAuditView(api) {
 
   function renderRecentCalls(rows) {
     if (!rows.length) {
-      nodes.usageRecentBody.innerHTML = '<tr><td colspan="5" class="table-state">No recent calls</td></tr>';
+      nodes.usageRecentBody.innerHTML = '<tr><td colspan="5" class="table-state">暂无近期调用</td></tr>';
       return;
     }
     nodes.usageRecentBody.innerHTML = rows.map((row) => {
@@ -235,7 +239,7 @@ function createAuditView(api) {
           <td class="primary-text">${escapeHTML(row.model)}</td>
           <td><span class="${statusClass}">${escapeHTML(row.status_code || "--")}</span></td>
           <td>${escapeHTML(formatTokens(row.total_tokens))}</td>
-          <td>${row.streaming ? "Yes" : "No"}</td>
+          <td>${row.streaming ? "是" : "否"}</td>
         </tr>
       `;
     }).join("");
@@ -252,7 +256,7 @@ function createAuditView(api) {
         data: {
           labels: hourLabels(),
           datasets: [{
-            label: "Calls",
+            label: "调用次数",
             data: localHourly,
             backgroundColor: "#4f46e5",
             borderRadius: 6,

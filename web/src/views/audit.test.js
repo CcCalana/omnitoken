@@ -14,12 +14,12 @@ test("audit view renders loading and empty states", async () => {
   });
 
   const pending = view.load(true);
-  assert.match(harness.element("audit-table-body").innerHTML, /Loading admin audit logs/);
+  assert.match(harness.element("audit-table-body").innerHTML, /正在加载审计日志/);
   resolveLogs([]);
   await pending;
 
-  assert.match(harness.element("audit-table-body").innerHTML, /No admin audit logs/);
-  assert.equal(harness.element("audit-alert").textContent, "No admin audit logs.");
+  assert.match(harness.element("audit-table-body").innerHTML, /暂无审计日志/);
+  assert.equal(harness.element("audit-alert").textContent, "暂无审计日志。");
 });
 
 test("audit view renders error state", async () => {
@@ -34,7 +34,7 @@ test("audit view renders error state", async () => {
 
   await view.load(true);
 
-  assert.match(harness.element("audit-table-body").innerHTML, /Admin audit logs failed to load/);
+  assert.match(harness.element("audit-table-body").innerHTML, /审计日志加载失败/);
   assert.match(harness.element("audit-alert").textContent, /network_down/);
 });
 
@@ -64,7 +64,9 @@ test("audit usage view renders user model top and recent calls", async () => {
   assert.match(harness.element("audit-usage-user").innerHTML, /Viewer/);
   assert.match(harness.element("audit-usage-model-body").innerHTML, /kimi-k2.6/);
   assert.match(harness.element("audit-usage-model-body").innerHTML, /100.0%/);
-  assert.match(harness.element("audit-usage-recent-body").innerHTML, /Yes/);
+  assert.match(harness.element("audit-usage-recent-body").innerHTML, /是/);
+  assert.equal(harness.tabs[0].attributes.get("aria-selected"), "false");
+  assert.equal(harness.tabs[1].attributes.get("aria-selected"), "true");
 });
 
 function newAuditHarness() {
@@ -88,6 +90,7 @@ function newAuditHarness() {
     element(id) {
       return document.getElementById(id);
     },
+    tabs: document.tabs,
   };
 }
 
@@ -158,6 +161,7 @@ class FakeElement {
     this.textContent = "";
     this.className = "";
     this.listeners = new Map();
+    this.attributes = new Map();
     this.classList = {
       add: (...tokens) => {
         const classes = new Set(this.className.split(/\s+/).filter(Boolean));
@@ -178,5 +182,9 @@ class FakeElement {
 
   addEventListener(type, handler) {
     this.listeners.set(type, handler);
+  }
+
+  setAttribute(name, value) {
+    this.attributes.set(name, String(value));
   }
 }

@@ -300,12 +300,12 @@
       </div>
       <div id="audit-alert" class="alert is-hidden"></div>
 
-      <div class="audit-tabs" role="tablist" aria-label="Audit views">
-        <button class="audit-tab is-active" type="button" data-audit-view="logs">Admin audit logs</button>
-        <button class="audit-tab" type="button" data-audit-view="usage">User usage ledger</button>
+      <div class="audit-tabs" role="tablist" aria-label="审计视图">
+        <button id="audit-tab-logs" class="audit-tab is-active" type="button" data-audit-view="logs" role="tab" aria-selected="true" aria-controls="audit-logs-panel">管理操作流水</button>
+        <button id="audit-tab-usage" class="audit-tab" type="button" data-audit-view="usage" role="tab" aria-selected="false" aria-controls="audit-usage-panel">用户使用流水</button>
       </div>
 
-      <div id="audit-logs-panel" class="audit-subpanel">
+      <div id="audit-logs-panel" class="audit-subpanel" role="tabpanel" aria-labelledby="audit-tab-logs">
       <article class="panel audit-filter-panel">
         <div class="filter-grid">
           <label>
@@ -351,19 +351,19 @@
       </article>
       </div>
 
-      <div id="audit-usage-panel" class="audit-subpanel is-hidden">
+      <div id="audit-usage-panel" class="audit-subpanel is-hidden" role="tabpanel" aria-labelledby="audit-tab-usage">
         <article class="panel audit-filter-panel">
           <div class="filter-grid audit-usage-filters">
             <label>
-              <span>User</span>
+              <span>用户</span>
               <select id="audit-usage-user"></select>
             </label>
             <label>
-              <span>Since</span>
+              <span>起始时间</span>
               <input id="audit-usage-since" type="datetime-local">
             </label>
             <label>
-              <span>Until</span>
+              <span>截止时间</span>
               <input id="audit-usage-until" type="datetime-local">
             </label>
             <label>
@@ -372,8 +372,8 @@
             </label>
           </div>
           <div class="filter-actions">
-            <button class="secondary-button" type="button" data-action="apply-audit-usage-filters">Apply</button>
-            <button class="ghost-button" type="button" data-action="clear-audit-usage-filters">Clear</button>
+            <button class="secondary-button" type="button" data-action="apply-audit-usage-filters">应用筛选</button>
+            <button class="ghost-button" type="button" data-action="clear-audit-usage-filters">清空</button>
           </div>
         </article>
 
@@ -382,20 +382,20 @@
         <div class="audit-usage-grid">
           <article class="panel table-panel">
             <div class="panel-header audit-usage-header">
-              <h2>Model top-N</h2>
+              <h2>模型 Top-N</h2>
             </div>
             <div class="table-wrap">
               <table class="audit-table audit-usage-table">
                 <thead>
                   <tr>
-                    <th>Model</th>
+                    <th>模型</th>
                     <th>Tokens</th>
-                    <th>Calls</th>
-                    <th>Share</th>
+                    <th>调用次数</th>
+                    <th>占比</th>
                   </tr>
                 </thead>
                 <tbody id="audit-usage-model-body">
-                  <tr><td colspan="4" class="table-state">Waiting for user usage</td></tr>
+                  <tr><td colspan="4" class="table-state">等待选择用户</td></tr>
                 </tbody>
               </table>
             </div>
@@ -403,32 +403,32 @@
 
           <article class="panel">
             <div class="panel-header">
-              <h2>Hourly distribution</h2>
+              <h2>小时分布</h2>
             </div>
             <div class="chart-box audit-hourly-chart">
               <canvas id="audit-usage-hourly-chart"></canvas>
-              <div id="audit-usage-hourly-empty" class="empty-overlay is-hidden">No usage</div>
+              <div id="audit-usage-hourly-empty" class="empty-overlay is-hidden">暂无用量</div>
             </div>
           </article>
         </div>
 
         <article class="panel table-panel">
           <div class="panel-header audit-usage-header">
-            <h2>Recent calls</h2>
+            <h2>近 50 次调用</h2>
           </div>
           <div class="table-wrap">
             <table class="audit-table audit-usage-table">
               <thead>
                 <tr>
-                  <th>Time</th>
-                  <th>Model</th>
-                  <th>Status</th>
+                  <th>时间</th>
+                  <th>模型</th>
+                  <th>状态</th>
                   <th>Tokens</th>
-                  <th>Streaming</th>
+                  <th>流式</th>
                 </tr>
               </thead>
               <tbody id="audit-usage-recent-body">
-                <tr><td colspan="5" class="table-state">Waiting for user usage</td></tr>
+                <tr><td colspan="5" class="table-state">等待选择用户</td></tr>
               </tbody>
             </table>
           </div>
