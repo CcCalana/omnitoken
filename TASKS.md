@@ -24,6 +24,8 @@
 | 05-21 | **R-016-prop approve** (`fd9ce8d8`)：5/5 propose 决策直接采纳；H-5 (partial-first-read) + M-24/M-25 (ops 文档) + N-15 (WARN log 不漏 Ark body) 留实施期核 |
 | 05-21 | **R-016 approve** (impl `c6ee841d` + e2e `8544ce82`)：12/12 接受标准全达成；H-5/M-24/M-25/N-15 + T-NIT-SSE-CLOSE 五条债全部落地且有显式断言；proxy 86.7% / crypto 87.8% / credentials 92.0%；T-CONC-COST-ATTR 合并到 000012 migration + admin 三处 SQL 切到 model_routed 一并完成。**v1 §零A 第 1 条"性价比资源 = 多 upstream key 池"落地**。3 NIT (provider='ark' 缺注释 / master key fallback log 缺 reason / usage_events 不追溯 retry 链路) 不阻塞 |
 | 05-21 | **T-CONC-RERUN 任务体写好**（status:todo, propose 前置=是）。mock baseline + 真 Ark 多 key 池验证 + DB/quota 观察；5 propose 决策点：mock 形式 / 并发档位 / T-CONC-DSN 是否前置 / pg_stat_statements 是否启 / 报告位置。严格 measurement-only |
+| 05-23 | **README 用户化重写 + 公开仓库上线**：READMEs 去草稿,LICENSE Apache-2.0,`.omnitoken-master-key` 加入 gitignore;`master` → `main`;新建 https://github.com/CcCalana/omnitoken (public) |
+| 05-23 | **T-UI-L1-THEME 任务体写好**（status:todo）。借鉴 metapi (MIT) 前端设计语言 L1 档：design tokens CSS + Toast + Modal + dark theme,守住 vanilla JS 不引入 React/Tailwind/build |
 
 ---
 
@@ -359,3 +361,62 @@ Started: 2026-05-23 00:00 Asia/Shanghai
 
 Result: `4b3d6b32` — admin credential add/disable + 30s polling hot reload landed; Docker-only all green, no undeclared deviation.
 
+---
+
+## T-UI-L1-THEME 前端视觉对齐 L1 + Toast/Modal + Dark Theme [phase:post-v1] [owner:codex] [status:todo]
+
+**目标**: 借鉴 [cita-777/metapi](https://github.com/cita-777/metapi)（MIT 许可）的前端设计语言到 `web/`，**只做 L1 视觉对齐**：design tokens CSS + dark theme 切换 + Toast 组件 + Modal 组件。**不引入** React/Tailwind/Vite/任何构建工具，守住 OmniToken `web/` 当前的纯静态、零构建形态。
+
+**背景**: metapi 是 AI router aggregator（产品定位与 OmniToken 不同），但其前端 design tokens / 组件模式可借鉴。L1 = 视觉与基础组件，不抄页面结构。L2/L3（组件库迁移 / React 重写）作为独立任务后续讨论。
+
+**涉及**:
+- `web/styles.css` (现 899 行) — 重构成 `:root` + `[data-theme="dark"]` CSS 变量驱动，所有现有色值改成变量引用
+- `web/index.html` — 在 `<html>` 上加 `data-theme` 属性接入点，topbar 加主题切换按钮
+- `web/src/app.js` (现 114 行) — 主题切换 state + localStorage 持久化 + system preference 监听
+- `web/src/components/toast.js` (新增) — 全局 Toast 容器 + `showToast(message, kind)` 函数，kind ∈ {info, success, warning, danger}
+- `web/src/components/modal.js` (新增) — `openModal({title, body, actions, onClose})` 函数，焦点陷阱 + ESC 关闭 + 背景点击关闭
+- 6 个现有 view (`overview/users/models/virtual_models/credentials/audit`) — 把现有 `alert()` / `confirm()` / 手写 banner 调用替换为 toast / modal
+
+**接受标准**:
+- [ ] `web/styles.css` 头部含完整 design tokens block：color (primary / success / warning / danger / info + *-soft 浅底变体) / radius (sm/md/lg/xl) / shadow (sm/md/lg/card) / topbar-height / sidebar-width / z-index 层级
+- [ ] `[data-theme="dark"]` 覆盖所有 color 变量；浅色为默认；切换实时生效无闪烁（FOUC 用 inline `<script>` 在 `<head>` 内提前应用 stored theme）
+- [ ] 主题切换按钮三态：system / light / dark；选 system 时跟随 `prefers-color-scheme` 媒体查询
+- [ ] localStorage key `omnitoken.theme`（独立命名空间，不撞 metapi）
+- [ ] Toast 组件：自动 4s 消失（hover 暂停），可堆叠最多 3 条，含 4 种 kind 样式
+- [ ] Modal 组件：键盘可访问（Tab 焦点陷阱、ESC 关闭、初始焦点落在第一个可聚焦元素）、点击背景关闭、`aria-modal="true"` + `role="dialog"`
+- [ ] 现有 6 个 view 全部在 dark theme 下视觉无破损（手测一遍 overview 图表、users 表格、credentials modal、audit 列表）
+- [ ] 移除现有 view 里所有 `alert()` / `confirm()` 调用，全部走 toast/modal
+- [ ] `web/src/views/*.test.js` 既有测试不破坏（如有断言依赖 DOM 结构需同步更新）
+- [ ] **无新增 npm/构建依赖**；`web/` 仍可用 `python -m http.server 3000` 直接 serve
+- [ ] commit message 体里注明 "Design tokens inspired by metapi (MIT) — github.com/cita-777/metapi"
+
+**不在范围**（L2/L3 留独立任务）:
+- ❌ Tailwind / React / Vite / TypeScript / 任何构建工具
+- ❌ 移动端响应式（MobileDrawer / ResponsiveFilterPanel 等 L2 组件）
+- ❌ 新增页面（ModelTester / Monitors / ProgramLogs 等）
+- ❌ 图表库（@visactor/react-vchart 等）；overview 现有图表保持现状或最多换色不换实现
+- ❌ i18n 框架（双语切换）
+- ❌ 全局 `⌘K` 搜索 / 通知中心 / DiceBear 头像 等高级特性
+- ❌ 修改 admin / gateway 后端代码
+
+**依赖**: 无（纯前端任务，可任意时间起）
+
+**Hints**:
+- **MIT attribution**: metapi LICENSE 是 MIT，借鉴 CSS 设计 token 与组件形状不需要复制源代码本身。commit message 提一句出处即可，**不需要**复制 metapi 整份 LICENSE。
+- **关键参考文件**:
+  - `metapi/src/web/index.css` 头部约 1-70 行 — design tokens 含 dark theme，直接抄结构与命名（color/radius/shadow/topbar-height 等命名风格）
+  - `metapi/src/web/components/Toast.tsx` — Toast Provider + useToast hook 的 React 实现，**思路**可借鉴（容器 + 自动消失 + 堆叠），**实现**必须改成 vanilla JS（DOM API + closure，不用 React）
+  - `metapi/src/web/components/CenteredModal.tsx` — 居中 modal 的实现思路（焦点陷阱、ESC、aria 属性），同上需改 vanilla
+- **FOUC 防闪烁**: theme 切换的关键技巧——在 `<head>` 内放一段 inline `<script>` 先读 localStorage 再 `document.documentElement.setAttribute('data-theme', ...)`，必须在 `styles.css` 之前执行。否则刷新会先闪一下浅色再切到 dark。
+- **不要把 `styles.css` 重写成一个新文件**：在原 file 上 incremental 改，保留现有 CSS class 命名（views 已经在用），仅把硬编码色值替换成 `var(--color-*)`。这样能控制 diff 大小，review 更快。
+- **测试方法**: 跑 `cd web && python -m http.server 3000` 然后浏览器开 `http://localhost:3000/?admin=http://localhost:8081`，分别在 light/dark 下点过 6 个 tab。可在 PR 里贴 2 张截图（light + dark）证明视觉无破损。
+- **Docker-only 范围说明**: 本任务纯前端，不动 PG/Redis/NATS；review 时若要端到端验证（用 console 调一次 chat 看 toast 提示），仍走 `make up` 起后端，不要本地装 PG/Redis。
+- **review 单 commit 还是拆**: 推荐拆两个 commit —
+  - C1: design tokens 重构 + dark theme + FOUC 防护（纯 CSS/HTML，零功能改动）
+  - C2: Toast + Modal 组件 + 6 个 view 替换 alert/confirm
+  方便 review 时第一个 commit 看视觉，第二个看行为。一次性大 commit 也接受，但 review 会要求逐块解释。
+
+**参考**:
+- 上游灵感：`github.com/cita-777/metapi` (MIT) — 仅 `src/web/index.css` + `src/web/components/Toast.tsx` + `src/web/components/CenteredModal.tsx`
+- 本地基线：`web/styles.css` (899 行) / `web/src/app.js` (114 行) / `web/src/views/*.js` (6 个 view, 共 ~1100 行)
+- README 已说明 web console 启动方式：`README.md` § "Open the web console"
