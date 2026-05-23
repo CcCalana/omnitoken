@@ -72,6 +72,24 @@ func TestMiddlewareRecorderErrorDoesNotChangeResponse(t *testing.T) {
 	_ = waitInput(t, recorder.inputs)
 }
 
+func TestMiddlewareUsesUpstreamProviderFromContext(t *testing.T) {
+	recorder := &channelRecorder{inputs: make(chan RecordInput, 1)}
+	handler := Middleware(recorder, testMiddlewareConfig())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		httpx.SetUpstreamProvider(r.Context(), "deepseek")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"model":"deepseek-v4-flash","usage":{"total_tokens":1}}`))
+	}))
+
+	req := usageRequest(`{"model":"chat-fast"}`)
+	rec := httptest.NewRecorder()
+	httpx.RequestID(handler).ServeHTTP(rec, req)
+
+	input := waitInput(t, recorder.inputs)
+	if input.Provider != "deepseek" {
+		t.Fatalf("provider = %q want deepseek", input.Provider)
+	}
+}
+
 func TestMiddlewareSkipsNonSuccessResponse(t *testing.T) {
 	recorder := &channelRecorder{inputs: make(chan RecordInput, 1)}
 	handler := Middleware(recorder, testMiddlewareConfig())(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

@@ -20,6 +20,7 @@ func TestPostgresResolver(t *testing.T) {
 		CREATE TABLE virtual_models (
 			name text PRIMARY KEY,
 			real_model text NOT NULL,
+			provider text NOT NULL DEFAULT 'ark',
 			status text DEFAULT 'active'
 		)
 	`)
@@ -28,10 +29,10 @@ func TestPostgresResolver(t *testing.T) {
 	}
 
 	_, err = db.Exec(`
-		INSERT INTO virtual_models (name, real_model, status)
+		INSERT INTO virtual_models (name, real_model, provider, status)
 		VALUES
-			('chat-fast', 'kimi-k2.6', 'active'),
-			('chat-disabled', 'old-model', 'disabled')
+			('chat-fast', 'deepseek-v4-flash', 'deepseek', 'active'),
+			('chat-disabled', 'old-model', 'ark', 'disabled')
 	`)
 	if err != nil {
 		t.Fatalf("failed to insert test data: %v", err)
@@ -45,7 +46,7 @@ func TestPostgresResolver(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if !res.IsVirtual || res.RealModel != "kimi-k2.6" {
+		if !res.IsVirtual || res.RealModel != "deepseek-v4-flash" || res.Provider != "deepseek" {
 			t.Errorf("unexpected resolution: %+v", res)
 		}
 	})

@@ -132,8 +132,8 @@ SELECT
   created_at,
   updated_at
 FROM upstream_credentials
-WHERE provider = 'ark'
-ORDER BY priority ASC, id ASC`
+WHERE status = 'active'
+ORDER BY provider ASC, priority ASC, id ASC`
 
 const listCredentialsSQL = `
 SELECT

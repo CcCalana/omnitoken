@@ -468,6 +468,45 @@ func TestTimeoutConfigDefaults(t *testing.T) {
 	}
 }
 
+func TestArkChatProxyUsesRoutedModelAndProviderCompatibility(t *testing.T) {
+	t.Parallel()
+
+	var captured map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatalf("decode upstream body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"deepseek-v4-flash","choices":[],"usage":{"total_tokens":1}}`))
+	}))
+	t.Cleanup(server.Close)
+
+	handler := NewArkChatProxy(ArkChatConfig{
+		BaseURL:         server.URL,
+		APIKey:          testArkKey,
+		DefaultModel:    testDefaultModel,
+		DisableThinking: true,
+		Timeouts:        testTimeouts(),
+	}, testLogger(), nil)
+	req := newProxyRequest(t, `{"model":"chat-fast","messages":[]}`)
+	ctx := httpx.WithModelRouted(req.Context(), "deepseek-v4-flash")
+	ctx = httpx.WithProviderRouted(ctx, "deepseek")
+	req = req.WithContext(ctx)
+
+	rec := httptest.NewRecorder()
+	httpx.RequestID(handler).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if captured["model"] != "deepseek-v4-flash" {
+		t.Fatalf("model = %#v", captured["model"])
+	}
+	if _, ok := captured["thinking"]; ok {
+		t.Fatalf("deepseek request should not include thinking: %#v", captured)
+	}
+}
+
 func TestIsEventStreamFallback(t *testing.T) {
 	t.Parallel()
 

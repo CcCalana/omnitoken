@@ -53,6 +53,26 @@ func TestSelectorSkipsDisabledQuarantinedExcludedAndDegraded(t *testing.T) {
 	}
 }
 
+func TestSelectorPrefersProviderThenFallsBack(t *testing.T) {
+	now := time.Date(2026, 5, 23, 9, 0, 0, 0, time.UTC)
+	selector := NewSelectorWithClock([]Credential{
+		{ID: "ark-a", Provider: "ark", Priority: 1, Status: StatusActive, HealthState: HealthHealthy},
+		{ID: "deepseek-a", Provider: "deepseek", Priority: 2, Status: StatusActive, HealthState: HealthHealthy},
+		{ID: "deepseek-b", Provider: "deepseek", Priority: 2, Status: StatusActive, HealthState: HealthHealthy},
+	}, func() time.Time { return now })
+
+	item, ok := selector.NextForProvider(context.Background(), "deepseek", nil)
+	if !ok || item.Provider != "deepseek" {
+		t.Fatalf("expected preferred deepseek credential, got %+v ok=%t", item, ok)
+	}
+
+	exclude := map[string]struct{}{"deepseek-a": {}, "deepseek-b": {}}
+	item, ok = selector.NextForProvider(context.Background(), "deepseek", exclude)
+	if !ok || item.ID != "ark-a" {
+		t.Fatalf("expected fallback ark credential, got %+v ok=%t", item, ok)
+	}
+}
+
 func TestSelectorHandlesNilAndDefaults(t *testing.T) {
 	var nilSelector *Selector
 	if nilSelector.Len() != 0 {

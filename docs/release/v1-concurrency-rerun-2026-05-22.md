@@ -94,14 +94,47 @@ there were zero upstream 429s. The dominant failed response was upstream 404
 for `chat-fast` -> `kimi-k2.6`, with additional upstream 5xx/connection retry
 events.
 
+## Multi-provider Rerun
+
+Run timestamp: 2026-05-23 10:18 CST. ADR 0004 multi-provider routing was
+enabled, `chat-fast` routed to `deepseek-v4-flash`, and `credential-seed`
+loaded three Ark plus three DeepSeek credentials. DeepSeek key health probe
+returned HTTP 200 for all three seeded keys before loadtest.
+
+Command shape: `MAX_REQUESTS=900`, `cmd/loadtest -concurrency 30 -duration 30s
+-allow-failures -model chat-fast`, executed from the compose `test` container
+against `gateway:8080` and `admin:8081`.
+
+| Attempt | Concurrency | Requests | RPS | 2xx | 4xx | Gateway 5xx | Upstream 429 | Success | P50 | P95 | P99 | Max |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2026-05-23 10:18 CST | 30 | 767 | 24.5 | 767 | 0 | 0 | 0 | 100.0% | 1.162s | 1.474s | 1.854s | 2.307s |
+
+Usage rows for the successful run were attributed to DeepSeek and routed model
+`deepseek-v4-flash`:
+
+| Credential alias | Priority | Usage rows |
+| --- | ---: | ---: |
+| deepseek-seed-1 | 4 | 767 |
+| deepseek-seed-2 | 5 | 0 |
+| deepseek-seed-3 | 6 | 0 |
+
+Gateway retry logs counted `0` credential switches for this run; no downgrade
+to 10 or 5 concurrency was needed. Estimated DeepSeek test cost stayed below
+the `¥1` cap.
+
+v1 launch profile = 30 concurrency / 100.0% success. Historical comparison:
+single-key Ark T-CONC-CHECK = 17.1%; Ark-only rerun = 43.0%; ADR 0004
+multi-provider rerun = 100.0%.
+
 ## Comparison With T-CONC-CHECK
 
 T-CONC-CHECK found `428/2500` success (`17.1%`) on a single Ark key with zero
 gateway panic/timeout/5xx. The true Ark rerun improved to `253/588` success
 (`43.0%`) with three seeded credentials, but still missed the `>80%` gate. The
-mock rerun separately proves that when Ark is removed, the current gateway stack
-saturates Postgres quota/usage paths before it meets the mock target of P99 <=
-100ms and 5xx <= 0.1%.
+ADR 0004 multi-provider rerun reached `767/767` success (`100.0%`) at 30
+concurrency. The mock rerun separately proves that when Ark is removed, the
+current gateway stack saturates Postgres quota/usage paths before it meets the
+mock target of P99 <= 100ms and 5xx <= 0.1%.
 
 ## V2 Candidate Fixes
 

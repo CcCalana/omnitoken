@@ -51,7 +51,7 @@ func Middleware(recorder Recorder, cfg MiddlewareConfig) func(http.Handler) http
 				ModelRequested:       modelRequested,
 				ModelRouted:          httpx.ModelRoutedFromContext(r.Context()),
 				ModelFallback:        cfg.ModelFallback,
-				Provider:             cfg.Provider,
+				Provider:             firstNonEmpty(httpx.UpstreamProviderFromContext(r.Context()), httpx.ProviderRoutedFromContext(r.Context()), cfg.Provider),
 				UpstreamCredentialID: httpx.UpstreamCredentialIDFromContext(r.Context()),
 				StatusCode:           capture.Status(),
 				LatencyMS:            int(cfg.Now().Sub(start).Milliseconds()),

@@ -17,4 +17,6 @@ KMS-backed wrapping is vNext scope.
 
 The v1 gateway decrypts upstream credentials once at startup and keeps them in memory for routing. Direct database edits or seed changes do not affect a running gateway. After adding, disabling, or reseeding credentials, restart `gateway`.
 
+Adding a provider means adding `OMNITOKEN_<PROVIDER>_KEYS_*` plus `OMNITOKEN_<PROVIDER>_BASE_URL` and re-running `credential-seed`; it does not require a different master-key file.
+
 Do not expect SIGHUP, PG NOTIFY, or timed polling in v1; those reload paths belong with the v1.1 admin CRUD workflow.

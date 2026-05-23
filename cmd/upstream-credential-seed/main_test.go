@@ -19,6 +19,18 @@ func TestArkKeysFromEnv(t *testing.T) {
 	}
 }
 
+func TestDeepSeekKeysFromEnv(t *testing.T) {
+	env := map[string]string{
+		"OMNITOKEN_DEEPSEEK_KEYS":   " ds-a, ,ds-b ",
+		"OMNITOKEN_DEEPSEEK_KEYS_1": "ds-c",
+	}
+	got := keysFromEnv(func(key string) string { return env[key] }, "OMNITOKEN_DEEPSEEK_KEYS")
+	want := []string{"ds-a", "ds-b", "ds-c"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("keys = %v want %v", got, want)
+	}
+}
+
 func TestRunCLINoKeysIsNoopWithoutMasterKey(t *testing.T) {
 	var stdout strings.Builder
 	var stderr strings.Builder
@@ -59,7 +71,7 @@ func TestSortedEnvKeys(t *testing.T) {
 }
 
 func TestCredentialAuditSnapshotOmitsSecret(t *testing.T) {
-	raw, err := credentialAuditSnapshot("cred-1", "https://ark.example/v3", "ark-seed-1", 1, "active", "healthy")
+	raw, err := credentialAuditSnapshot("cred-1", "ark", "https://ark.example/v3", "ark-seed-1", 1, "active", "healthy")
 	if err != nil {
 		t.Fatalf("snapshot: %v", err)
 	}

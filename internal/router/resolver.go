@@ -4,6 +4,7 @@ import "context"
 
 type Resolution struct {
 	RealModel string
+	Provider  string
 	IsVirtual bool
 }
 

@@ -194,8 +194,12 @@ func (p *ArkChatProxy) rewriteRequest(w http.ResponseWriter, r *http.Request) ([
 		return nil, false, errors.New("request body must contain one JSON object")
 	}
 
-	payload["model"] = p.cfg.DefaultModel
-	if p.cfg.DisableThinking {
+	if routed := strings.TrimSpace(httpx.ModelRoutedFromContext(r.Context())); routed != "" {
+		payload["model"] = routed
+	} else {
+		payload["model"] = p.cfg.DefaultModel
+	}
+	if p.cfg.DisableThinking && shouldDisableThinking(r.Context()) {
 		payload["thinking"] = map[string]any{"type": "disabled"}
 	}
 
@@ -214,6 +218,11 @@ func (p *ArkChatProxy) rewriteRequest(w http.ResponseWriter, r *http.Request) ([
 		return nil, false, err
 	}
 	return body, stream, nil
+}
+
+func shouldDisableThinking(ctx context.Context) bool {
+	provider := strings.TrimSpace(httpx.ProviderRoutedFromContext(ctx))
+	return provider == "" || provider == "ark"
 }
 
 func (p *ArkChatProxy) doWithRetries(w http.ResponseWriter, r *http.Request, body []byte, stream bool) (int, string) {
@@ -303,11 +312,12 @@ func (p *ArkChatProxy) doWithRetries(w http.ResponseWriter, r *http.Request, bod
 
 func (p *ArkChatProxy) nextCredential(ctx context.Context, exclude map[string]struct{}) (credentials.Credential, bool) {
 	if p.cfg.CredentialSelector != nil {
-		return p.cfg.CredentialSelector.Next(ctx, exclude)
+		return p.cfg.CredentialSelector.NextForProvider(ctx, httpx.ProviderRoutedFromContext(ctx), exclude)
 	}
 	return credentials.Credential{
-		BaseURL: p.cfg.BaseURL,
-		Secret:  strings.TrimSpace(p.cfg.APIKey),
+		Provider: "ark",
+		BaseURL:  p.cfg.BaseURL,
+		Secret:   strings.TrimSpace(p.cfg.APIKey),
 	}, strings.TrimSpace(p.cfg.APIKey) != "" && strings.TrimSpace(p.cfg.BaseURL) != ""
 }
 
@@ -315,6 +325,7 @@ func (p *ArkChatProxy) newUpstreamRequest(r *http.Request, body []byte, stream b
 	if credential.ID != "" {
 		httpx.SetUpstreamCredentialID(r.Context(), credential.ID)
 	}
+	httpx.SetUpstreamProvider(r.Context(), credential.Provider)
 	target, err := chatCompletionsURL(credential.BaseURL)
 	if err != nil {
 		return nil, func() {}, err

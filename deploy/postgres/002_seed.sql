@@ -109,16 +109,17 @@ WHERE users.organization_id = '00000000-0000-0000-0000-000000000001'
   )
 ON CONFLICT (organization_id, user_id, role_id) DO NOTHING;
 
-INSERT INTO virtual_models (name, real_model, status, description)
+INSERT INTO virtual_models (name, real_model, provider, status, description)
 VALUES
-  ('chat-fast', 'kimi-k2.6', 'active', 'Fast routing mapped to kimi-k2.6'),
-  ('chat-balanced', 'glm-5.1', 'active', 'Balanced routing mapped to glm-5.1'),
-  ('chat-quality', 'deepseek-v3.2', 'active', 'Quality routing mapped to deepseek-v3.2'),
-  ('chat-code', 'doubao-seed-code', 'active', 'Coding specialized routing mapped to doubao-seed-code'),
-  ('chat-experimental', 'minimax-m2.7', 'active', 'Experimental routing mapped to minimax-m2.7')
+  ('chat-fast', 'deepseek-v4-flash', 'deepseek', 'active', 'Fast routing mapped to DeepSeek v4 flash'),
+  ('chat-balanced', 'glm-5.1', 'ark', 'active', 'Balanced routing mapped to glm-5.1'),
+  ('chat-quality', 'deepseek-v3.2', 'ark', 'active', 'Quality routing mapped to deepseek-v3.2'),
+  ('chat-code', 'doubao-seed-code', 'ark', 'active', 'Coding specialized routing mapped to doubao-seed-code'),
+  ('chat-experimental', 'minimax-m2.7', 'ark', 'active', 'Experimental routing mapped to minimax-m2.7')
 ON CONFLICT (name) DO UPDATE
 SET
   real_model = excluded.real_model,
+  provider = excluded.provider,
   status = excluded.status,
   description = excluded.description,
   updated_at = now();

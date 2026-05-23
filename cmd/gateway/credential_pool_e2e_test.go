@@ -36,7 +36,6 @@ func TestCredentialPoolE2ESwitchesAndAttributesUsage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open postgres: %v", err)
 	}
-	defer db.Close()
 
 	upstream := newCredentialPoolMockUpstream()
 	server := httptest.NewServer(upstream)
@@ -47,6 +46,10 @@ func TestCredentialPoolE2ESwitchesAndAttributesUsage(t *testing.T) {
 		uuid.MustParse("00000000-0000-0000-0000-0000000000b1"),
 		uuid.MustParse("00000000-0000-0000-0000-0000000000c1"),
 	}
+	t.Cleanup(func() {
+		deleteCredentialPoolE2ECredentials(t, db, ids...)
+		_ = db.Close()
+	})
 	subject := insertCredentialPoolE2EIdentity(t, db)
 	upsertCredentialPoolE2ECredentials(t, db, ids, server.URL)
 
@@ -91,6 +94,84 @@ func TestCredentialPoolE2ESwitchesAndAttributesUsage(t *testing.T) {
 	waitForCredentialUsageCounts(t, db, subject.APIKeyID, ids)
 }
 
+func TestCredentialPoolE2ECrossProviderFallback(t *testing.T) {
+	databaseURL := strings.TrimSpace(os.Getenv("OMNITOKEN_TEST_DATABASE_URL"))
+	if databaseURL == "" {
+		t.Skip("OMNITOKEN_TEST_DATABASE_URL is required for credential pool e2e")
+	}
+
+	db, err := sql.Open("postgres", databaseURL)
+	if err != nil {
+		t.Fatalf("open postgres: %v", err)
+	}
+
+	upstream := newCrossProviderMockUpstream()
+	server := httptest.NewServer(upstream)
+	t.Cleanup(server.Close)
+
+	arkID := uuid.MustParse("00000000-0000-0000-0000-0000000000d1")
+	deepSeekID := uuid.MustParse("00000000-0000-0000-0000-0000000000e1")
+	t.Cleanup(func() {
+		deleteCredentialPoolE2ECredentials(t, db, arkID, deepSeekID)
+		_ = db.Close()
+	})
+	subject := insertCredentialPoolE2EIdentity(t, db)
+	upsertCredentialPoolE2ECredential(t, db, arkID, "ark", server.URL, "cross-provider-ark", 1)
+	upsertCredentialPoolE2ECredential(t, db, deepSeekID, "deepseek", server.URL, "cross-provider-deepseek", 2)
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	selector := credentials.NewSelector([]credentials.Credential{
+		{ID: arkID.String(), Provider: "ark", BaseURL: server.URL, Secret: "ark-429", Priority: 1, Weight: 1, Status: credentials.StatusActive, HealthState: credentials.HealthHealthy},
+		{ID: deepSeekID.String(), Provider: "deepseek", BaseURL: server.URL, Secret: "deepseek-ok", Priority: 2, Weight: 1, Status: credentials.StatusActive, HealthState: credentials.HealthHealthy},
+	})
+	handler := usage.Middleware(
+		usage.NewRecorder(usage.NewPostgresStore(db), logger),
+		usage.MiddlewareConfig{
+			Provider:      "ark",
+			ModelFallback: config.DefaultArkModel,
+			Logger:        logger,
+		},
+	)(proxy.NewArkChatProxy(proxy.ArkChatConfig{
+		DefaultModel:         config.DefaultArkModel,
+		CredentialSelector:   selector,
+		MaxCredentialRetries: 2,
+		DegradeDuration:      20 * time.Millisecond,
+	}, logger, nil))
+
+	rec := httptest.NewRecorder()
+	httpx.RequestID(handler).ServeHTTP(rec, credentialPoolE2ERequestWithProvider(subject, "ark"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ark preferred fallback status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	waitForCredentialUsageProvider(t, db, subject.APIKeyID, deepSeekID, "deepseek")
+
+	subject = insertCredentialPoolE2EIdentity(t, db)
+	selector = credentials.NewSelector([]credentials.Credential{
+		{ID: arkID.String(), Provider: "ark", BaseURL: server.URL, Secret: "ark-ok", Priority: 1, Weight: 1, Status: credentials.StatusActive, HealthState: credentials.HealthHealthy},
+		{ID: deepSeekID.String(), Provider: "deepseek", BaseURL: server.URL, Secret: "deepseek-429", Priority: 2, Weight: 1, Status: credentials.StatusActive, HealthState: credentials.HealthHealthy},
+	})
+	handler = usage.Middleware(
+		usage.NewRecorder(usage.NewPostgresStore(db), logger),
+		usage.MiddlewareConfig{
+			Provider:      "ark",
+			ModelFallback: config.DefaultArkModel,
+			Logger:        logger,
+		},
+	)(proxy.NewArkChatProxy(proxy.ArkChatConfig{
+		DefaultModel:         config.DefaultArkModel,
+		CredentialSelector:   selector,
+		MaxCredentialRetries: 2,
+		DegradeDuration:      20 * time.Millisecond,
+	}, logger, nil))
+
+	rec = httptest.NewRecorder()
+	httpx.RequestID(handler).ServeHTTP(rec, credentialPoolE2ERequestWithProvider(subject, "deepseek"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("deepseek preferred fallback status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	waitForCredentialUsageProvider(t, db, subject.APIKeyID, arkID, "ark")
+}
+
 type credentialPoolMockUpstream struct {
 	mu   sync.Mutex
 	hits map[string]int
@@ -126,9 +207,32 @@ func (u *credentialPoolMockUpstream) snapshotHits() map[string]int {
 	return out
 }
 
+type crossProviderMockUpstream struct{}
+
+func newCrossProviderMockUpstream() *crossProviderMockUpstream {
+	return &crossProviderMockUpstream{}
+}
+
+func (u *crossProviderMockUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if strings.HasSuffix(token, "-429") {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"quota_owner":"must-not-leak"}`))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"model":"deepseek-v4-flash","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+}
+
 func credentialPoolE2ERequest(subject auth.Subject) *http.Request {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"client-model","messages":[]}`))
 	return req.WithContext(auth.WithSubject(req.Context(), subject))
+}
+
+func credentialPoolE2ERequestWithProvider(subject auth.Subject, provider string) *http.Request {
+	req := credentialPoolE2ERequest(subject)
+	ctx := httpx.WithProviderRouted(req.Context(), provider)
+	return req.WithContext(ctx)
 }
 
 func insertCredentialPoolE2EIdentity(t *testing.T, db *sql.DB) auth.Subject {
@@ -168,7 +272,14 @@ func upsertCredentialPoolE2ECredentials(t *testing.T, db *sql.DB, ids []uuid.UUI
 
 	for i, id := range ids {
 		alias := "credential-pool-e2e-" + string(rune('a'+i))
-		if _, err := db.ExecContext(context.Background(), `
+		upsertCredentialPoolE2ECredential(t, db, id, "ark", baseURL, alias, 10)
+	}
+}
+
+func upsertCredentialPoolE2ECredential(t *testing.T, db *sql.DB, id uuid.UUID, provider string, baseURL string, alias string, priority int) {
+	t.Helper()
+
+	if _, err := db.ExecContext(context.Background(), `
 INSERT INTO upstream_credentials (
   id,
   provider,
@@ -180,18 +291,18 @@ INSERT INTO upstream_credentials (
   health_state,
   metadata
 )
-VALUES ($1, 'ark', $2, decode('00', 'hex'), 10, 1, 'active', 'healthy', jsonb_build_object('alias', $3::text))
+VALUES ($1, $2, $3, decode('00', 'hex'), $4, 1, 'active', 'healthy', jsonb_build_object('alias', $5::text))
 ON CONFLICT (id) DO UPDATE
 SET base_url = EXCLUDED.base_url,
+    provider = EXCLUDED.provider,
     priority = EXCLUDED.priority,
     weight = EXCLUDED.weight,
     status = EXCLUDED.status,
     health_state = EXCLUDED.health_state,
     metadata = EXCLUDED.metadata,
     updated_at = now()
-`, id, baseURL, alias); err != nil {
-			t.Fatalf("upsert credential %s: %v", id, err)
-		}
+`, id, provider, baseURL, priority, alias); err != nil {
+		t.Fatalf("upsert credential %s: %v", id, err)
 	}
 }
 
@@ -242,5 +353,41 @@ GROUP BY upstream_credential_id
 			t.Fatalf("timed out waiting for credential usage counts: got=%v want_ids=%v", got, ids)
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func waitForCredentialUsageProvider(t *testing.T, db *sql.DB, apiKeyID uuid.UUID, credentialID uuid.UUID, provider string) {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var count int
+		err := db.QueryRowContext(context.Background(), `
+SELECT COUNT(*)
+FROM usage_events
+WHERE api_key_id = $1
+  AND upstream_credential_id = $2
+  AND provider = $3
+`, apiKeyID, credentialID, provider).Scan(&count)
+		if err != nil {
+			t.Fatalf("query usage provider: %v", err)
+		}
+		if count > 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for provider %s credential %s usage", provider, credentialID)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func deleteCredentialPoolE2ECredentials(t *testing.T, db *sql.DB, ids ...uuid.UUID) {
+	t.Helper()
+
+	for _, id := range ids {
+		if _, err := db.ExecContext(context.Background(), `DELETE FROM upstream_credentials WHERE id = $1`, id); err != nil {
+			t.Fatalf("delete e2e credential %s: %v", id, err)
+		}
 	}
 }

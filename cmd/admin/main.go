@@ -95,6 +95,7 @@ type credentialsResponse struct {
 type adminVirtualModel struct {
 	Name        string `json:"name"`
 	RealModel   string `json:"real_model"`
+	Provider    string `json:"provider"`
 	Status      string `json:"status"`
 	Description string `json:"description"`
 }
@@ -933,7 +934,7 @@ GROUP BY u.id, u.organization_id, u.password_hash, u.status`
 
 func (s *postgresOverviewStore) LoadVirtualModels(ctx context.Context) (virtualModelsResponse, error) {
 	const query = `
-SELECT name, real_model, status, COALESCE(description, '') as description
+SELECT name, real_model, COALESCE(provider, 'ark') AS provider, status, COALESCE(description, '') as description
 FROM virtual_models
 ORDER BY name ASC`
 
@@ -946,7 +947,7 @@ ORDER BY name ASC`
 	response := virtualModelsResponse{VirtualModels: []adminVirtualModel{}}
 	for rows.Next() {
 		var item adminVirtualModel
-		if err := rows.Scan(&item.Name, &item.RealModel, &item.Status, &item.Description); err != nil {
+		if err := rows.Scan(&item.Name, &item.RealModel, &item.Provider, &item.Status, &item.Description); err != nil {
 			return virtualModelsResponse{}, fmt.Errorf("scan virtual models: %w", err)
 		}
 		response.VirtualModels = append(response.VirtualModels, item)

@@ -68,6 +68,11 @@ services:
       OMNITOKEN_ARK_KEYS_2: "${OMNITOKEN_ARK_KEYS_2:-}"
       OMNITOKEN_ARK_KEYS_3: "${OMNITOKEN_ARK_KEYS_3:-}"
       OMNITOKEN_ARK_OPENAI_BASE_URL: "${OMNITOKEN_ARK_OPENAI_BASE_URL:-https://ark.cn-beijing.volces.com/api/coding/v3}"
+      OMNITOKEN_DEEPSEEK_KEYS: "${OMNITOKEN_DEEPSEEK_KEYS:-}"
+      OMNITOKEN_DEEPSEEK_KEYS_1: "${OMNITOKEN_DEEPSEEK_KEYS_1:-}"
+      OMNITOKEN_DEEPSEEK_KEYS_2: "${OMNITOKEN_DEEPSEEK_KEYS_2:-}"
+      OMNITOKEN_DEEPSEEK_KEYS_3: "${OMNITOKEN_DEEPSEEK_KEYS_3:-}"
+      OMNITOKEN_DEEPSEEK_BASE_URL: "${OMNITOKEN_DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}"
     depends_on:
       seed:
         condition: service_completed_successfully
@@ -164,7 +169,31 @@ services:
       nats:
         condition: service_healthy
 
+  test:
+    image: golang:1.25-alpine
+    working_dir: /workspace
+    volumes:
+      - ..:/workspace
+      - go_mod_cache:/go/pkg/mod
+      - go_build_cache:/root/.cache/go-build
+    environment:
+      CGO_ENABLED: "0"
+      GOTELEMETRY: "off"
+      OMNITOKEN_TEST_DATABASE_URL: "postgres://omnitoken:omnitoken@postgres:5432/omnitoken?sslmode=disable"
+      OMNITOKEN_ADMIN_BOOTSTRAP_TOKEN: "${OMNITOKEN_ADMIN_BOOTSTRAP_TOKEN:-}"
+      OMNITOKEN_DEEPSEEK_KEYS_1: "${OMNITOKEN_DEEPSEEK_KEYS_1:-}"
+      OMNITOKEN_DEEPSEEK_KEYS_2: "${OMNITOKEN_DEEPSEEK_KEYS_2:-}"
+      OMNITOKEN_DEEPSEEK_KEYS_3: "${OMNITOKEN_DEEPSEEK_KEYS_3:-}"
+      OMNITOKEN_DEEPSEEK_BASE_URL: "${OMNITOKEN_DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+
 volumes:
   postgres_data:
   redis_data:
   nats_data:
+  go_mod_cache:
+  go_build_cache:

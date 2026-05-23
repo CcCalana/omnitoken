@@ -22,9 +22,9 @@ func (s *PostgresStore) Resolve(ctx context.Context, requested string) (Resoluti
 		return Resolution{RealModel: requested, IsVirtual: false}, nil
 	}
 
-	const query = `SELECT real_model, status FROM virtual_models WHERE name = $1`
-	var realModel, status string
-	err := s.db.QueryRowContext(ctx, query, requested).Scan(&realModel, &status)
+	const query = `SELECT real_model, COALESCE(provider, 'ark'), status FROM virtual_models WHERE name = $1`
+	var realModel, provider, status string
+	err := s.db.QueryRowContext(ctx, query, requested).Scan(&realModel, &provider, &status)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Resolution{RealModel: requested, IsVirtual: false}, nil
@@ -36,5 +36,5 @@ func (s *PostgresStore) Resolve(ctx context.Context, requested string) (Resoluti
 		return Resolution{}, ErrVirtualModelDisabled
 	}
 
-	return Resolution{RealModel: realModel, IsVirtual: true}, nil
+	return Resolution{RealModel: realModel, Provider: provider, IsVirtual: true}, nil
 }

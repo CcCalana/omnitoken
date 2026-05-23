@@ -7,12 +7,15 @@ import (
 
 type virtualModelContextKey struct{}
 type modelRoutedContextKey struct{}
+type providerRoutedContextKey struct{}
 type upstreamCredentialIDContextKey struct{}
+type upstreamProviderContextKey struct{}
 type upstreamCredentialRecorderContextKey struct{}
 
 type upstreamCredentialRecorder struct {
-	mu sync.RWMutex
-	id string
+	mu       sync.RWMutex
+	id       string
+	provider string
 }
 
 func WithVirtualModel(ctx context.Context, model string) context.Context {
@@ -33,8 +36,21 @@ func ModelRoutedFromContext(ctx context.Context) string {
 	return model
 }
 
+func WithProviderRouted(ctx context.Context, provider string) context.Context {
+	return context.WithValue(ctx, providerRoutedContextKey{}, provider)
+}
+
+func ProviderRoutedFromContext(ctx context.Context) string {
+	provider, _ := ctx.Value(providerRoutedContextKey{}).(string)
+	return provider
+}
+
 func WithUpstreamCredentialID(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, upstreamCredentialIDContextKey{}, id)
+}
+
+func WithUpstreamProvider(ctx context.Context, provider string) context.Context {
+	return context.WithValue(ctx, upstreamProviderContextKey{}, provider)
 }
 
 func WithUpstreamCredentialRecorder(ctx context.Context) context.Context {
@@ -51,6 +67,16 @@ func SetUpstreamCredentialID(ctx context.Context, id string) {
 	recorder.id = id
 }
 
+func SetUpstreamProvider(ctx context.Context, provider string) {
+	recorder, _ := ctx.Value(upstreamCredentialRecorderContextKey{}).(*upstreamCredentialRecorder)
+	if recorder == nil {
+		return
+	}
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	recorder.provider = provider
+}
+
 func UpstreamCredentialIDFromContext(ctx context.Context) string {
 	recorder, _ := ctx.Value(upstreamCredentialRecorderContextKey{}).(*upstreamCredentialRecorder)
 	if recorder != nil {
@@ -60,4 +86,15 @@ func UpstreamCredentialIDFromContext(ctx context.Context) string {
 	}
 	id, _ := ctx.Value(upstreamCredentialIDContextKey{}).(string)
 	return id
+}
+
+func UpstreamProviderFromContext(ctx context.Context) string {
+	recorder, _ := ctx.Value(upstreamCredentialRecorderContextKey{}).(*upstreamCredentialRecorder)
+	if recorder != nil {
+		recorder.mu.RLock()
+		defer recorder.mu.RUnlock()
+		return recorder.provider
+	}
+	provider, _ := ctx.Value(upstreamProviderContextKey{}).(string)
+	return provider
 }

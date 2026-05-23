@@ -30,25 +30,27 @@ func (m *mockResolver) Resolve(ctx context.Context, requested string) (router.Re
 func TestVirtualModelMiddleware(t *testing.T) {
 	resolver := &mockResolver{
 		mapping: map[string]router.Resolution{
-			"chat-fast":     {RealModel: "kimi-k2.6", IsVirtual: true},
+			"chat-fast":     {RealModel: "deepseek-v4-flash", Provider: "deepseek", IsVirtual: true},
 			"chat-disabled": {}, // We handle disabled via error usually, let's mock the error case.
 		},
 	}
 
 	tests := []struct {
-		name           string
-		body           string
-		resolverErr    error
-		expectedStatus int
-		expectedModel  string
-		expectedCtx    string
+		name             string
+		body             string
+		resolverErr      error
+		expectedStatus   int
+		expectedModel    string
+		expectedCtx      string
+		expectedProvider string
 	}{
 		{
-			name:           "Gateway Integration (Rewrite Success)",
-			body:           `{"model": "chat-fast", "messages": []}`,
-			expectedStatus: http.StatusOK,
-			expectedModel:  "kimi-k2.6",
-			expectedCtx:    "chat-fast",
+			name:             "Gateway Integration (Rewrite Success)",
+			body:             `{"model": "chat-fast", "messages": []}`,
+			expectedStatus:   http.StatusOK,
+			expectedModel:    "deepseek-v4-flash",
+			expectedCtx:      "chat-fast",
+			expectedProvider: "deepseek",
 		},
 		{
 			name:           "Real Model Passthrough",
@@ -77,10 +79,12 @@ func TestVirtualModelMiddleware(t *testing.T) {
 			middleware := resolveVirtualModel(resolver)
 			var capturedBody map[string]any
 			var capturedCtx string
+			var capturedProvider string
 
 			handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				json.NewDecoder(r.Body).Decode(&capturedBody)
 				capturedCtx = httpx.VirtualModelFromContext(r.Context())
+				capturedProvider = httpx.ProviderRoutedFromContext(r.Context())
 				w.WriteHeader(http.StatusOK)
 			}))
 
@@ -100,6 +104,9 @@ func TestVirtualModelMiddleware(t *testing.T) {
 				}
 				if capturedCtx != tc.expectedCtx {
 					t.Errorf("expected ctx %s, got %s", tc.expectedCtx, capturedCtx)
+				}
+				if capturedProvider != tc.expectedProvider {
+					t.Errorf("expected provider %s, got %s", tc.expectedProvider, capturedProvider)
 				}
 			}
 		})

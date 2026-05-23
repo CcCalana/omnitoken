@@ -289,6 +289,7 @@ func resolveVirtualModel(resolver router.Resolver) func(http.Handler) http.Handl
 				}
 				ctx := httpx.WithVirtualModel(r.Context(), modelRequested)
 				ctx = httpx.WithModelRouted(ctx, res.RealModel)
+				ctx = httpx.WithProviderRouted(ctx, res.Provider)
 				r = r.WithContext(ctx)
 			} else {
 				r = r.WithContext(httpx.WithModelRouted(r.Context(), modelRequested))

@@ -21,6 +21,8 @@ import (
 const (
 	defaultProvider                 = "ark"
 	defaultBaseURL                  = "https://ark.cn-beijing.volces.com/api/coding/v3"
+	deepSeekProvider                = "deepseek"
+	defaultDeepSeekBaseURL          = "https://api.deepseek.com/v1"
 	actionCreateUpstreamCredential  = "create_upstream_credential"
 	actionUpdateUpstreamCredential  = "update_upstream_credential"
 	actionDisableUpstreamCredential = "disable_upstream_credential"
@@ -57,9 +59,16 @@ func runCLI(args []string, getenv func(string) string, stdout io.Writer, stderr 
 	if opts.baseURL == "" {
 		opts.baseURL = defaultBaseURL
 	}
-	opts.keys = arkKeysFromEnv(getenv)
+	deepSeekBaseURL := strings.TrimSpace(getenv("OMNITOKEN_DEEPSEEK_BASE_URL"))
+	if deepSeekBaseURL == "" {
+		deepSeekBaseURL = defaultDeepSeekBaseURL
+	}
+	opts.providers = []providerSeed{
+		{Provider: defaultProvider, BaseURL: opts.baseURL, Keys: keysFromEnv(getenv, "OMNITOKEN_ARK_KEYS")},
+		{Provider: deepSeekProvider, BaseURL: deepSeekBaseURL, Keys: keysFromEnv(getenv, "OMNITOKEN_DEEPSEEK_KEYS")},
+	}
 
-	if len(opts.keys) == 0 {
+	if opts.empty() {
 		fmt.Fprintln(stdout, "loaded 0 upstream credentials")
 		return 0
 	}
@@ -106,12 +115,31 @@ type seedOptions struct {
 	masterKeyFile string
 	masterKey     string
 	baseURL       string
-	keys          []string
+	providers     []providerSeed
+}
+
+type providerSeed struct {
+	Provider string
+	BaseURL  string
+	Keys     []string
+}
+
+func (o seedOptions) empty() bool {
+	for _, provider := range o.providers {
+		if len(provider.Keys) > 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func arkKeysFromEnv(getenv func(string) string) []string {
+	return keysFromEnv(getenv, "OMNITOKEN_ARK_KEYS")
+}
+
+func keysFromEnv(getenv func(string) string, prefix string) []string {
 	values := []string{}
-	for _, value := range strings.Split(getenv("OMNITOKEN_ARK_KEYS"), ",") {
+	for _, value := range strings.Split(getenv(prefix), ",") {
 		if trimmed := strings.TrimSpace(value); trimmed != "" {
 			values = append(values, trimmed)
 		}
@@ -119,7 +147,7 @@ func arkKeysFromEnv(getenv func(string) string) []string {
 
 	numbered := []string{}
 	for i := 1; i <= 20; i++ {
-		value := strings.TrimSpace(getenv("OMNITOKEN_ARK_KEYS_" + strconv.Itoa(i)))
+		value := strings.TrimSpace(getenv(prefix + "_" + strconv.Itoa(i)))
 		if value != "" {
 			numbered = append(numbered, value)
 		}
@@ -140,84 +168,96 @@ func seed(ctx context.Context, db *sql.DB, envelope *omnicrypto.Envelope, opts s
 		}
 	}()
 
-	existing, err := loadSeededCredentials(ctx, tx, defaultProvider)
-	if err != nil {
-		return 0, err
+	existingByProvider := map[string]map[string]seededCredential{}
+	for _, provider := range opts.providers {
+		existing, err := loadSeededCredentials(ctx, tx, provider.Provider)
+		if err != nil {
+			return 0, err
+		}
+		existingByProvider[provider.Provider] = existing
 	}
 	seen := map[string]struct{}{}
 	count := 0
-	for _, key := range opts.keys {
-		key = strings.TrimSpace(key)
-		if key == "" {
-			continue
-		}
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		encrypted, err := envelope.Encrypt([]byte(key))
-		if err != nil {
-			return 0, fmt.Errorf("encrypt credential: %w", err)
-		}
-		priority := count + 1
-		alias := fmt.Sprintf("ark-seed-%d", priority)
-		metadata, err := metadataForAlias(alias)
-		if err != nil {
-			return 0, err
-		}
-		after, err := credentialAuditSnapshot("", opts.baseURL, alias, priority, "active", "healthy")
-		if err != nil {
-			return 0, err
-		}
-		if current, ok := existing[alias]; ok {
-			if _, err := tx.ExecContext(ctx, updateCredentialSQL,
-				current.ID,
-				opts.baseURL,
-				encrypted,
-				priority,
-				metadata,
-			); err != nil {
-				return 0, fmt.Errorf("update credential: %w", err)
+	for _, provider := range opts.providers {
+		existing := existingByProvider[provider.Provider]
+		providerCount := 0
+		for _, key := range provider.Keys {
+			key = strings.TrimSpace(key)
+			if key == "" {
+				continue
 			}
-			after, err = credentialAuditSnapshot(current.ID, opts.baseURL, alias, priority, "active", "healthy")
+			seenKey := provider.Provider + "\x00" + key
+			if _, ok := seen[seenKey]; ok {
+				continue
+			}
+			seen[seenKey] = struct{}{}
+			encrypted, err := envelope.Encrypt([]byte(key))
+			if err != nil {
+				return 0, fmt.Errorf("encrypt credential: %w", err)
+			}
+			count++
+			providerCount++
+			priority := count
+			alias := fmt.Sprintf("%s-seed-%d", provider.Provider, providerCount)
+			metadata, err := metadataForAlias(alias)
 			if err != nil {
 				return 0, err
 			}
-			if err := insertSeedAudit(ctx, tx, actionUpdateUpstreamCredential, current.ID, current.Snapshot, after); err != nil {
-				return 0, err
-			}
-			delete(existing, alias)
-		} else {
-			var id string
-			if err := tx.QueryRowContext(ctx, insertCredentialSQL,
-				defaultProvider,
-				opts.baseURL,
-				encrypted,
-				priority,
-				metadata,
-			).Scan(&id); err != nil {
-				return 0, fmt.Errorf("insert credential: %w", err)
-			}
-			after, err = credentialAuditSnapshot(id, opts.baseURL, alias, priority, "active", "healthy")
+			after, err := credentialAuditSnapshot("", provider.Provider, provider.BaseURL, alias, priority, "active", "healthy")
 			if err != nil {
 				return 0, err
 			}
-			if err := insertSeedAudit(ctx, tx, actionCreateUpstreamCredential, id, nil, after); err != nil {
-				return 0, err
+			if current, ok := existing[alias]; ok {
+				if _, err := tx.ExecContext(ctx, updateCredentialSQL,
+					current.ID,
+					provider.BaseURL,
+					encrypted,
+					priority,
+					metadata,
+				); err != nil {
+					return 0, fmt.Errorf("update credential: %w", err)
+				}
+				after, err = credentialAuditSnapshot(current.ID, provider.Provider, provider.BaseURL, alias, priority, "active", "healthy")
+				if err != nil {
+					return 0, err
+				}
+				if err := insertSeedAudit(ctx, tx, actionUpdateUpstreamCredential, current.ID, current.Snapshot, after); err != nil {
+					return 0, err
+				}
+				delete(existing, alias)
+			} else {
+				var id string
+				if err := tx.QueryRowContext(ctx, insertCredentialSQL,
+					provider.Provider,
+					provider.BaseURL,
+					encrypted,
+					priority,
+					metadata,
+				).Scan(&id); err != nil {
+					return 0, fmt.Errorf("insert credential: %w", err)
+				}
+				after, err = credentialAuditSnapshot(id, provider.Provider, provider.BaseURL, alias, priority, "active", "healthy")
+				if err != nil {
+					return 0, err
+				}
+				if err := insertSeedAudit(ctx, tx, actionCreateUpstreamCredential, id, nil, after); err != nil {
+					return 0, err
+				}
 			}
 		}
-		count++
 	}
-	for alias, current := range existing {
-		if _, err := tx.ExecContext(ctx, disableCredentialSQL, current.ID); err != nil {
-			return 0, fmt.Errorf("disable stale seed credential: %w", err)
-		}
-		after, err := credentialAuditSnapshot(current.ID, current.BaseURL, alias, current.Priority, "disabled", "quarantined")
-		if err != nil {
-			return 0, err
-		}
-		if err := insertSeedAudit(ctx, tx, actionDisableUpstreamCredential, current.ID, current.Snapshot, after); err != nil {
-			return 0, err
+	for _, provider := range opts.providers {
+		for alias, current := range existingByProvider[provider.Provider] {
+			if _, err := tx.ExecContext(ctx, disableCredentialSQL, current.ID); err != nil {
+				return 0, fmt.Errorf("disable stale seed credential: %w", err)
+			}
+			after, err := credentialAuditSnapshot(current.ID, provider.Provider, current.BaseURL, alias, current.Priority, "disabled", "quarantined")
+			if err != nil {
+				return 0, err
+			}
+			if err := insertSeedAudit(ctx, tx, actionDisableUpstreamCredential, current.ID, current.Snapshot, after); err != nil {
+				return 0, err
+			}
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -266,10 +306,10 @@ func metadataForAlias(alias string) (string, error) {
 	return string(raw), nil
 }
 
-func credentialAuditSnapshot(id string, baseURL string, alias string, priority int, status string, healthState string) ([]byte, error) {
+func credentialAuditSnapshot(id string, provider string, baseURL string, alias string, priority int, status string, healthState string) ([]byte, error) {
 	raw, err := json.Marshal(map[string]any{
 		"id":           id,
-		"provider":     defaultProvider,
+		"provider":     provider,
 		"base_url":     baseURL,
 		"priority":     priority,
 		"weight":       1,
@@ -357,7 +397,7 @@ SELECT
   )::text AS snapshot
 FROM upstream_credentials
 WHERE provider = $1
-  AND metadata->>'alias' LIKE 'ark-seed-%'`
+  AND metadata->>'alias' LIKE $1 || '-seed-%'`
 
 const insertSeedAuditSQL = `
 INSERT INTO audit_logs (
