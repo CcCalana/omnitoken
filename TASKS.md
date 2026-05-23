@@ -183,7 +183,7 @@ E2E 验收通过，但**前端假数据 + admin 无鉴权 + 未验证并发**。
 
 ---
 
-## T-CONC-DSN pg_stat_activity application_name [phase:2-C] [owner:codex] [status:review]
+## T-CONC-DSN pg_stat_activity application_name [phase:2-C] [owner:codex] [status:done]
 
 Started: 2026-05-21 19:29 +08:00
 
@@ -194,7 +194,7 @@ Result: `9b44f98b` — gateway/admin application_name + sampling SQL landed; all
 
 ---
 
-## T-CONC-RERUN 多 key 池真实并发 baseline（v1 收官） [phase:2-C] [owner:codex] [status:review]
+## T-CONC-RERUN 多 key 池真实并发 baseline（v1 收官） [phase:2-C] [owner:codex] [status:done]
 
 Started: 2026-05-21 18:30 +08:00
 Proposal: `docs/proposals/2026-05-21-t-conc-rerun-baseline.md`
@@ -243,7 +243,7 @@ Result(rerun): `dff69844` — true Ark 43.0%, switch 216, no undeclared deviatio
 
 ---
 
-## T-MP-DEEPSEEK Multi-provider 池接入 DeepSeek (v1 收官) [phase:2-C] [owner:codex] [status:review]
+## T-MP-DEEPSEEK Multi-provider 池接入 DeepSeek (v1 收官) [phase:2-C] [owner:codex] [status:done]
 
 Started: 2026-05-23 00:00 Asia/Shanghai
 

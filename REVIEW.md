@@ -8,6 +8,35 @@
 >
 > 本文件保留最近 review；老的归档到 docs/reviews/。
 
+## R-MP-DEEPSEEK (T-MP-DEEPSEEK 实施, impl `026f90ca` + status `f7738f58`)
+
+**结论: `[+] Approved`** — ADR 0004 接受标准全达，**v1 §零A 第 1 条"性价比资源"硬门槛过线**（30 conc / 100.0% / 767/767 / 0 switches / cost ≪ ¥1）。无 CRITICAL/HIGH；2 MEDIUM + 3 NIT 不阻塞。**T-CONC-RERUN H-6 二审同步关闭**（>80% 用 multi-provider 形态达成，路径从 Ark 单 provider 转向 ADR 0004）。
+
+**正面信号**:
+1. ✅ **接受标准 #5 单次过门槛**：30 conc 直接跑出 100.0% / 24.5 RPS，不需要降档到 10/5 conc。v1 上线档位 = 30 conc / 100.0%，§零A 第 1 条验收实证一拍即合。从 T-CONC-CHECK 17.1% → Ark rerun 43.0% → 现在 100.0% 三层对照完整写进 release 文档。
+2. ✅ **跨 provider 归因链贯通设计**：`internal/proxy/proxy.go:312-315` `nextCredential` 用 `ProviderRoutedFromContext` 走 `NextForProvider`；`internal/usage/middleware.go:54` 用 `UpstreamProviderFromContext`（proxy 在拿到 credential 后才 set）填 `usage_events.provider`，覆盖了"routed-from 是 deepseek 但实际 fallback 到 ark"的归因正确性。配套 `TestMiddlewareUsesUpstreamProviderFromContext` 正面断言。
+3. ✅ **`shouldDisableThinking` provider-gated**：`internal/proxy/proxy.go:223-226` `thinking: disabled` 只对 ark 或 empty provider 注入，DeepSeek 请求体不带 Ark 专属字段。避开"DeepSeek 400 unknown field"这一类 v1.1 才会显形的 bug。
+4. ✅ **Docker-only 自报严格合规**：commit message verification 行列 8 条全 `docker compose run`，零 Windows host 调用。memory `feedback_codex_docker_only_violations` 首次 enforce 后即合规，**继续保持这套首行硬约束**。
+5. ✅ **Migration 000013 down 真测过**：commit message verification 含 `migrate down -steps 1 && migrate up` 双向跑通，且 down 完整覆盖 DROP COLUMN + DELETE pricing + DELETE catalog + ALTER COLUMN DROP DEFAULT。
+
+**M-29 (MEDIUM) — DeepSeek pricing metadata 自相矛盾**: `migrations/000013_*.up.sql:50-66` `model_pricing.source_url = 'demo-placeholder:not-real-deepseek-pricing'`，但 `input_rate_usd = 0.14` / `output_rate_usd = 0.28` **是 DeepSeek 真实 list 价**（¥1/M ≈ $0.14, ¥2/M ≈ $0.28）。"placeholder" 标签 + 真实数值会让 v1 上线后 cost reporting 系统不确定是否信。建议改 source_url 为 `https://api-docs.deepseek.com/zh-cn/quick_start/pricing` 或把 rates 改成明显占位（0.001/0.002）。**不阻塞 v1**，但请下次 chore commit 顺手修。
+
+**M-30 (MEDIUM) — 跨 provider fallback 静默 404 风险（v1.1 范畴）**: 当所有 DeepSeek credentials degraded、selector fallback 到 Ark 时，gateway 把 `model=deepseek-v4-flash` 发给 Ark → Ark 返 404 → 4xx 不重试，client 看到 404。**failure 模式正确但 ops 难解读**（"DeepSeek 都挂了" vs "Ark 没这个模型" 长一样）。v1 上线不阻塞（rare 场景），但 v1.1 cost-aware routing 时建议加：(a) selector 在跨 provider fallback 时 emit 结构化日志 `cross_provider_fallback provider=ark routed_model=deepseek-v4-flash`；或 (b) `model_catalog` 查 entitlement 先验，没有就 skip 该 provider。
+
+**N-24 (NIT)**: `.codex/tmp/` 目录存在但 `.codex` 未进 `.gitignore`。Codex 本次按 spec 删了 probe / loadtest 脚本，但未来 Codex 忘删会污染 `git status`。下次顺手加一行 `/.codex/` 到 `.gitignore`，不另开 commit。
+
+**N-25 (NIT)**: `ALTER COLUMN base_url SET DEFAULT ''` 让 `NOT NULL` 列变得"空串可入"，新增 row 漏填 base_url 会静默成空串（而不是 INSERT 报错）。Codex 是为兼容已有空串行才加的 default，可理解。v1.1 可考虑改成 `CHECK (base_url <> '')` 防御性约束。
+
+**N-26 (NIT)**: `internal/usage/middleware.go:54` `firstNonEmpty(UpstreamProviderFromContext, ProviderRoutedFromContext, cfg.Provider)` 三 source fallback chain 只测了第一层（upstream provider set 的 case）。第二/三层未直接覆盖单测；不阻塞，下次顺手补 `TestMiddlewareFallsBackToRoutedProvider`。
+
+**与 R-CONC-RERUN H-6 / H-7 联动**:
+- **H-6 二审关闭**：`>80% 成功率`硬门槛在 multi-provider 形态下达成 (100.0%)。T-CONC-RERUN status 可置 `done`。
+- **H-7 (PG saturation) 保持 vNext 观察项 T-QUOTA-CACHE-PROBE**：本次 30 conc / 24.5 RPS 远低于 mock 50 conc 撞墙点 (210 RPS)，PG 没饱和，符合"v1 不卡并发下限"决策。
+
+**Codex 下一步**: T-MP-DEEPSEEK status 可置 `done`；T-CONC-RERUN H-6 二审一并签。M-29 / N-24 / N-25 / N-26 不开任务，下次相关 commit 顺手修。M-30 留到 v1.1 cost-aware routing epic 处理。
+
+---
+
 ## R-CONC-RERUN (T-CONC-RERUN 实施, impl `abc98a05` + status `4f371b4d`)
 
 **结论: `[~] Conditional Approve — 不关任务`** — mock baseline 全部到位、报告产出 + V2 candidates 落地、measurement-only 边界完全遵守（无 `internal/*` / `cmd/gateway` / `cmd/admin` 代码修改、无新依赖）。但**真 Ark 多 key 池验证（接受标准 #2）未跑**——这是 T-CONC-RERUN 的关键交付，不能因 mock 一半合格就关任务。**status:review 保持，不进 done**；user 配齐 3 把 Ark seed key + master key env 后由 Codex 跑 30×30 真测，结果补进 `docs/release/v1-concurrency-rerun-2026-05-22.md` 的 True Ark Rerun 段，**Result 行追加同一 commit 引用**，再二次 review。无 CRITICAL。
