@@ -299,7 +299,7 @@ Result: `026f90ca` — multi-provider 30 conc 100.0%, DeepSeek 767/767, no undec
 
 ---
 
-## T-016b-MIN Admin Credential CRUD UI (Min) + 30s Polling Hot Reload (v1 上线必备) [phase:2-C] [owner:codex] [status:review]
+## T-016b-MIN Admin Credential CRUD UI (Min) + 30s Polling Hot Reload (v1 上线必备) [phase:2-C] [owner:codex] [status:done]
 
 Started: 2026-05-23 00:00 Asia/Shanghai
 

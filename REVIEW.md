@@ -8,6 +8,37 @@
 >
 > 本文件保留最近 review；老的归档到 docs/reviews/。
 
+## R-016b-MIN (T-016b-MIN 实施, impl `4b3d6b32` + status `ac66a14a`)
+
+**结论: `[+] Approved`** — ADR 0005 接受标准全达，**v1 上线 ops UX gap 关闭**（加 key → 30s 自动生效，无需手动 restart gateway）。无 CRITICAL/HIGH；2 MEDIUM + 4 NIT 不阻塞，留 v1 上线后顺手。
+
+**正面信号**:
+1. ✅ **polling hot-reload e2e 真测闭环**：`TestCredentialPollingE2ERoutesNewCredential` 用真 PG + 真 envelope encrypt + 5ms tick + 等 selector 见到新 credential + proxy 真发请求 + 断言 usage_events 写新 provider+credential_id。这是接受标准 "polling 30s 内可被路由命中" 的硬证据，不是 mock 断言。
+2. ✅ **trust boundary docker-compose 注释化**：`deploy/docker-compose.yml` 在 gateway 与 admin 两处 master key env 上方加注释 "Gateway and admin must share the same master key so admin-created credentials can be decrypted by the gateway polling reloader" —— 运维改 yaml 时一眼看到约束，不只藏在 ops 文档里。ADR 0005 要求的 trust boundary 落地完整。
+3. ✅ **Selector.Replace 原子 + degraded 剪枝**：`internal/credentials/selector.go` `Replace([]Credential)` 走 mutex 之上原子 swap，配套 `pruneDegraded` 把已删 credentials 的 degraded 记录清掉避免 map 无限增长。selector_test.go +31 行单测覆盖 swap 期间 Next/MarkDegraded 行为。
+4. ✅ **Docker-only verification 10 条全合规**：commit message 含 vet / test / e2e tags / `migrate down -steps 1 && migrate up` 双向 / seed / credential-seed / 前端文件 grep smoke / `docker compose build`。零 Windows host 调用。memory `feedback_codex_docker_only_violations` 第二次任务连续合规。
+5. ✅ **前端 UX 加分**：`web/src/views/credentials.js` provider dropdown 切换时自动填 default base_url（ark → Ark URL；deepseek → DeepSeek URL）。spec 未要求但 Codex 主动加，减少运维抄链接的错误面。
+
+**M-31 (MEDIUM) — polling goroutine 不挂 shutdown ctx**: `cmd/gateway/main.go` 调用 `startCredentialPolling(context.Background(), ...)`，与 HTTP server 的 graceful shutdown ctx 解耦。`docker compose down` 时若 polling 正在 `store.Load(ctx)` 中，DB 连接不会被 cancel 立即归还，靠 Go runtime 进程退出强清。**v1 单实例 + docker stop grace 10s 实际不会出问题**，但 v1.1 多实例 / 长 graceful 窗口时会有 DB 连接残留。建议下次相关 commit 顺手把 polling ctx 接到 main 的 shutdown ctx（1-2 行）。
+
+**M-32 (MEDIUM) — admin POST 每请求重建 PostgresStore**: `cmd/admin/main.go` `CreateCredential` 内 `credentials.NewPostgresStore(s.db, s.envelope).Create(...)` 每次都 new 一个 store 实例。无资源泄漏（store 不持 conn），但浪费分配且与 `LoadCredentials` 直接用 `s.db` 不一致。**建议**：把 `*credentials.PostgresStore` 缓存到 `postgresOverviewStore` 字段，构造时一次性建好。不阻塞。
+
+**N-27 / N-28 / N-29 / N-30 (NIT)**:
+- N-27: polling 用全量 reload 而非 `updated_at > last_seen` 增量。v1 规模可忽略 DB 压力，但与我接受标准里 "按 updated_at 增量" 字面不同。Codex 选简单的全量，正确取舍。文档化即可。
+- N-28: Disable handler idempotent 需要确认 SQL：已 disabled 行重 PATCH 是 200 还是 404？UPDATE...RETURNING 在 NOT FOUND 时无行返回 → 404；命中行（无论 active/disabled）→ 200。本地 e2e 没专门测重 disable，下次顺手补一条断言。
+- N-29: polling 无 jitter，v1 单实例无影响；v1.1 多实例时多 gateway 并发 reload 会同时打 DB，加 `time.Duration(rand.Int63n(int64(interval/10)))` 即可，留 v1.1。
+- N-30: 前端 137 行纯 vanilla JS，无 JS 单测（与现有 web/ 惯例一致）。verification 只 grep `credentials.js` 是否被引用，没跑浏览器层断言。v1 上线前建议你自测一次"加 key → 30s 后真实生效"路径（手动跑 docker compose up + 网页操作）。
+
+**与 ADR 0005 / v1 上线就绪状态**:
+- v1 §零A 三角全部✅：性价比资源（T-016 + T-MP-DEEPSEEK）/ 权限额度（T-005a/T-015）/ 安全审计（T-013/T-014）
+- v1 上线 ops UX gap 关闭（T-016b-MIN）
+- H-7 PG saturation 留 vNext T-QUOTA-CACHE-PROBE 观察项
+- Codex 实测连续 2 任务 Docker-only 合规，速度杠杆 5+6 生效
+
+**Codex 下一步**: T-016b-MIN status 可置 `done`。M-31 / M-32 / 4 NIT 不开任务，下次相关 chore commit 顺手收。
+
+---
+
 ## R-MP-DEEPSEEK (T-MP-DEEPSEEK 实施, impl `026f90ca` + status `f7738f58`)
 
 **结论: `[+] Approved`** — ADR 0004 接受标准全达，**v1 §零A 第 1 条"性价比资源"硬门槛过线**（30 conc / 100.0% / 767/767 / 0 switches / cost ≪ ¥1）。无 CRITICAL/HIGH；2 MEDIUM + 3 NIT 不阻塞。**T-CONC-RERUN H-6 二审同步关闭**（>80% 用 multi-provider 形态达成，路径从 Ark 单 provider 转向 ADR 0004）。
