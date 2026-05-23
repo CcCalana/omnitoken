@@ -8,6 +8,44 @@
 >
 > 本文件保留最近 review；老的归档到 docs/reviews/。
 
+## R-AUDIT-USAGE-VIEW (T-AUDIT-USAGE-VIEW 实施, impl `7b9b0653` + `57775cae` + status `8d1d78a4`)
+
+**结论: `[~] Conditional Approve — 不关任务`** — 后端 endpoint + SQL 聚合 + fake-DB 单测 + 前端 tab/图表/表格全部按 AC 落地，**门 ③ 数据面打通**。但发现一条 **HIGH(语言一致性 + 范围外翻译)** 阻塞合并：Codex 把新 UI 全部写英文且**顺手把现有 audit zh-CN 字符串改成英文**，与 overview/users/models/credentials/virtual_models 五视图的 zh-CN 风格不一致,且超出任务范围。修完 HIGH 后我会切到 Approve；M-33 / NIT 不阻塞。
+
+**正面信号**:
+1. ✅ **SQL 单测验"model_routed 不是 model_requested"**：`TestPostgresOverviewStoreLoadUserUsageMapsSQLResults` 用 `adminFakeSQLResponse` 三档 mock，断言 `queries[0].query` 含 `COALESCE(NULLIF(ue.model_routed, ''), 'unknown')` **且** 不含 `model_requested`。这是 AC "按 model_routed 聚合" 的硬断言,不是肉眼看 SQL。配套断言还覆盖 `EXTRACT(HOUR ... AT TIME ZONE 'UTC')` + `ORDER BY ... DESC LIMIT 50`,把任务体 Hints 里 3 个 SQL 形状全验过。
+2. ✅ **路径命名跟 hint**：`GET /api/admin/users/{id}/usage` 与既有 `/quota` 平行,没在 `/api/admin/usage/by-user/...` 引入新顶层资源。Codex 任务体内有备选,选了我推荐的形态。
+3. ✅ **3 SQL 全 parameterized + bounded**：user_id / since / until / top_n 全走 $1-$4;top_n max 50 在 `parseUserUsageFilters` 显式 clamp;since/until 强制 `until > since` 才接受;LEFT JOIN usage_token_breakdown 处理无 breakdown 的边缘事件。无 SQL 注入面,无未封顶 LIMIT。
+4. ✅ **前端 tab 切换不双取数**：`load(false)` 根据 `activeView` 路由到 `loadLogs` / `loadUsage`,各自走 `loadedLogs` / `loadedUsageUserID` 缓存。切回 logs 不重新打 admin API,符合"现有 audit 行为向后兼容"AC。
+5. ✅ **Docker-only verification 第三次合规**：commit message 三次 `docker compose run` (vet / test / `-cover ./cmd/admin`) + node DOM 两个 test 文件。memory `feedback_codex_docker_only_violations` 经 T-016b-MIN + T-MP-DEEPSEEK 两次 enforce 后已稳定。
+
+**H-8 (HIGH) — UI 语言一致性破坏 + 范围外翻译**: 
+
+- `web/index.html` 新增 audit 子面板的全部文案 + 现有 audit tab 标签都改成英文("Admin audit logs" / "User usage ledger" / "Apply" / "Clear" / "User" / "Since" / "Until" / "Top N" / "Model top-N" / "Hourly distribution" / "Recent calls" / "Waiting for user usage" 等)
+- `web/src/views/audit.js` 把**原有** zh-CN 字符串("正在加载审计日志" / "暂无审计日志" / "审计日志加载失败" / 错误 alert) 全改成英文
+- 配套 `audit.test.js` 把断言正则 `/正在加载审计日志/` 改成 `/Loading admin audit logs/` —— 测试改 OK,但说明 Codex 知道这是行为破坏改动
+
+对比基线:`overview.js` "正在加载实时用量数据..." / `users.js` "正在加载用户用量数据..." / `models.js` "无法加载模型用量" / `virtual_models.js` "加载失败" / `credentials.js` — **全 zh-CN**。`index.html` 现有侧栏 "组织消耗概览 / 用户额度分配 / 模型调用分析 / 虚拟模型映射 / 审计日志" 也全 zh-CN。Codex 改完之后,audit 是**唯一英文页面**,视觉风格不一致。
+
+任务体 AC 第 8 条 **"视觉上与现有 overview / users 视图风格一致"** —— 文案语言是风格的一部分。**修正动作**:
+- 把 `web/index.html` audit 子面板新增的英文 label/heading/placeholder 翻成 zh-CN
+- 把 `web/src/views/audit.js` 内被改的**原有**字符串还原回 zh-CN(`正在加载审计日志` / `暂无审计日志` / `审计日志加载失败` 等)
+- 新增 audit usage 视图的 loading/empty/error 全部走 zh-CN
+- 同步把 `audit.test.js` 断言正则改回 zh-CN 匹配
+- 单 fix commit;不要顺手再改任何其它东西
+
+**M-33 (MEDIUM) — tab role/aria-selected 不完整**: `<div role="tablist">` 容器有了,但内层 `<button class="audit-tab">` 缺 `role="tab"` / `aria-selected="true|false"` / `aria-controls="audit-logs-panel|audit-usage-panel"`,且子面板缺 `role="tabpanel"` / `aria-labelledby`。键盘+读屏用户切 tab 体验不完整。修 HIGH 时顺手加 5 个 attr。不阻塞,但 metadata 微小且与 T-UI-L1-THEME 无关,本任务内做完干净。
+
+**N-31 / N-32 / N-33 / N-34 (NIT)**:
+- **N-31 coverage 67.4% (< T-014 基线 72.0%)**: 新代码 ~280 行 backend + 4 个测试,自身覆盖率 OK;掉的是 `postgresOverviewStore.LoadUserUsage*` 三个 helper 的 query/scan/rows.Err 错误分支无 sqlmock。结构性下降,且新增的 mapper 测已经验主路径。**defensible**;v1.1 补 SQL 错误路径 mock 即可,不开任务。
+- **N-32 半小时时区舍入**: `audit.js:369` `Math.round(-getTimezoneOffset() / 60)` 在 India/Iran/Nepal 用户(+5:30 / +3:30 / +5:45)会按整数偏移,边界小时桶分配错位 1 小时。对 UTC/中国/美国用户正确。v1 用户群可接受,记录在案。
+- **N-33 "custom" period 半开窗**: `userUsageWindow` 在用户只填 `since` 时,`until = monthEnd`(可能未来时),name 仍标 "custom"。语义清晰但 UX 略奇怪;前端 period 没有可视化展示,**当前不影响**。
+- **N-34 viewer 跨用户读权限**: `protectedRead` 让 viewer 能读任意 `user_id` 的 usage(模型 top + 近 50 次 timestamp+model+tokens+status)。**v1 单组织 demo 内可接受**(与 `/api/admin/users` 已有的全用户列表一致);多租户拆分时与 `/quota` 一起需补 org scope check。
+
+**Codex 下一步**: 修 H-8 + 顺手做 M-33;一个 fix commit `fix: restore zh-CN audit copy + complete tab ARIA`,verification 行加跑 `node --test web/src/views/audit.test.js`。再贴回我做二审。N-31~N-34 不开任务,留 v1.1 评估时一并看。
+
+---
+
 ## R-016b-MIN (T-016b-MIN 实施, impl `4b3d6b32` + status `ac66a14a`)
 
 **结论: `[+] Approved`** — ADR 0005 接受标准全达，**v1 上线 ops UX gap 关闭**（加 key → 30s 自动生效，无需手动 restart gateway）。无 CRITICAL/HIGH；2 MEDIUM + 4 NIT 不阻塞，留 v1 上线后顺手。
