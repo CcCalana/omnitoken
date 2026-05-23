@@ -8,6 +8,10 @@ coverage.out
 .env.*
 !.env.example
 
+# Master key files (envelope encryption secret)
+.omnitoken-master-key
+*.master-key
+
 # IDE/editor
 .idea/
 .vscode/

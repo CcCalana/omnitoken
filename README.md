@@ -2,170 +2,150 @@
 
 Language: English | [简体中文](README.zh-CN.md)
 
-OmniToken is an enterprise AI access gateway for internal platform teams. It
-issues virtual API keys, proxies AI API requests to upstream model providers,
-records usage and cost, and gives administrators a control plane for user, key,
-model, provider, and budget governance.
+OmniToken is a self-hosted AI access gateway for internal platform teams. It
+issues virtual API keys, proxies OpenAI-compatible requests to upstream model
+providers, records token usage and cost, and gives administrators a control
+plane for users, keys, models, providers, and budgets.
 
-The long-term positioning is deliberately narrow: OmniToken is not another
-"largest model marketplace". It is a self-hosted AI access-control and cost
-ledger layer for companies that need to know who used which model, through
-which key, under which policy, at what cost, without leaking provider keys or
-prompt bodies. Broad provider support is still required, but it should live in
-a provider-adapter layer rather than dilute the governance product.
-
-> V1 status: Phase 2-B integration candidate. The local flow below now uses
-> real seeded admin/viewer logins, RBAC-gated admin writes, monthly user budget
-> enforcement, audit logs, and virtual model routing. The dev virtual-key
-> endpoint is still for local demos and is not a production signup system.
+OmniToken is not an aggregate model marketplace. It is an access-control and
+cost ledger layer for companies that need to know who used which model, through
+which key, under which policy, at what cost — without leaking provider keys or
+prompt bodies.
 
 ## Why OmniToken
 
-Most AI gateway products are converging around a few common shapes:
-
 | Market pattern | Examples | Strong at | OmniToken differentiation |
 | --- | --- | --- | --- |
-| Broad model proxy | [LiteLLM](https://docs.litellm.ai/docs/proxy_server), [New API](https://github.com/QuantumNous/new-api) | Many providers, OpenAI-compatible routing, virtual keys, budgets, retries | Provider breadth is necessary for adoption, but OmniToken pairs it with a stricter enterprise ledger: user/project/key attribution, provider-specific token breakdowns, and audit-ready cost records. |
-| Hosted developer gateway | [Vercel AI Gateway](https://vercel.com/docs/ai-gateway), [Cloudflare AI Gateway](https://developers.cloudflare.com/ai-gateway/) | Fast hosted onboarding, observability, caching, simple base URL migration | Self-hosted by default, designed for internal security boundaries, private cost centers, and controllable data retention. |
-| API gateway plugin suite | [Kong AI Gateway](https://docs.konghq.com/gateway/latest/get-started/ai-gateway/), [Envoy AI Gateway](https://aigateway.envoyproxy.io/) | Mature traffic management, plugins, Kubernetes-native operations | Product surface is AI-governance-first instead of generic gateway-first: virtual key policy, cost accounting, and admin workflows are first-class. |
-| Developer portal / API product platform | [APIPark](https://github.com/APIParkLab/APIPark), enterprise API portals | API subscription, approvals, developer onboarding | Planned portal flow is centered on internal AI usage: request access, issue scoped keys, enforce model/budget policy, and show chargeback evidence. |
-| LLM observability and experimentation | [Helicone](https://docs.helicone.ai/getting-started/integration-method/gateway), [TensorZero](https://www.tensorzero.com/docs/gateway) | Request logs, traces, prompts, experiments, feedback loops | Observability is cost/security oriented first. Prompt capture is not the default; accounting, redaction, and auditability come before experimentation. |
+| Broad model proxy | [LiteLLM](https://docs.litellm.ai/docs/proxy_server), [New API](https://github.com/QuantumNous/new-api) | Many providers, OpenAI-compatible routing, virtual keys, budgets, retries | Pairs provider breadth with a stricter enterprise ledger: user/project/key attribution, provider-specific token breakdowns, audit-ready cost records. |
+| Hosted developer gateway | [Vercel AI Gateway](https://vercel.com/docs/ai-gateway), [Cloudflare AI Gateway](https://developers.cloudflare.com/ai-gateway/) | Fast hosted onboarding, observability, caching, simple base URL migration | Self-hosted by default; designed for internal security boundaries, private cost centers, and controllable data retention. |
+| API gateway plugin suite | [Kong AI Gateway](https://docs.konghq.com/gateway/latest/get-started/ai-gateway/), [Envoy AI Gateway](https://aigateway.envoyproxy.io/) | Traffic management, plugins, Kubernetes-native operations | AI-governance-first product surface: virtual key policy, cost accounting, admin workflows are first-class, not plugins. |
+| LLM observability | [Helicone](https://docs.helicone.ai/getting-started/integration-method/gateway), [TensorZero](https://www.tensorzero.com/docs/gateway) | Request logs, traces, prompts, experiments | Cost- and security-oriented observability. Prompt capture is not the default; accounting, redaction, and auditability come before experimentation. |
 
-In practice, OmniToken aims to own six things well:
+## Features
 
-1. Enterprise virtual keys: organization, project, user, key prefix, status,
-   expiration, model allow-list, budgets, RPM/TPM, and rotation.
-2. Accurate AI cost ledger: prompt, completion, cached, reasoning, multimodal,
-   provider, model requested, model actual, latency, status, and settlement
-   state.
-3. Safe-by-default gateway: no provider key exposure, no full Authorization
-   header logging, no prompt body logging by default, unified error envelopes.
-4. Provider adapter layer: OpenAI-compatible providers first, then native
-   adapters for Anthropic, Gemini/Vertex, Bedrock, Azure OpenAI, and private
-   OpenAI-compatible runtimes.
-5. Internal admin workflow: registration or invite, user setup, key issuance,
-   usage review, budget review, and eventually approval/audit trails.
-6. Self-hosted control plane: Go data plane, Postgres ledger, Docker/Kubernetes
-   deployment path, and a static admin console that can be replaced later.
+**Multi-provider key pool**
+- Manages credentials for Volcano Ark and DeepSeek under one gateway, with
+  AES-256-GCM envelope encryption at rest.
+- Priority-ordered selection with weighted round-robin within a priority tier;
+  429/degraded triggers cross-provider fallback.
+- Usage is attributed to the actual provider + credential that served each
+  request.
 
-## Provider Strategy
+**Virtual model routing**
+- Clients call stable aliases (`chat-fast`, `chat-balanced`, `chat-quality`,
+  `chat-code`, `chat-experimental`); the gateway rewrites them to real
+  provider model strings.
 
-The current demo uses Volcano Ark because it gives us a fast OpenAI-compatible
-path with streaming usage. The product, however, must be provider-neutral to be
-widely useful. Provider support should grow in layers:
+**RBAC and quotas**
+- Three roles: admin / member / viewer, enforced by a hard-coded policy matrix.
+- Per-user `monthly_token_budget_limit`, checked before usage is recorded;
+  over-budget requests return a 402 quota envelope.
+- Admins edit user quotas through the web console.
 
-| Stage | Provider class | Examples | Product requirement |
-| --- | --- | --- | --- |
-| Current demo | One OpenAI-compatible upstream | Volcano Ark | Prove virtual-key auth, SSE proxying, usage capture, and ledger writes. |
-| Near term | OpenAI-compatible providers | OpenAI, Azure OpenAI, DeepSeek, DashScope/Qwen, OpenRouter, vLLM-compatible private endpoints | Same gateway contract, provider credential management, model catalog, health checks, and per-provider pricing. |
-| Native adapters | Provider-specific APIs | Anthropic Messages, Google Gemini/Vertex AI, AWS Bedrock | Request/response adapters plus provider-specific usage mappers for cache, reasoning, image, audio, and tool tokens. |
-| Enterprise routing | Provider pools | Region-specific keys, fallback chains, weighted routing, canaries | Policy-driven routing by org, project, model, latency, budget, availability, and compliance tags. |
+**Virtual API keys**
+- `omt_`-prefixed keys issued by the admin service. Plaintext is returned once
+  on creation; the database stores only `key_prefix` and bcrypt hash.
 
-The design rule is simple: one internal OpenAI-compatible entry point for
-callers, many provider adapters behind it, and no loss of billing fidelity when
-providers report usage differently.
+**Audit and safety**
+- All admin write operations (`login`, `create_virtual_key`, `update_quota`,
+  `create_credential`, `disable_credential`, …) land in `audit_logs` with
+  before/after snapshots.
+- Per-key RPM anomaly warning over a 5-minute window (default 60 RPM).
+- Logs never print provider keys, virtual keys, prompt bodies, or
+  Authorization headers; streaming responses use a unified error envelope.
 
-## Target Product Flow
-
-The final product should feel like this for a company administrator:
-
-1. Register or create an organization.
-2. Invite users or sync them from the company identity provider.
-3. Add upstream provider credentials once, stored securely.
-4. Create projects and model access policies.
-5. Issue virtual keys to users, apps, or service accounts.
-6. Let teams call one OpenAI-compatible gateway endpoint.
-7. Enforce quotas, model allow-lists, budget limits, and rate limits.
-8. Review usage by org, project, user, key, model, provider, and time window.
-9. Export audit and cost data for FinOps, security review, and chargeback.
-
-The current demo implements the smallest useful slice of that path:
-
-1. Use seeded organization and users.
-2. Fill the current demo upstream key. Today that is Volcano Ark; the product
-   roadmap requires more provider adapters.
-3. Create one virtual key.
-4. Send a chat completion through the gateway.
-5. See real usage in admin APIs and the web console.
+**Operations**
+- Admin web console with an **Upstream Credentials** tab — add or disable
+  provider credentials without SSH or `.env` edits.
+- Gateway polls the database every 30 seconds (configurable) and atomically
+  swaps in new credentials, so adds take effect without restart.
+- OpenAI-compatible entry point: `POST /v1/chat/completions` and
+  `GET /v1/models` work with existing OpenAI SDKs.
+- One-command Docker Compose stack: gateway + admin + Postgres + Redis + NATS,
+  with migrations and seed applied automatically.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  User["User or app with virtual key"] --> Gateway["Gateway :8080"]
+  User["Client with virtual key"] --> Gateway["Gateway :8080"]
   Gateway --> Auth["Virtual key auth"]
-  Gateway --> Adapters["Provider adapter layer"]
-  Adapters --> Ark["Current demo: Volcano Ark"]
-  Adapters -. planned .-> OpenAI["OpenAI / Azure OpenAI"]
-  Adapters -. planned .-> Native["Anthropic / Gemini / Bedrock"]
-  Adapters -. planned .-> Private["Private OpenAI-compatible runtimes"]
+  Gateway --> Selector["Credential selector<br/>(priority + fallback)"]
+  Selector --> Ark["Volcano Ark"]
+  Selector --> DeepSeek["DeepSeek"]
   Gateway --> Usage["usage_events + token breakdown + cost_ledger"]
   Admin["Admin API :8081"] --> Usage
-  Web["web/ static console"] --> Admin
+  Admin --> Credentials["upstream_credentials (encrypted)"]
+  Web["web/ admin console"] --> Admin
   Postgres[(Postgres)] --> Auth
   Postgres --> Usage
+  Postgres --> Credentials
 ```
-
-## What Works Today
-
-- OpenAI-compatible `GET /v1/models`
-- OpenAI-compatible `POST /v1/chat/completions`
-- Seeded admin/viewer login through the admin service
-- Demo virtual-key creation through the admin service
-- Postgres migrations and seed data through Docker Compose
-- Usage and cost ledger writes after chat completions
-- Monthly user budget enforcement with 402 quota envelopes
-- Admin APIs for overview, users, models, virtual models, and audit logs
-- Static admin console in `web/`
-- Virtual model aliases such as `chat-fast` routed to real Ark model names
-- Current provider adapter: Volcano Ark through an OpenAI-compatible endpoint
 
 ## Prerequisites
 
-- Docker Desktop or a compatible Docker engine
-- Go 1.23+ for local tests and tools
-- Python 3 for serving the static web console
-- `curl`
-- `make` optional; Windows users can use `scripts/dev.ps1`
+- Docker (Compose v2)
+- A 32-byte master key encoded as 64 hex characters (used for envelope
+  encryption of upstream credentials)
+- At least one upstream provider key (Volcano Ark coding plan key or DeepSeek
+  API key)
+- Optional, for local development: Go 1.23+, Python 3, `curl`, `make`
 
-## Quick Start
+## Deployment
 
-### 1. Create `.env`
+### 1. Generate the master key
+
+```bash
+openssl rand -hex 32 > .omnitoken-master-key
+```
+
+Bash / Linux / macOS:
+
+```bash
+chmod 600 .omnitoken-master-key
+export OMNITOKEN_MASTER_KEY_FILE="$(pwd)/.omnitoken-master-key"
+```
+
+PowerShell:
+
+```powershell
+$env:OMNITOKEN_MASTER_KEY_FILE = "$PWD\.omnitoken-master-key"
+```
+
+Use the same key for the gateway and admin processes; rotating it requires
+re-encrypting all stored credentials (see
+[`docs/operations/master-key-rotation.md`](docs/operations/master-key-rotation.md)).
+
+### 2. Create `.env`
+
+```bash
+cp .env.example .env
+```
 
 PowerShell:
 
 ```powershell
 Copy-Item .env.example .env
-notepad .env
 ```
 
-Bash:
-
-```bash
-cp .env.example .env
-${EDITOR:-vi} .env
-```
-
-Fill in at least these values for the current Ark demo:
+Fill in at minimum:
 
 ```dotenv
-OMNITOKEN_ADMIN_BOOTSTRAP_TOKEN=
+OMNITOKEN_MASTER_KEY_FILE=/absolute/path/to/.omnitoken-master-key
 OMNITOKEN_ADMIN_SESSION_TTL=24h
-OMNITOKEN_ADMIN_KEY_ANOMALY_RPM_5M=60
-OMNITOKEN_ARK_API_KEY=<your-volcano-ark-dev-key>
-OMNITOKEN_ARK_DEFAULT_MODEL=ark-code-latest
 OMNITOKEN_ADMIN_CORS_ORIGINS=http://localhost:3000
+
+# Provide at least one provider. Both can coexist.
+OMNITOKEN_ARK_API_KEY=<your-volcano-ark-key>
+OMNITOKEN_DEEPSEEK_KEYS_1=<your-deepseek-key>
 ```
 
-Do not commit `.env`. It is intentionally ignored by git.
+`.env` is gitignored. Leave `OMNITOKEN_ADMIN_BOOTSTRAP_TOKEN` empty — admin
+login goes through the session endpoint.
 
-Leave `OMNITOKEN_ADMIN_BOOTSTRAP_TOKEN` empty for the normal v1 flow. Setting
-it only enables a legacy local fallback bearer token; session login remains the
-primary admin path.
+### 3. Start the stack
 
-### 2. Start the local stack
-
-```powershell
+```bash
 make up
 ```
 
@@ -176,7 +156,8 @@ Windows fallback:
 ```
 
 This builds the gateway/admin/migrate images, starts Postgres/Redis/NATS, runs
-database migrations, applies `deploy/postgres/002_seed.sql`, and starts:
+database migrations, seeds the demo organization and roles, seeds the upstream
+credentials from `.env`, and exposes:
 
 | Service | URL |
 | --- | --- |
@@ -186,35 +167,44 @@ database migrations, applies `deploy/postgres/002_seed.sql`, and starts:
 | Redis | `localhost:16379` |
 | NATS | `localhost:14222` |
 
-Check health:
+Health checks:
 
-```powershell
-curl.exe http://localhost:8080/healthz
-curl.exe http://localhost:8081/healthz
+```bash
+curl http://localhost:8080/healthz
+curl http://localhost:8081/healthz
 ```
 
-### 3. Use the seeded demo tenant
+### 4. Open the web console
 
-The seed file creates one organization, one project, and eleven demo users.
-Use the demo admin user for the first trial:
+```bash
+cd web && python -m http.server 3000
+```
 
-| Field | Value |
-| --- | --- |
-| Organization | `Demo Organization` |
-| Organization ID | `00000000-0000-0000-0000-000000000001` |
-| Project | `Default Project` |
-| Project ID | `00000000-0000-0000-0000-000000000101` |
-| Demo Admin | `admin@democorp.local` |
-| Demo Admin User ID | `00000000-0000-0000-0000-000000000201` |
-| Demo Admin Password | `password` |
-| Demo Viewer | `user01@democorp.local` |
-| Demo Viewer User ID | `00000000-0000-0000-0000-000000000202` |
-| Demo Viewer Password | `password` |
+Then open:
 
-There is no public signup endpoint yet. For local demos, "registration" means
-using the seeded tenant or inserting another user into Postgres.
+```text
+http://localhost:3000/?admin=http://localhost:8081
+```
 
-### 4. Log in and create a virtual key
+Sign in with one of the seeded accounts:
+
+| Role | Email | Password |
+| --- | --- | --- |
+| Admin | `admin@democorp.local` | `password` |
+| Viewer | `user01@democorp.local` | `password` |
+
+The console has five views:
+
+- **Overview** — monthly tokens, estimated cost, active users, trend, model share.
+- **Users** — per-user token usage and monthly budget editing (admin only).
+- **Models** — prompt/completion split, cost, call count.
+- **Virtual Models** — virtual aliases and their real provider model mappings.
+- **Upstream Credentials** — add or disable provider credentials (admin only).
+- **Audit** — admin login and write-operation trail.
+
+## Usage
+
+### Issue a virtual key
 
 PowerShell:
 
@@ -224,174 +214,71 @@ $Login = Invoke-RestMethod `
   -Uri "http://localhost:8081/api/admin/login" `
   -ContentType "application/json" `
   -Body (@{ email = "admin@democorp.local"; password = "password" } | ConvertTo-Json)
-
 $AdminToken = $Login.token
-$Body = @{
-  organization_id = "00000000-0000-0000-0000-000000000001"
-  user_id = "00000000-0000-0000-0000-000000000201"
-} | ConvertTo-Json
 
-$KeyResponse = Invoke-RestMethod `
+$Key = Invoke-RestMethod `
   -Method Post `
   -Uri "http://localhost:8081/api/admin/dev/virtual-keys" `
   -Headers @{ Authorization = "Bearer $AdminToken" } `
   -ContentType "application/json" `
-  -Body $Body
-
-$VirtualKey = $KeyResponse.virtual_key
-$KeyResponse | ConvertTo-Json
+  -Body (@{
+    organization_id = "00000000-0000-0000-0000-000000000001"
+    user_id = "00000000-0000-0000-0000-000000000201"
+  } | ConvertTo-Json)
+$VirtualKey = $Key.virtual_key
 ```
 
 Bash:
 
 ```bash
-ADMIN_TOKEN="$(curl -sS -X POST http://localhost:8081/api/admin/login \
+ADMIN_TOKEN=$(curl -sS -X POST http://localhost:8081/api/admin/login \
   -H "Content-Type: application/json" \
-  -d '{"email":"admin@democorp.local","password":"password"}' \
-  | jq -r '.token')"
+  -d '{"email":"admin@democorp.local","password":"password"}' | jq -r .token)
 
-curl -sS -X POST http://localhost:8081/api/admin/dev/virtual-keys \
+VIRTUAL_KEY=$(curl -sS -X POST http://localhost:8081/api/admin/dev/virtual-keys \
   -H "Authorization: Bearer ${ADMIN_TOKEN}" \
   -H "Content-Type: application/json" \
-  -d '{"organization_id":"00000000-0000-0000-0000-000000000001","user_id":"00000000-0000-0000-0000-000000000201"}'
+  -d '{"organization_id":"00000000-0000-0000-0000-000000000001","user_id":"00000000-0000-0000-0000-000000000201"}' \
+  | jq -r .virtual_key)
 ```
 
-The response contains `virtual_key`. Copy it now; the plaintext secret is only
-returned in this response. It starts with `omt_`.
+The plaintext key (prefixed `omt_`) is only returned once. Copy it immediately.
 
-### 5. User trial: call the gateway
+### Call the gateway
 
-List available models:
+List models:
 
-```powershell
-curl.exe http://localhost:8080/v1/models `
-  -H "Authorization: Bearer $VirtualKey"
+```bash
+curl http://localhost:8080/v1/models -H "Authorization: Bearer $VIRTUAL_KEY"
 ```
 
-Send a non-streaming chat completion:
+Non-streaming chat completion:
 
-```powershell
-curl.exe -X POST http://localhost:8080/v1/chat/completions `
-  -H "Authorization: Bearer $VirtualKey" `
-  -H "Content-Type: application/json" `
+```bash
+curl -X POST http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $VIRTUAL_KEY" \
+  -H "Content-Type: application/json" \
   -d '{"model":"chat-fast","messages":[{"role":"user","content":"Output exactly: pong"}],"stream":false,"max_tokens":32}'
 ```
 
-Streaming SSE example:
+Streaming SSE:
 
-```powershell
-curl.exe --no-buffer -X POST http://localhost:8080/v1/chat/completions `
-  -H "Authorization: Bearer $VirtualKey" `
-  -H "Content-Type: application/json" `
-  -d '{"model":"chat-fast","messages":[{"role":"user","content":"Count from 1 to 5."}],"stream":true,"max_tokens":64}'
+```bash
+curl --no-buffer -X POST http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $VIRTUAL_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"chat-fast","messages":[{"role":"user","content":"Count 1 to 5."}],"stream":true,"max_tokens":64}'
 ```
 
-The gateway keeps the virtual key local, resolves `chat-fast` to the seeded Ark
-model mapping, injects the real Ark key upstream, and records usage after the
-response.
+The gateway keeps the virtual key local, resolves the alias, injects the real
+provider credential upstream, and records usage after the response completes.
 
-### 6. Verify usage
+### Add upstream credentials at runtime
 
-Wait a moment for the deferred ledger write, then query admin APIs:
-
-```powershell
-Start-Sleep -Seconds 2
-curl.exe http://localhost:8081/api/admin/overview -H "Authorization: Bearer $AdminToken"
-curl.exe http://localhost:8081/api/admin/users -H "Authorization: Bearer $AdminToken"
-curl.exe http://localhost:8081/api/admin/models -H "Authorization: Bearer $AdminToken"
-curl.exe http://localhost:8081/api/admin/virtual-models -H "Authorization: Bearer $AdminToken"
-curl.exe http://localhost:8081/api/admin/audit-logs -H "Authorization: Bearer $AdminToken"
-```
-
-Expected signals:
-
-- `total_tokens > 0`
-- `active_users >= 1`
-- `model_usage` includes the Ark-backed model
-- `users` shows the demo admin user with non-zero usage
-- `virtual-models` includes `chat-fast -> kimi-k2.6`
-- `audit-logs` includes `login` and `create_virtual_key`
-
-### 7. Open the web console
-
-Serve `web/` on `localhost:3000`, which matches the default admin CORS allow
-list:
-
-```powershell
-cd web
-python -m http.server 3000
-```
-
-Open:
-
-```text
-http://localhost:3000/?admin=http://localhost:8081
-```
-
-Sign in with `admin@democorp.local / password` for write access, or
-`user01@democorp.local / password` for read-only viewer access.
-
-The console has five views:
-
-- Overview: monthly tokens, estimated cost, active users, trend, model share
-- Users: per-user token usage and monthly budget editing for admins
-- Models: prompt/completion token split, cost, and call count
-- Virtual Models: seeded aliases and real Ark model mappings
-- Audit: admin login and write-operation trail
-
-### 8. Run the v1 smoke
-
-The control-plane smoke does not spend tokens by default:
-
-```powershell
-python scripts\v1_integration.py
-```
-
-If Windows has the Python launcher instead:
-
-```powershell
-py -3 scripts\v1_integration.py
-```
-
-To include the real Ark non-streaming/streaming chat and quota 402 check:
-
-```powershell
-$env:OMNITOKEN_RUN_REAL_UPSTREAM="1"
-python scripts\v1_integration.py
-```
-
-## Adding Another Local Demo User
-
-Open a psql shell:
-
-```powershell
-docker compose --env-file .env -f deploy/docker-compose.yml exec postgres `
-  psql -U omnitoken -d omnitoken
-```
-
-Insert a user and grant the seeded member role:
-
-```sql
-INSERT INTO users (organization_id, email, display_name)
-VALUES (
-  '00000000-0000-0000-0000-000000000001',
-  'new.user@democorp.local',
-  'New Demo User'
-)
-RETURNING id;
-
-INSERT INTO role_assignments (organization_id, user_id, role_id)
-SELECT
-  '00000000-0000-0000-0000-000000000001',
-  users.id,
-  roles.id
-FROM users
-JOIN roles ON roles.canonical_name = 'member'
-WHERE users.email = 'new.user@democorp.local'
-ON CONFLICT (organization_id, user_id, role_id) DO NOTHING;
-```
-
-Use the returned `users.id` in the virtual-key creation request.
+In the web console, open **Upstream Credentials → Add credential**, choose the
+provider (Ark or DeepSeek), paste the key, set priority and weight, and save.
+The gateway picks the new credential up within `OMNITOKEN_CREDENTIAL_POLL_INTERVAL`
+(default 30 s); no restart needed.
 
 ## Common Commands
 
@@ -401,44 +288,36 @@ Use the returned `users.id` in the virtual-key creation request.
 | Stop stack | `make down` |
 | Follow logs | `make logs` |
 | Windows start | `.\scripts\dev.ps1 up` |
-| Reset local volumes | `docker compose --env-file .env -f deploy/docker-compose.yml down -v` |
-| Run Go tests | `go test -count=1 ./...` |
-| Run vet | `go vet ./...` |
+| Reset volumes | `docker compose --env-file .env -f deploy/docker-compose.yml down -v` |
+| Go tests | `go test -count=1 ./...` |
 | Race tests | `make test` |
 
 ## Troubleshooting
 
-### Gateway returns `401 invalid_api_key`
+**Gateway returns `401 invalid_api_key`**
+Use the full `virtual_key` returned by the admin API, not the `key_prefix`. The
+plaintext key starts with `omt_`.
 
-Use the full `virtual_key` returned by `/api/admin/dev/virtual-keys`, not the
-`key_prefix`. The key should start with `omt_`.
+**Gateway cannot reach the upstream provider**
+Verify the credential is listed and enabled in the **Upstream Credentials** tab.
+If you added it via `.env`, confirm `OMNITOKEN_ARK_API_KEY` or
+`OMNITOKEN_DEEPSEEK_KEYS_*` is set, then `make up` again.
 
-### Gateway cannot reach the upstream provider
-
-For the current Ark demo, check that `.env` contains `OMNITOKEN_ARK_API_KEY`,
-then recreate the gateway:
-
-```powershell
-make up
-```
-
-### Web console shows a CORS error
-
-Serve the console from `http://localhost:3000` or add your origin to
-`OMNITOKEN_ADMIN_CORS_ORIGINS` in `.env`, then restart admin:
+**Web console shows a CORS error**
+Serve the console from `http://localhost:3000`, or add your origin to
+`OMNITOKEN_ADMIN_CORS_ORIGINS` and restart admin:
 
 ```dotenv
 OMNITOKEN_ADMIN_CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 ```
 
-### Admin charts are empty
+**Admin charts are empty**
+Send at least one successful `/v1/chat/completions` request and wait a second
+or two for usage recording, then reload the console.
 
-Run at least one successful `/v1/chat/completions` request and wait one or two
-seconds for usage recording. Then reload the web console.
+**Start from a clean database**
 
-### Start from a clean database
-
-```powershell
+```bash
 docker compose --env-file .env -f deploy/docker-compose.yml down -v
 make up
 ```
@@ -448,21 +327,30 @@ make up
 | Path | Purpose |
 | --- | --- |
 | `cmd/gateway` | OpenAI-compatible gateway |
-| `cmd/admin` | Admin API and dev virtual-key endpoint |
+| `cmd/admin` | Admin API and admin web backend |
 | `cmd/migrate` | golang-migrate wrapper |
+| `cmd/upstream-credential-seed` | Encrypt and seed credentials from `.env` |
 | `internal/auth` | Virtual-key generation and auth middleware |
-| `internal/proxy` | Current Ark chat-completions proxy; future home for provider adapters |
-| `internal/usage` | Usage parsing, recording, and cost ledger writes |
+| `internal/proxy` | Chat-completions proxy and provider adapters |
+| `internal/credentials` | Encrypted credential pool, polling reloader |
+| `internal/usage` | Usage parsing, recording, cost ledger writes |
 | `migrations` | Database schema migrations |
-| `deploy` | Dockerfiles, Compose, and seed SQL |
+| `deploy` | Dockerfiles, Compose, seed SQL |
 | `web` | Static admin console |
-| `docs/runbooks/local-dev.md` | Detailed local development notes |
+| `docs/operations` | Operations runbooks (master key rotation, …) |
+| `docs/release` | Release notes |
 
 ## Security Notes
 
-- Never commit `.env`, provider keys, virtual keys, or full Authorization
-  headers.
-- Local demo pricing in `deploy/postgres/002_seed.sql` is placeholder data and
-  must not be used for commercial quotes.
-- The dev virtual-key endpoint is not a production admin API.
-- Logs are designed not to print provider keys, virtual keys, or prompt bodies.
+- Never commit `.env`, master keys, provider keys, virtual keys, or full
+  Authorization headers.
+- Pricing in `deploy/postgres/002_seed.sql` is placeholder data and must not be
+  used for commercial quotes.
+- The dev virtual-key endpoint is intended for admins issuing keys to internal
+  users, not as a public signup API.
+- Master key rotation procedure:
+  [`docs/operations/master-key-rotation.md`](docs/operations/master-key-rotation.md).
+
+## Release
+
+- v1.0.0: [`docs/release/v1.0.0.md`](docs/release/v1.0.0.md)
