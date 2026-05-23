@@ -26,6 +26,8 @@
 | 05-21 | **T-CONC-RERUN 任务体写好**（status:todo, propose 前置=是）。mock baseline + 真 Ark 多 key 池验证 + DB/quota 观察；5 propose 决策点：mock 形式 / 并发档位 / T-CONC-DSN 是否前置 / pg_stat_statements 是否启 / 报告位置。严格 measurement-only |
 | 05-23 | **README 用户化重写 + 公开仓库上线**：READMEs 去草稿,LICENSE Apache-2.0,`.omnitoken-master-key` 加入 gitignore;`master` → `main`;新建 https://github.com/CcCalana/omnitoken (public) |
 | 05-23 | **T-UI-L1-THEME 任务体写好**（status:todo）。借鉴 metapi (MIT) 前端设计语言 L1 档：design tokens CSS + Toast + Modal + dark theme,守住 vanilla JS 不引入 React/Tailwind/build |
+| 05-23 | **上线门评估**：用户列三条 release-gate ①前端看报 ✅(overview 趋势+模型环图,无时间切换是已知非阻塞)/②管理员分配额度 ✅(users tab 月度预算编辑 + RBAC)/③审计查看用户使用场景 ❌ 缺口 → 落地为 T-AUDIT-USAGE-VIEW |
+| 05-23 | **T-AUDIT-USAGE-VIEW 任务体写好**（status:todo）。audit tab 加 tab 切换"管理操作流水 / 用户使用流水"；后者按 user_id 聚合 usage_events，含模型 top-N、小时分布、近 N 次调用详情 |
 
 ---
 
@@ -420,3 +422,72 @@ Result: `4b3d6b32` — admin credential add/disable + 30s polling hot reload lan
 - 上游灵感：`github.com/cita-777/metapi` (MIT) — 仅 `src/web/index.css` + `src/web/components/Toast.tsx` + `src/web/components/CenteredModal.tsx`
 - 本地基线：`web/styles.css` (899 行) / `web/src/app.js` (114 行) / `web/src/views/*.js` (6 个 view, 共 ~1100 行)
 - README 已说明 web console 启动方式：`README.md` § "Open the web console"
+
+---
+
+## T-AUDIT-USAGE-VIEW Audit Tab 加用户使用流水（上线门 ③） [phase:v1-release] [owner:codex] [status:todo]
+
+**目标**: 把 audit tab 拓展为双 tab：「管理操作流水」（现有 audit_logs 视图）/「用户使用流水」（**新**，按用户聚合 usage_events）。后者展示每个用户主要使用了哪些模型、什么时段、最近调用了什么。**上线门 ③** —— 用户已明确这是 release-gate 要求。
+
+**背景**: 数据已经齐全（`usage_events.user_id` 在 000006 加列，`model_routed` 在 000012 加列，token breakdown 在 `usage_token_breakdown`），但 admin API 没暴露 per-user 聚合 endpoint，UI 也没视图。
+
+**涉及**:
+- 后端
+  - `cmd/admin/main.go` —— 新增 `GET /api/admin/users/{user_id}/usage`（或 `/api/admin/usage/by-user/{user_id}`，命名 Codex 自决）
+  - SQL 聚合查询：`usage_events JOIN usage_token_breakdown` on user_id，分别返回
+    - `model_top`: model_routed → total_tokens / call_count，按 tokens DESC 取前 N（建议 N=10，可 query param 调）
+    - `hourly_distribution`: 24 小时×日历日的二维 heatmap 输入，或者退一步只给"过去 7 天 hour-of-day 24 槽位"的一维分布（建议先做一维，复杂度低）
+    - `recent_calls`: 最近 50 条（含 created_at / model_routed / status_code / total_tokens / streaming），按 created_at DESC
+  - RBAC：admin + viewer 都可读（沿用 audit-logs 的策略，read-only 操作 viewer 不阻塞）
+  - 时间范围：默认本月（与 overview 一致），支持 `since` / `until` query param（RFC3339）
+- 前端
+  - `web/index.html` —— audit pane 顶部加 tab 切换 UI（两个 button-like tab）
+  - `web/src/views/audit.js` 重构或拆分：保留 admin-write 视图，加 user-usage 视图
+  - 新建 `web/src/views/audit_usage.js`（或合并到 audit.js 看 file 体积）—— 用户使用流水的渲染、模型 top 表 + 小时分布柱状图（用现有 Chart.js）+ 近 N 次详情表
+  - "用户使用流水" 入口的交互：默认展示 users 列表（用户名 + email + 月度 tokens）；点击某用户展开右侧详情（模型 top / 小时分布 / 近 50 次），或下拉切换用户
+  - 复用 design tokens（待 T-UI-L1-THEME 落地后；如果先做本任务，先用现有色值，theme 任务落地时再统一替换）
+
+**接受标准**:
+- [ ] 后端 endpoint 返回 JSON envelope 含三个字段：`{ "user_id", "period", "model_top": [...], "hourly_distribution": [24 个 number], "recent_calls": [{...}] }`
+- [ ] SQL 单查询或最多 3 个查询合成响应；避免 N+1
+- [ ] 聚合按 `model_routed`，**不是** `model_requested` —— 用户实际命中的真实模型才是"主要使用场景"
+- [ ] 时间范围默认 `period = current_month`；`since`/`until` 覆盖时返回真实窗口
+- [ ] RBAC：admin 与 viewer 均可读；非登录态 401；session 失效 401
+- [ ] 单测：`cmd/admin` 至少 3 个测试（happy path / 空用户 / 时间窗 filter）；coverage 不退化
+- [ ] 前端 audit pane 默认开"管理操作流水"（保持现有行为，向后兼容），切换到"用户使用流水"加载新数据
+- [ ] 用户使用流水的"用户选择"交互至少能用：列表点击 or 下拉切换
+- [ ] 模型 top 表展示模型名 / token 数 / 调用次数 / 占比百分比
+- [ ] 小时分布渲染为柱状图（24 槽位 0-23 时），空槽位也要显示零柱
+- [ ] 近 N 次详情表至少含 5 列：时间 / 模型 / 状态码 / tokens / 流式标记
+- [ ] 视觉上与现有 overview / users 视图风格一致（不要引入新组件库）
+- [ ] 现有 `web/src/views/audit.test.js` 不破坏，必要时同步更新
+- [ ] **Docker-only**：所有 Go test 在 docker 内跑（`docker compose --env-file .env -f deploy/docker-compose.yml run --rm test ...` 或 `make test`）；Codex 在 PR 描述中显式自报"已在 docker 内跑通"
+
+**不在范围**:
+- ❌ 虚拟 Key 维度的贡献分析（用户讨论已排除）
+- ❌ 时段热图二维（周×小时）——本任务只做一维（hour-of-day）
+- ❌ 导出 CSV（与 overview 看报扩展一起留 v1.1）
+- ❌ 单用户级别的告警 / 阈值配置
+- ❌ 与 `audit_logs` 表合并查询（两类数据语义不同，分开看更清晰）
+- ❌ 后端引入新依赖（继续 sqlc/pgx 既有路径）
+
+**依赖**: 无强依赖。**软依赖** T-UI-L1-THEME（如果 T-UI-L1-THEME 先落地，本任务的新组件直接吃 design tokens；如果本任务先落地，theme 任务那边把新组件一起搬到变量）
+
+**Hints**:
+- **SQL 聚合查询提示**: 
+  - model_top: `SELECT u.model_routed, SUM(t.prompt_tokens + t.completion_tokens + ...) AS tokens, COUNT(*) FROM usage_events u JOIN usage_token_breakdown t ON ... WHERE u.user_id = $1 AND u.created_at >= $2 GROUP BY 1 ORDER BY 2 DESC LIMIT $3`
+  - hourly_distribution: `SELECT EXTRACT(HOUR FROM created_at AT TIME ZONE 'UTC') AS h, COUNT(*) FROM usage_events WHERE user_id = $1 AND created_at >= $2 GROUP BY 1` —— 注意时区，建议**统一存储侧用 UTC，展示侧 web 用浏览器时区做小时偏移**（Codex 实施时确认或自报）
+  - recent_calls: 直接 `SELECT ... ORDER BY created_at DESC LIMIT 50`
+- **路径选择**：endpoint 路径建议 `/api/admin/users/{user_id}/usage` —— 与已有 `/api/admin/users/{user_id}/quota` 平行。**不要**用 `/api/admin/usage/by-user/...`，避免引入新顶层资源
+- **frontend tab 切换 UI**：metapi 的 ResponsiveBatchActionBar 之类组件不需要引入；用两个 `<button>` 模拟 tab 即可，class 切换 active 态，纯 vanilla
+- **小时分布柱状图**：复用现有 Chart.js（overview 已经在用，无需新依赖），type:'bar'，24 个柱
+- **用户选择 UX**：第一版**推荐下拉**（简单）而不是抽屉/列表选中。Codex 可以自决，但 commit body 说明理由
+- **测试**: 后端 happy path 用 seed 用户 `00000000-0000-0000-0000-000000000201`；空用户造一个新建 + 不调用 gateway；时间窗 filter 造一条早 1 天的数据测过滤
+- **Review 单 commit 还是拆**：推荐拆两个 commit —— C1 后端 endpoint + sqlc + unit test；C2 frontend tab 切换 + 视图 + Chart.js 整合。或单 commit 看体积
+
+**参考**:
+- 现有 admin handler 模式：`cmd/admin/main.go` 的 overview / users / audit-logs 三个 handler
+- `migrations/000006_usage_events_user_id.up.sql` 已加 user_id 列与 `(user_id, created_at)` 复合索引
+- `migrations/000012_upstream_credentials_v1.up.sql` 加 model_routed 列；T-CONC-COST-ATTR 已切到这一列
+- `internal/usage/` 既有 usage_events 写入路径，参考它的字段命名
+- 前端基线：`web/src/views/audit.js` (159 行) / `web/src/views/overview.js` (203 行，含 Chart.js 用法)
