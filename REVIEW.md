@@ -44,6 +44,7 @@
 
 **Codex 下一步**: 修 H-8 + 顺手做 M-33;一个 fix commit `fix: restore zh-CN audit copy + complete tab ARIA`,verification 行加跑 `node --test web/src/views/audit.test.js`。再贴回我做二审。N-31~N-34 不开任务,留 v1.1 评估时一并看。
 
+**Resolved**: `e9d878ab` — H-8 zh-CN 还原 + audit usage subview 全 zh-CN 翻译;M-33 tab/tabpanel ARIA 五项 attr 落地;backend 零改动。
 ---
 
 ## R-016b-MIN (T-016b-MIN 实施, impl `4b3d6b32` + status `ac66a14a`)
