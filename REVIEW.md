@@ -117,7 +117,50 @@
 
 ---
 
-**结论: `[~] Conditional Approve — 不关任务`** — 后端 endpoint + SQL 聚合 + fake-DB 单测 + 前端 tab/图表/表格全部按 AC 落地，**门 ③ 数据面打通**。但发现一条 **HIGH(语言一致性 + 范围外翻译)** 阻塞合并：Codex 把新 UI 全部写英文且**顺手把现有 audit zh-CN 字符串改成英文**，与 overview/users/models/credentials/virtual_models 五视图的 zh-CN 风格不一致,且超出任务范围。修完 HIGH 后我会切到 Approve；M-33 / NIT 不阻塞。
+## R-046 (T-046 实施, impl `00c9f4a` + status `9ed539e`)
+
+**结论: `[+] Approved`** — 接受标准全达，交互式 prompts + status + dry-run + restore 确认 + 错误 polish 全部落地。无 CRITICAL/HIGH。2 NIT 不阻塞。**Phase 3-A Agent 适配 Epic 7/7 收官**。
+
+**正面信号**:
+
+1. ✅ **交互式 prompts 设计克制且正确**：`collectAdoptInputs` 仅在 flag 缺失且 stdin 是 tty 时触发；非 tty（CI/脚本）缺 flag 直接报错。`inputTTY` 用 `os.Stdin.Stat()` + `ModeCharDevice`——不用 `golang.org/x/term`，零新依赖。model 已传 flag 时跳过 prompt；optional flag（admin-url/real-model/provider）依次 prompt 允许跳过。
+
+2. ✅ **`status` 命令三 agent 全覆盖**：`readClaudeCodeStatus`（JSON env map）、`readCodexStatus`（TOML config + JSON auth）、`readOpenCodeStatus`（XDG JSON provider.models）——三种格式全解析。`parseSimpleTOMLValues` 轻量实现（split on `=` + strip quotes），不引入 BurntSushi/toml 依赖。未配置 agent 输出"未配置"。
+
+3. ✅ **`tokenPrefix` 安全展示**：status 输出 token 只显示前 8 字符 + `...`，不泄露完整 API key。匹配 AC"不展示完整 token"的安全要求。
+
+4. ✅ **`--dry-run` 三种 agent 全部接入**：dry-run 路径执行完整的 flag parsing + input collection + ensure model validation，但不写文件。`printDryRun` 输出"Would write settings to..."。与 `status` 互补——status 看现有状态，dry-run 看计划改动。
+
+5. ✅ **restore 确认 tty-gated**：`confirmRestore` 仅在 tty 时提示 `[y/N]`，非 tty 默认 yes（CI 不阻塞）。提示包含 agent 名称 + 文件路径列表，用户知道正在恢复什么。
+
+6. ✅ **`polishAdoptError` 中文 actionable 错误**：admin API 401 → "请确认 --token 是有效的 admin 角色虚拟 key"；gateway unreachable → "请检查 --admin-url 是否正确且 admin 服务已启动"；virtual model conflict → "请换用 --model 或在管理端修正路由规则"。原文错误信息保留在 wrapping error 中供调试。
+
+7. ✅ **输出统一 polish**：`printAdoptSummary` 统一三种 agent 的成功输出——`✓ <agent> configured` + config/gateway/model/backup 四行。restore 输出 `✓ 已恢复原始配置` + files + from。全体中文/英文混合风格一致。
+
+8. ✅ **既有 flag 零 breaking change**：`--gateway-url` / `--token` / `--model` / `--home` / `--admin-url` / `--real-model` / `--provider` / `--ensure-model` 全部保留原语义。仅新增 `--dry-run` 和 `status` 子命令。
+
+**N-38 (NIT) — `parseSimpleTOMLValues` 不处理含 `=` 的值**：用 `strings.Cut(line, "=")` 取第一个 `=` 分割。TOML 值中如果含 `=`（如 `base_url = "http://a?x=y"`），Cut 只取第一个 `=` 之前/之后，后续 `=` 留在 value 中。**实际上正确**——`"http://a?x=y"` 中 `=` 在引号内，`strings.Trim` 去引号后值完整。但如果有裸值含 `=`（如 `model = claude-sonnet-4-6` 中的 `-` 不是 `=`），目前不可触发。极边缘，不修。
+
+**N-39 (NIT) — `completeStatus` 的 `Configured` 判断三字段全非空即 true**：不区分"文件不存在"和"文件存在但字段缺失"——两者都返回 `Configured=false`。status 输出"未配置"而非"配置文件损坏"。对用户场景够用（没配 = 未配置）；v1.1 可区分这两个状态，加 `⚠ 配置文件存在但格式异常` 提示。
+
+**Phase 3-A 收官状态**:
+- T-041 ✅ Claude Code 配置写入
+- T-042 ✅ Codex 适配
+- T-043 ✅ OpenCode 适配
+- T-040 ✅ Registry + AgentConfig 抽象
+- T-045 ✅ Anthropic → OpenAI 协议转换
+- T-044 ✅ virtual_models CRUD + agent 配置同步
+- T-046 ✅ 一键 onboard CLI 收口
+
+**全部 7/7 done**。Phase 3-A Agent 适配 Epic 圆满收官。
+
+**Codex 下一步**: T-046 status 可切 `done`。下一步：用户决策走 vNext（T-100 e2e / T-QUOTA-CACHE-PROBE）或 T-UI-L1-THEME 前端视觉。
+
+---
+
+## R-AUDIT-USAGE-VIEW (T-AUDIT-USAGE-VIEW 实施, impl `7b9b0653` + `57775cae` + status `8d1d78a4`)
+
+**结论: `[~] Conditional Approve — 不关任务`** — 后端 endpoint + SQL 聚合 + fake-DB 单测 + 前端 tab/图表/表格全部按 AC 落地，**门 ③ 数据面打通**。但发现一条 **HIGH(语言一致性 + 范围外翻译)** 阻塞合并。修完 HIGH 后切到 Approve；M-33 / NIT 不阻塞。
 
 **正面信号**:
 1. ✅ **SQL 单测验"model_routed 不是 model_requested"**：`TestPostgresOverviewStoreLoadUserUsageMapsSQLResults` 用 `adminFakeSQLResponse` 三档 mock，断言 `queries[0].query` 含 `COALESCE(NULLIF(ue.model_routed, ''), 'unknown')` **且** 不含 `model_requested`。这是 AC "按 model_routed 聚合" 的硬断言,不是肉眼看 SQL。配套断言还覆盖 `EXTRACT(HOUR ... AT TIME ZONE 'UTC')` + `ORDER BY ... DESC LIMIT 50`,把任务体 Hints 里 3 个 SQL 形状全验过。
