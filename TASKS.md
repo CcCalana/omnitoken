@@ -476,7 +476,7 @@ Result: `00c9f4a` — prompts/status/dry-run/restore-confirm/error polish landed
 - `internal/proxy/anthropic.go` 转换逻辑
 - `cmd/gateway/main.go` 的 mux 构造（除非需要导出 helper 供测试用——仅导出，不改行为）
 
-Result: `9bb08f0` + `PENDING` — 5 integration + 4 e2e subtests landed; e2e in cmd/gateway to reuse newMux, all green.
+Result: `9bb08f0` + `cd118c9` — 5 integration + 4 e2e subtests landed; e2e in cmd/gateway to reuse newMux, all green.
 
 ---
 
