@@ -422,7 +422,7 @@ Result: `00c9f4a` — prompts/status/dry-run/restore-confirm/error polish landed
 
 ---
 
-## T-SMOKE-AGENT Agent 全链路 Smoke Test [phase:post-v1] [owner:codex] [status:in-progress] [started:2026-05-30 16:05 CST]
+## T-SMOKE-AGENT Agent 全链路 Smoke Test [phase:post-v1] [owner:codex] [status:review] [started:2026-05-30 16:05 CST]
 
 **目标**: 用程序化 HTTP 请求模拟 Claude Code / Codex 的完整调用链路，验证 **auth header（`x-api-key` vs `Authorization: Bearer`）→ middleware 栈 → proxy → 真上游 → 协议转换** 端到端闭环。填补"没有任何测试走过完整 agent 调用路径"的缺口。
 
@@ -475,6 +475,8 @@ Result: `00c9f4a` — prompts/status/dry-run/restore-confirm/error polish landed
 - `internal/auth/middleware.go` 的 `extractGatewayToken` 逻辑
 - `internal/proxy/anthropic.go` 转换逻辑
 - `cmd/gateway/main.go` 的 mux 构造（除非需要导出 helper 供测试用——仅导出，不改行为）
+
+Result: `9bb08f0` + `PENDING` — 5 integration + 4 e2e subtests landed; e2e in cmd/gateway to reuse newMux, all green.
 
 ---
 
