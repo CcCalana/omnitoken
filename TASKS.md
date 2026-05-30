@@ -422,7 +422,7 @@ Result: `00c9f4a` — prompts/status/dry-run/restore-confirm/error polish landed
 
 ---
 
-## T-SMOKE-AGENT Agent 全链路 Smoke Test [phase:post-v1] [owner:codex] [status:todo]
+## T-SMOKE-AGENT Agent 全链路 Smoke Test [phase:post-v1] [owner:codex] [status:in-progress] [started:2026-05-30 16:05 CST]
 
 **目标**: 用程序化 HTTP 请求模拟 Claude Code / Codex 的完整调用链路，验证 **auth header（`x-api-key` vs `Authorization: Bearer`）→ middleware 栈 → proxy → 真上游 → 协议转换** 端到端闭环。填补"没有任何测试走过完整 agent 调用路径"的缺口。
 
