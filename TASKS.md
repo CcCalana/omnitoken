@@ -28,6 +28,7 @@
 | 05-23 | **T-UI-L1-THEME 任务体写好**（status:todo）。借鉴 metapi (MIT) 前端设计语言 L1 档：design tokens CSS + Toast + Modal + dark theme,守住 vanilla JS 不引入 React/Tailwind/build |
 | 05-23 | **上线门评估**：用户列三条 release-gate ①前端看报 ✅(overview 趋势+模型环图,无时间切换是已知非阻塞)/②管理员分配额度 ✅(users tab 月度预算编辑 + RBAC)/③审计查看用户使用场景 ❌ 缺口 → 落地为 T-AUDIT-USAGE-VIEW |
 | 05-23 | **T-AUDIT-USAGE-VIEW 任务体写好**（status:todo）。audit tab 加 tab 切换"管理操作流水 / 用户使用流水"；后者按 user_id 聚合 usage_events，含模型 top-N、小时分布、近 N 次调用详情 |
+| 05-30 | **用户决策: v1 发布后优先走 Phase 3-A 收尾 (T-045 协议转换)，再走 vNext 基础设施**。T-AUDIT-USAGE-VIEW H-8/M-33 已在 `e9d878a` 修复，用户确认无需二审。T-CONC-RERUN 经 T-MP-DEEPSEEK 100% 验证、H-6 关闭，签字 done。v1 底座三角完整就绪 |
 
 ---
 
@@ -111,21 +112,19 @@ E2E 验收通过，但**前端假数据 + admin 无鉴权 + 未验证并发**。
 | 2-B 性价比 | **T-017a 虚拟模型解析（单 key 5 模型）** | gateway 接 `chat-fast/balanced/quality/...` 改写为真实 Ark model；含 admin 列表 + 前端展示 | 1-1.5d | T-008 ✅ | ✅ |
 | 2-B 联调 | **T-INT 前后端联调 + v1 release prep** | admin + viewer 双账号走通全流程；env / docker-compose / 部署文档；含虚拟模型路由演示 | 1d | T-015 + T-005b + T-017a | ✅ |
 | 2-C 性价比 | **T-016 upstream_credentials + 多 key 池**（ADR 0003 拉回）| schema + 2-3 把 Ark key seed 加密入库 + gateway 轮询/429 重试 + usage 写 credential_id；CRUD UI 推 v1.1 | 5-7d | T-INT ✅ | ✅ |
-| 2-C 验证 | **T-CONC-RERUN 多 key 池真实 baseline**（原 vNext 拉回）| mock upstream 测 gateway 承载 + 多 key 池上线后真 Ark 复跑 50/100 并发 | 1d | T-016 ✅ | propose |
+| 2-C 性价比 | **T-MP-DEEPSEEK Multi-provider 池接入 DeepSeek**（ADR 0004）| cross-provider 池 + DeepSeek 3 key seed + proxy base_url 路由 + 30 conc 100.0% 验收 | 2d | T-016 ✅ | ✅ |
+| 2-C 运维 | **T-016b-MIN Admin Credential CRUD + 30s Polling**（ADR 0005）| admin POST/PATCH credential + gateway 热加载 + 前端 tab | 2d | T-MP-DEEPSEEK ✅ | ✅ |
+| 2-C 验证 | **T-CONC-RERUN 多 key 池真实 baseline**（原 vNext 拉回）| mock upstream 测 gateway 承载 + 真 Ark/DeepSeek 复跑；经 T-MP-DEEPSEEK 100.0% 验证 H-6 关闭 | 1d | T-016 ✅ | ✅ |
+| v1 门③ | **T-AUDIT-USAGE-VIEW 用户使用流水** | audit tab 双 tab + per-user usage 聚合 API + 前端图表 | 2d | T-013 ✅ + T-015 ✅ | ✅ |
 
-**v1 上线 ETA（2026-05-20 调整）**: ADR 0003 拉回 T-016 后，v1 ETA 从原 "~1 周" 调整为 **"~2 周"**。T-016 是关键路径（5-7d），T-CONC-RERUN 验收 1d。Phase 3-A Agent 适配相应延后 ~1 周。
+**v1 底座三角状态（2026-05-30）**: 全部 ✅。性价比（T-016 + T-MP-DEEPSEEK + T-016b-MIN）/ 权限额度（T-005a + T-015 + T-005b）/ 安全审计（T-013 + T-014 + T-AUDIT-USAGE-VIEW）。release gate ①②③ 全部满足。
 
-> **2026-05-19 用户决策（Ark coding plan 洞察）**: 5 个模型共用一把 key（doubao-seed-code / deepseek-v3.2 / glm-5.1 / kimi-k2.6 / minimax-m2.7），T-016 多 key 加密管 v1 不需要，留到第二家 provider 时再启。智能路由的"虚拟模型解析"部分（T-017a）已抽出加进 v1。
+### vNext（v1 发布后再做）
 
-### vNext（v1 后再做）
-
-- ~~**T-016 upstream_credentials + 加密 + admin CRUD**~~ → **2026-05-20 拉回 Phase 2-C v1，见 ADR 0003**。admin CRUD UI / KMS / 自动 rotation 推 v1.1
 - **T-017b fallback retry on 5xx/429**（2d，含 SSE 中途切换状态机）
 - **T-018 故障注入 e2e**（与 T-017b 配套，1-2d）
 - **T-100 L2 端到端正确性套件**（1 admin + 10 user 真方舟 e2e）
-- **T-CONC-DSN**（R-CONC-CHECK H-3）：gateway/admin DSN 显式拼 `application_name=omnitoken-gateway`/`omnitoken-admin`，让 `pg_stat_activity` 采样可用；同步更新 `cmd/loadtest/README.md` 采样 SQL。可观测性短板，不阻塞 Phase 3-A。
-- ~~**T-CONC-RERUN**~~ → **2026-05-20 拉回 Phase 2-C v1，与 T-016 验收同期**（ADR 0003）
-- **T-QUOTA-CACHE-PROBE**（2026-05-21 外部专家提，启动门槛 = T-CONC-RERUN 完成）：跑 mock upstream 高并发后，量 `monthlyBudgetStatusSQL`（`internal/quota/store_postgres.go:48` 双 LEFT JOIN + SUM）在真实 gateway 承载下的 PG CPU / 慢查询 / 连接池占用。如果发现是瓶颈，候选解：(a) `usage_events(organization_id, user_id, created_at)` + `cost_ledger(usage_event_id)` 加索引（低风险）；(b) Redis 月度额度缓存 + 异步入账后增量更新（架构性变更，需 ADR）。**先量再写实现**，本条只是观察任务。
+- **T-QUOTA-CACHE-PROBE**（2026-05-21 外部专家提）：跑 mock upstream 高并发后，量 `monthlyBudgetStatusSQL`（`internal/quota/store_postgres.go:48` 双 LEFT JOIN + SUM）在真实 gateway 承载下的 PG CPU / 慢查询 / 连接池占用。如果发现是瓶颈，候选解：(a) `usage_events(organization_id, user_id, created_at)` + `cost_ledger(usage_event_id)` 加索引（低风险）；(b) Redis 月度额度缓存 + 异步入账后增量更新（架构性变更，需 ADR）。**先量再写实现**，本条只是观察任务。
 - Phase 3-A Agent 适配 Epic（见 `规划.md` §十四）
 
 ### 旧任务状态同步
@@ -158,18 +157,114 @@ E2E 验收通过，但**前端假数据 + admin 无鉴权 + 未验证并发**。
 | 2 | T-042 Codex 适配 | `~/.codex/config.toml` + `auth.json` 无损 toml_edit | 2d | T-041 | ✅ `ceb123c` |
 | 3 | T-043 OpenCode 适配 | `~/.config/opencode/opencode.json` 加 XDG 路径解析 | 1d | T-042 | ✅ `5254c48` |
 | 4 | T-040 抽象层提取（后置） | 三处重复后抽 `Registry` + `AgentConfig` interface | 1d | T-043 | ✅ `147502da` |
-| 5 | T-045 Anthropic → OpenAI 协议转换 | gateway 多挂 `/v1/messages`；让 Claude Code 真正能跑 | 4d | T-041 | todo (Phase 3-A 后置, T-016 完成后) |
+| 5 | T-045 Anthropic → OpenAI 协议转换 | gateway 多挂 `/v1/messages`；Anthropic↔OpenAI 双向转换，让 Claude Code 真正能跑 | 4d | T-041 ✅ + T-016 ✅ | todo (v1 发布后首务) |
 | 6 | T-044 路由规则联动 | apply 配置 = 同步生成 OmniToken 内部 `virtual_models` + admin 端可视化 | 2d | T-040 | todo |
-| 7 | T-046 一键 onboard CLI 收口 | `omnitoken adopt <agent>` 统一入口 + 退出 / restore | 1d | T-044 | todo |
+| 7 | T-046 一键 onboard CLI 收口 | `omnitoken adopt <agent>` 统一入口 + 退出 / restore | 1d | T-044 + T-045 | todo |
 
-**Phase 3-A ETA**: **2–2.5 周**（顺序）；T-045 是真正 demoable 时刻。
+**Phase 3-A 当前焦点**: T-045 协议转换——这是"真正 demoable 时刻"。完成后 Claude Code 可以走 OmniToken 调用任意 OpenAI-compatible 上游。T-044/T-046 在 T-045 之后。
 
-**实施前必读**: `docs/references/agent-adapter/agent-adapter-pattern.md` §3.3（Claude Code 完整源码模板）+ `agent-adapter-projects-reference.md` §4.1（token_proxy 无损 JSON 编辑模式）。
+---
 
-### 提案（Phase 2 候选，不阻塞当前 gate）
+## T-045 Anthropic → OpenAI 协议转换 [phase:3-A] [owner:codex] [status:todo]
 
-- 智能 Key 池与配额感知模型路由（2026-05-13）→ [`docs/proposals/2026-05-13-smart-key-pool-routing.md`](docs/proposals/2026-05-13-smart-key-pool-routing.md)
-- 智能路由 + 性能指标 + Elastic 远景（2026-05-14）→ [`docs/proposals/2026-05-14-smart-routing-elastic-cache.md`](docs/proposals/2026-05-14-smart-routing-elastic-cache.md)
+**目标**: gateway 新增 `POST /v1/messages` 端点，接收 Anthropic Messages API 格式请求，转换为 OpenAI chat completions 格式后走既有 proxy + middleware 管道，上游响应转换回 Anthropic 格式返回客户端。使 Claude Code 能通过 OmniToken 调用任意 OpenAI-compatible 上游（Ark / DeepSeek / 未来 provider）。
+
+**背景**: T-041~T-043 已让 Claude Code / Codex / OpenCode 的配置指向 OmniToken，但 Claude Code 使用 Anthropic Messages API 协议，当前 gateway 只有 OpenAI-compatible `/v1/chat/completions`。不做协议转换，Claude Code 的请求无法到达上游。
+
+**涉及**:
+- `internal/proxy/anthropic.go` (新增) — Anthropic↔OpenAI 请求/响应转换器 + SSE 事件映射
+- `internal/proxy/anthropic_test.go` (新增) — 转换正确性测试 + golden fixture 回放
+- `internal/proxy/anthropic_e2e_test.go` (新增) — 端到端：Claude Code 格式请求 → gateway → 真上游 → Anthropic 格式响应
+- `cmd/gateway/main.go` — 注册 `POST /v1/messages` 路由，复用既有 middleware 栈
+- `internal/usage/middleware.go` — `snapshotRequestMetadata` 可能需适配 Anthropic 请求体格式（提取 model / stream）
+- `testdata/golden/anthropic/` (新增) — Anthropic 请求/响应 golden fixtures
+
+**架构指引**（Codex 在 PROPOSAL 中拍板具体方案）:
+
+Anthropic 转换器作为一个 `http.Handler` wrapper，包裹既有的 OpenAI proxy handler。转换器负责：
+1. **请求转换**（Anthropic → OpenAI）：解析 Anthropic Messages API 请求体，构造等效的 OpenAI chat completions 请求体
+2. **委托上游**：将转换后的请求交给既有 proxy 管道（credential selection / retry / upstream 转发全部复用）
+3. **响应转换**（OpenAI → Anthropic）：非流式 buffer 完整响应后转换；流式逐 SSE chunk 转换
+
+请求体字段映射（核心）：
+- `model` → `model`（直接透传，virtual model 解析在转换前完成）
+- `system`（string 或 array）→ `messages` 数组头部插入 system role message
+- `messages[].role` → `messages[].role`（user/assistant 直通）
+- `messages[].content`（string 或 content block array）→ `messages[].content`（string 或 OpenAI 多模态数组）
+- `max_tokens` → `max_tokens`
+- `stream` → `stream`
+- `temperature` / `top_p` / `stop_sequences` → `temperature` / `top_p` / `stop`
+
+响应体字段映射（非流式，OpenAI → Anthropic）：
+- `id` → `id`，`model` → `model`
+- `choices[0].message.content` → `content: [{type: "text", text: "..."}]`
+- `choices[0].message.reasoning_content`（如有）→ `content` 数组前置 `{type: "thinking", thinking: "..."}`
+- `choices[0].finish_reason` → `stop_reason`（映射：`stop`→`end_turn`, `length`→`max_tokens`, `tool_calls`→`tool_use`）
+- `usage.prompt_tokens` → `usage.input_tokens`
+- `usage.completion_tokens` → `usage.output_tokens`
+- `usage.prompt_tokens_details.cached_tokens` → `usage.cache_read_input_tokens`
+- `usage.total_tokens` → `usage.input_tokens + output_tokens`（Anthropic 没有 total 字段，由 client 自行加总）
+
+流式 SSE 事件映射（OpenAI → Anthropic）：
+- **首个 chunk**（含 role + content 或空 delta）→ `message_start` event（含 message 元信息 + `usage.input_tokens` 如果已知）
+- **首个有内容的 chunk** → `content_block_start` + `content_block_delta` events
+- **后续 content chunk** → `content_block_delta` events
+- **reasoning chunk** → `content_block_start`(type:thinking) + `content_block_delta`(type:thinking_delta)
+- **chunk 含 `finish_reason`** → `content_block_stop` + `message_delta`（含 `stop_reason` + `usage.output_tokens`）
+- **`[DONE]`** → `message_stop` event
+
+**接受标准**:
+- [ ] `POST /v1/messages` 非流式请求 → gateway 返回合法 Anthropic Messages API 响应（`type: "message"`，含 `content`/`stop_reason`/`usage`）
+- [ ] `POST /v1/messages` 流式请求（`stream: true`）→ gateway 返回合法 Anthropic SSE 事件流（`message_start` → `content_block_start/delta/stop` → `message_delta` → `message_stop`）
+- [ ] 既有 middleware 全部复用：protectGatewayRoute（virtual key 鉴权）/ enforceMonthlyBudget（额度）/ resolveVirtualModel（虚拟模型）/ usage 记录（`usage_events` + `cost_ledger` 正确写入）
+- [ ] `snapshotRequestMetadata` 正确提取 Anthropic 请求中的 `model` 和 `stream`（适配 Anthropic 请求体格式）
+- [ ] 上游错误（4xx/5xx）返回 Anthropic 格式 error（`{"type": "error", "error": {"type": "api_error", "message": "..."}}`），不透传上游 stack trace
+- [ ] `usage` 字段正确映射：`input_tokens` ← `prompt_tokens`，`output_tokens` ← `completion_tokens`，`cache_read_input_tokens` ← `prompt_tokens_details.cached_tokens`
+- [ ] 非流式 golden fixture 回放测试：`anthropic_nonstream_default.json` 作为请求 → 转换 → 转换回 → 验证语义等价
+- [ ] 流式 golden fixture 回放测试：mock upstream 返 OpenAI SSE → 逐 chunk 转换为 Anthropic SSE → 验证事件类型和字段
+- [ ] e2e 测试：用 `testdata/golden/ark/anthropic_nonstream_default.json` 作为请求体 → 打真上游 → 响应为非流式 Anthropic 格式 → `usage.input_tokens + output_tokens` 正确
+- [ ] credential selector 正确工作：`provider=ark` 走 Ark upstream，`provider=deepseek` 走 DeepSeek upstream；`upstream_credential_id` 写入 `usage_events`
+- [ ] RBAC：viewer 不可写，member 可调用；session 失效 401
+- [ ] `go vet ./...` + `go test -race ./...`（Docker 内）全绿；`internal/proxy` 覆盖率不退化
+
+**不在范围**:
+- ❌ 完整 Anthropic Tools/Function calling ↔ OpenAI tools mapping（请求体中如有 tools 字段，v1 可透传或丢弃，但不可 500 crash）
+- ❌ Anthropic prompt caching 请求头（`anthropic-beta: prompt-caching-*`）→ v1.1
+- ❌ 多模态 content block 映射（Anthropic `type: "image"` / `type: "document"` → OpenAI `image_url` / `file_url`）→ v1.1
+- ❌ thinking budget_tokens → reasoning_effort 语义映射（v1 直通 `thinking` 字段）
+- ❌ Anthropic `computer_use` / `bash_use` tool 类型 → v1.1
+- ❌ 上游 Anthropic-compatible 直通（如 Ark `/v1/messages` 直接转发，不做转换）—— v1 统一走 OpenAI 转换路径，减少双路径复杂度
+- ❌ admin UI 改动
+- ❌ T-044 路由规则联动 / T-046 CLI 收口
+
+**Codex propose 前置**: **是**。PROPOSAL 答清 5 点：
+1. **转换层放置位置**: (a) 新 `http.Handler` wrapper 包裹既有 proxy，放在 middleware 栈内层（推荐——最大化复用 credential/retry/usage）；(b) 独立 handler 直接调 upstream（不共享 proxy 代码路径）。**默认推荐 (a)**。
+2. **流式 SSE 转换策略**: (a) 逐 chunk 实时转换（低延迟，但需维护 SSE 状态机——当前 chunk 是首个/中间/最后）；(b) buffer 全部 OpenAI chunks 后一次性构造 Anthropic SSE 流（简单但 TTFB 差）。**默认推荐 (a)**。
+3. **usage 解析路径**: (a) 转换后使用既有 OpenAI usage parser（转换器输出 OpenAI 格式 → middleware 捕获 → `ParseStream/ParseNonStream` 直接工作）；(b) middleware 捕获 Anthropic 格式 → 新增 Anthropic usage parser。**默认推荐 (a)**——让 middleware 看到转换前的 OpenAI 中间格式，不改 usage 包。
+4. **`snapshotRequestMetadata` 适配**: Anthropic 请求体中 model 字段在顶层 `"model"`，stream 也是 `"stream"`（布尔）。但 Anthropic 没有 `messages[0].content` 这种简单结构。propose 拍：(a) 在 middleware 内 detect Anthropic vs OpenAI 请求体格式（按 URL path 或 Content-Type 或 body 内 `"messages"` 结构的差异）；(b) 转换器在 request context 里预注入 model/stream 元信息，middleware 从 ctx 读。**默认推荐 (b)**——解耦。
+5. **SSE content block index 管理**: Anthropic SSE 要求每个 content block 有单调递增的 `index`（0, 1, 2...）。OpenAI SSE 的 chunk index 是 choice index。propose 拍如何从 OpenAI chunks 推导 Anthropic content block 边界（text 开始=新 block start，reasoning→text 切换=新 block，等等）。
+
+**依赖**: T-016 ✅（多 key 池 + credential selector）；T-MP-DEEPSEEK ✅（多 provider 验证通过）；T-041 ✅（Claude Code 配置写入就绪，可以 e2e 验证）
+
+**禁动**:
+- 既有 `/v1/chat/completions` 路径行为（零 regression）
+- 既有 proxy retry / credential selection 逻辑
+- `internal/credentials/` 接口
+- `internal/usage/parser.go` 中 OpenAI 格式解析（如果 propose Decision 3 选 a）
+
+**异常处理**:
+- Anthropic 请求体中 `messages` 为空 → 400 + Anthropic error format
+- `stream: true` 但上游返回非流式 → 当作非流式处理，不 panic
+- 转换过程中上游 SSE 格式异常（缺 usage / 非 JSON data）→ 尽最大努力 emit 已接收内容 + log WARN，不崩 gateway
+- `content` 为 null 的 assistant message（Anthropic 合法，表示 tool_use）→ v1 当作空 text 处理，不 500
+
+**参考**:
+- 既有 proxy 实现：`internal/proxy/proxy.go`（`ServeHTTP` / `rewriteRequest` / `doWithRetries` / `copyStreamingResponse`）
+- 既有 middleware 栈：`cmd/gateway/main.go:116-121`（`newMux`）
+- Anthropic golden fixture：`testdata/golden/ark/anthropic_nonstream_default.json`
+- OpenAI golden fixtures：`testdata/golden/ark/openai_*.json` / `openai_stream_*.txt`
+- Anthropic Messages API 文档：`https://docs.anthropic.com/en/api/messages`
+- Claude Code adapter：`internal/agent_adapter/claude_code.go`（`ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL` 生成逻辑）
 
 ---
 
@@ -243,7 +338,7 @@ Result: `abc98a05` — mock rerun captured PG saturation; true Ark 30x30 blocked
 Result(rerun): `dff69844` — true Ark 43.0%, switch 216, no undeclared deviation.
 
 
-**Superseded 2026-05-23**: 候选 B 由用户直接确认（Ark coding plan 一账号一 key，三把里两把不是 coding plan）。Probe 不跑。H-6 二审改走 T-MP-DEEPSEEK：multi-provider 池跨 Ark + DeepSeek 重测 30×30，>80% 验收门槛在新形态下达成才能签。原 Ark 单 provider 路径**永久无法达成**（物理约束）。详 ADR 0004。本任务保持 status:review，等 T-MP-DEEPSEEK rerun 数据落进 `docs/release/v1-concurrency-rerun-2026-05-22.md` 新增段后一并签。
+**Superseded 2026-05-23 → resolved 2026-05-30**: 原 Ark 单 provider 路径永久无法达成 >80%（物理约束，详 ADR 0004）。H-6 经 T-MP-DEEPSEEK 跨 provider 形态验证 30 conc / 100.0%，二审关闭。本任务 done。
 
 ---
 
@@ -425,7 +520,7 @@ Result: `4b3d6b32` — admin credential add/disable + 30s polling hot reload lan
 
 ---
 
-## T-AUDIT-USAGE-VIEW Audit Tab 加用户使用流水（上线门 ③） [phase:v1-release] [owner:codex] [status:review]
+## T-AUDIT-USAGE-VIEW Audit Tab 加用户使用流水（上线门 ③） [phase:v1-release] [owner:codex] [status:done]
 
 Start: 2026-05-23 17:16 +08:00
 

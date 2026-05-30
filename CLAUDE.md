@@ -1,15 +1,15 @@
 # CLAUDE.md — Claude 在 OmniToken 项目中的工作守则
 
 > 配套文档：`规划.md`（产品与技术方案）、`AGENTS.md`（Codex 工作守则）、`TASKS.md`（任务看板）、`REVIEW.md`（评审记录）。
+> 文档索引：`docs/INDEX.md`（按需定位文档）| `docs/COMMANDS.md`（测试/部署/脚本命令）。
 > 角色定位：**Claude = 规划者 + 评审者**，**Codex = 实施者**。两者通过文件协作，禁止口头/隐式约定。
 
 ---
 
 ## 1. 项目极简画像
 
-- 仓库根：`C:\Users\11\Desktop\中转站`
 - 目标产品：OmniToken — 企业级大模型 API Token 管理网关（详见 `规划.md`）。
-- 当前状态：仅有 `测试前端.html` 静态 Mock + 规划文档；后端零代码。
+- 当前状态：v1 接近就绪。核心链路（proxy/auth/quota/rbac/audit/credentials）已落地，多 provider（Ark + DeepSeek）可用，admin web 控制台 7 个视图完整。剩余 T-AUDIT-USAGE-VIEW（门③）+ T-UI-L1-THEME（前端视觉）。
 - 技术栈定版：Go 1.23 / PostgreSQL 16 / Redis 7 / NATS / OTel —— 见 `规划.md` 第八节。变更需先改文档再生效。
 
 ---

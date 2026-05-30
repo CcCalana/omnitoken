@@ -1,6 +1,6 @@
 # AGENTS.md — Codex 在 OmniToken 项目中的工作守则
 
-> 配套文档：`规划.md`（产品与技术方案，**唯一事实来源**）、`CLAUDE.md`（Claude 工作守则）、`TASKS.md`（任务看板，Codex 唯一入口）、`REVIEW.md`（评审记录，Codex 必须逐条回应）。
+> 配套文档：`规划.md`（产品与技术方案，**唯一事实来源**）、`CLAUDE.md`（Claude 工作守则）、`TASKS.md`（任务看板，Codex 唯一入口）、`REVIEW.md`（评审记录，Codex 必须逐条回应）、`docs/COMMANDS.md`（测试/部署/脚本命令速查）。
 > 角色定位：**Codex = 实施者**。Claude 负责"画图"，Codex 负责"砌墙"。
 
 ---
@@ -19,12 +19,13 @@
 1. 读 规划.md **仅**零节「当前项目状态」（约 5 行）— 确认当前 Phase。不要读全文。
 2. 读 TASKS.md，找到第一条 status:todo & owner:codex 的任务
 3. 读 REVIEW.md，确认没有未解决的 CRITICAL/HIGH 阻塞
-4. 把 TASKS.md 的该条 status 改为 in-progress，写下开始时间
-5. 实施 → 写测试 → 自测 (make lint && make test)
-6. 提交 commit（遵守 §5 规则），把任务 status 改为 review
-7. 在任务条目末尾追加 Result: <commit hash> + 自测摘要 + 偏差说明
-8. 等 Claude 在 REVIEW.md 写反馈
-9. 修复 CRITICAL/HIGH（MEDIUM 视优先级），在 REVIEW.md 对应条目下写 Resolved: <commit>
+4. 跑测试/脚本前读 `docs/COMMANDS.md`（~100 行），找正确命令，不要猜
+5. 把 TASKS.md 的该条 status 改为 in-progress，写下开始时间
+6. 实施 → 写测试 → 自测 (make lint && make test)
+7. 提交 commit（遵守 §5 规则），把任务 status 改为 review
+8. 在任务条目末尾追加 Result: <commit hash> + 自测摘要 + 偏差说明
+9. 等 Claude 在 REVIEW.md 写反馈
+10. 修复 CRITICAL/HIGH（MEDIUM 视优先级），在 REVIEW.md 对应条目下写 Resolved: <commit>
 ```
 
 ---
