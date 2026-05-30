@@ -8,6 +8,83 @@
 >
 > 本文件保留最近 review；老的归档到 docs/reviews/。
 
+## R-045-prop (T-045 PROPOSAL, commit `b61600a`)
+
+**结论: `[+] Approved`** — 5/5 决策全部采纳，架构设计干净，未声明偏差为零。Codex 可开 T-045 实施。3 条实施期提醒（X-1/X-2/X-3）不阻塞 proposal 关门。
+
+**正面信号**:
+
+1. ✅ **Decision 1 handler 分层设计精准**：`anthropic.MessagesHandler` 包裹 `usage.Middleware(proxy)`，用 transforming `ResponseWriter` 让 usage 捕获 OpenAI 字节、client 收到 Anthropic 字节。这个顺序避免了"usage 中间件看到 Anthropic 格式需要新 parser"的 fork，也避免了"转换器旁路 proxy 自己调 upstream"的 credential/retry 重复实现。一行代码不改 `internal/usage/parser.go`。
+
+2. ✅ **Decision 5 content block index 状态机设计正确**：`next_index` + `open_block_kind` 二字段状态机推导 Anthropic block index（thinking→text 切换时 index 递增），不依赖 OpenAI `choices[].index`。这是 Anthropic SSE 规范的正确解读——Anthropic 的 `content_block.index` 是消息内 content block 的顺序号，跟 OpenAI choice index 不同源。
+
+3. ✅ **Decision 2 流式转换选实时逐 chunk**：拒绝 buffer-全流-再-emit，守住了既有 proxy 的 TTFB 行为。SSE frame 边界处理（"buffer incomplete SSE frames until blank-line frame boundary"）表明 Codex 理解了 `text/event-stream` 的成帧语义——data 行 + 空行 = 一个完整事件。
+
+4. ✅ ** `snapshotRequestMetadata` 改为 context 注入**：Decision 4 选 context pre-injection，让 Anthropic converter 解析请求一次后把 model/stream/protocol 写入 ctx，替换 `r.Body` 为 OpenAI 格式。inner middleware 看到的 body 是 OpenAI 格式，`snapshotRequestMetadata` 零改动。附带 fallback 处理了 proxy rewrite 可能覆盖 model 的边界情况。
+
+5. ✅ **安全面自觉覆盖**：error mapping 显式说了"Do not expose upstream headers, credential ids, stack traces, request bodies, prompts, or API keys in error messages"；日志 WARN 只带 request id + choice count，不带 body；`tools` 被忽略时不 crash；这些都对齐 §十一安全基线。
+
+6. ✅ **request conversion 边界处理务实**：`system` 数组 flatten 为单 system message、unsupported content block 安全降级（不崩、不漏）、`tools` 静默忽略（不拒请求）——都是 v1 正确取舍，不给 Claude Code 用户制造无谓的 400 错误。
+
+7. ✅ **无新依赖**：pure stdlib + 既有代码，守住第八节技术栈约束。
+
+**X-1 (实施期提醒, 非阻塞) — `resolveVirtualModel` 读 Anthropic body 的兼容性**: proposal 里没展开，但 handler 顺序意味着 `resolveVirtualModel` 中间件先读到原始 Anthropic 请求体。当前 `resolveVirtualModel` 的逻辑是 `json.Unmarshal(body) → payload["model"]`。Anthropic 请求体中 `"model"` 也在顶层，所以**应该直接兼容**。实施时如果发现不兼容（例如 middleware 断言了其他 OpenAI 专属字段），修 `resolveVirtualModel` 不要改 proposal 方向——它本来就该只看 `model` 字段。
+
+**X-2 (实施期提醒, 非阻塞) — transforming writer 与 `captureResponseWriter` 的 Flush 传播**: 流式路径上，proxy 调用 `Flusher.Flush()` 把 SSE chunk 推给 client。`captureResponseWriter` 实现了 `Flusher`（`internal/usage/capture.go`），但 Anthropic transforming writer 也必须实现 `http.Flusher` 并正确传播 Flush 到 inner `captureResponseWriter` 和 outer real ResponseWriter。如果中间断了一环，Claude Code 会等到超时才看到第一个 token。实施时单测加一条 `io.Flusher` 接口断言。
+
+**X-3 (实施期提醒, 非阻塞) — `[DONE]` 后的 trailing data**: OpenAI SSE 以 `data: [DONE]` 结束。转换器 emit `message_stop` 后如果上游继续发 SSE 事件（非标准行为），当前状态机可能继续 emit Anthropic 事件。建议在 `[DONE]` 后设 `stream_ended = true` 并忽略后续 frame + WARN log，而不是继续转换。
+
+**Codex 下一步**: T-045 status 可切 `in_progress`。5 个 decision 已锁定；X-1/X-2/X-3 在 implementation review (R-045) 时核。注意：proposal 提到的 test plan 里 handler 测试验证 "usage records from OpenAI-format captured bytes" 是 AC 的关键证据，实施时确保这一条有显式断言。
+
+---
+
+## R-045 (T-045 实施, impl `d17a430` + status `fd35718`)
+
+**结论: `[+] Approved`** — 接受标准全达，proposal 5 个决策全部兑现，X-1/X-2/X-3 三提醒全部落地。无 CRITICAL/HIGH。2 MEDIUM + 3 NIT 不阻塞。**Phase 3-A "demoable moment" 达成**——Claude Code 可通过 OmniToken `/v1/messages` 调用任意 OpenAI-compatible 上游。
+
+**正面信号**:
+
+1. ✅ **Proposal Decision 1 的 handler 分层完整兑现**：`resolveVirtualModel(anthropic.MessagesHandler(chatHandler))`，其中 `chatHandler = usage.Middleware(proxy)`。transforming ResponseWriter 让 usage 捕获 OpenAI 字节、client 收到 Anthropic 字节。`TestAnthropicHandlerNonStreamConvertsResponseAndUsageSeesOpenAI:121-122` 显式断言 `input.Captured` 含 `"choices"`（OpenAI 格式标记）且不含 `"type":"message"`（Anthropic 格式标记）——这是 proposal "usage 不改 parser" 的硬证据。
+
+2. ✅ **X-3 `[DONE]` trailing data 防护到位**：`anthropicStreamConverter.ended` 标志在 `[DONE]` 后设 true；`handleFrame:487-489` 对 `c.ended` 时后续帧只记 WARN 不 emit。`TestAnthropicStreamIgnoresTrailingDataAfterDone` 正面断言 "late" 不在输出中 + `message_stop` 仅一次。
+
+3. ✅ **X-2 Flush 传播完整**：`anthropicResponseWriter` 实现 `http.Flusher`（`Flush()` + `Unwrap()`）。测试 `TestAnthropicHandlerStreamConvertsSSEAndPreservesFlush:133-135` 在 inner handler 内断言 `w.(http.Flusher)` 非 nil，外部 `rec.Flushed` 为 true。
+
+4. ✅ **SSE 状态机 index 管理严格按 Decision 5**：`nextIndex` + `openKind` 二字段推导 block 边界——kind 切换时 close 旧 block → open 新 block（`nextIndex`）→ 递增。same-kind delta 复用当前 index。thinking→text 切换产生 index 0（thinking）+ index 1（text）。不依赖 OpenAI `choices[].index`。
+
+5. ✅ **`tools` 静默忽略不拒请求**：`anthropicToOpenAIRequest` 不把 `tools` 写入 output map，Claude Code 带 tools 配置的请求不会被 400。v1 正确取舍。
+
+6. ✅ **e2e 测试用 golden Anthropic fixture 打真上游**：`TestAnthropicMessagesHandlerE2E` 读 `testdata/golden/ark/anthropic_nonstream_default.json` 的 `_meta.request` 字段，走完整 proxy 管道打真 Ark，断言 `type: "message"` + `input_tokens + output_tokens > 0`。
+
+7. ✅ **零新依赖 + `internal/usage/` 零改动**：diff 涉及 4 个文件（cmd/gateway + 3 个 anthropic 文件）。go.mod 不变。
+
+8. ✅ **安全面自觉遵守 §十一**：`openAIErrorMessage` 只从 OpenAI error envelope 提取 `error.message`，不附 body/headers/stack traces。`copyAnthropicHeaders` 设 `X-Content-Type-Options: nosniff`。WARN log 只带 choice_count 等级别信息。`http.MaxBytesReader` 限制请求体。
+
+**M-34 (MEDIUM) — streaming path error 时 `finish()` header 守卫不对称**:
+
+非 stream 路径仅 `finish()` 中 `sentHeader` 守卫；stream 路径 `Write()` 中也设 `sentHeader`（`ensureStreamHeader`）。如果 `Write()` 被调用但 `shouldStream()` 为 false（例如上游返回 `Content-Type: text/event-stream` 但状态码 4xx），`Write()` buffer 数据但没设 `sentHeader`，`finish()` 非 stream 分支会尝试 `WriteHeader`。Go 标准库保证 WriteHeader 只生效一次（第二次静默忽略），所以**实际安全**。但逻辑 guard 不对称。建议统一为单一路径守卫。**不阻塞 v1**。
+
+**M-35 (MEDIUM) — non-stream upstream 4xx/5xx body 可能不是合法 JSON**:
+
+`openAIErrorMessage` 先尝试 JSON 解析 OpenAI error envelope，失败 fallback 到 `"upstream request failed"`。逻辑正确。但如果上游返回 502 且 body 是 HTML（nginx 错误页），client 看到 `"upstream request failed"` 无法区分"上游爆了"还是"gateway 自己的问题"。建议 v1.1 加 WARN log 记录 upstream status code。**不阻塞 v1**。
+
+**N-27 (NIT) — `max_tokens` 无 required 校验**：Anthropic API 要求必填，converter 用 `copyIfSet`（选填语义）。v1 目标 client（Claude Code）总是发，不触发。
+
+**N-28 (NIT) — e2e 只测非流式**：真 Ark streaming e2e 未覆盖。现有 mock + golden fixture 测试已覆盖流式路径，v1 够用。
+
+**N-29 (NIT) — `anthropicRequest.MaxTokens` 用 `any` 类型透传 json.Number**：为保精度，但与 `Stream bool` 不一致。无害，不修。
+
+**与 proposal X-1/X-2/X-3 闭环**:
+- X-1（`resolveVirtualModel` 兼容性）：测试验证通过——`resolveVirtualModel` 读 Anthropic body 的 `model` 字段（与 OpenAI 同位置），天然兼容。
+- X-2（Flush 传播）：`TestAnthropicHandlerStreamConvertsSSEAndPreservesFlush` 显式断言 `w.(http.Flusher)` 非 nil + `rec.Flushed` 为 true。
+- X-3（`[DONE]` trailing data）：`TestAnthropicStreamIgnoresTrailingDataAfterDone` 正面覆盖，断言 "late" 不出现在输出中。
+
+**覆盖率**: Codex 自报 `make test` / `make test-race` / `make lint` / proxy e2e 全绿。新增 ~720 行实现 + ~340 行测试，比例合理。
+
+**Codex 下一步**: T-045 status 可切 `done`。M-34/M-35/N-27~N-29 不开任务，下次相关改动顺手修。Phase 3-A 下一步：T-044 路由规则联动 或 T-046 CLI 收口。
+
+---
+
 ## R-AUDIT-USAGE-VIEW (T-AUDIT-USAGE-VIEW 实施, impl `7b9b0653` + `57775cae` + status `8d1d78a4`)
 
 **结论: `[~] Conditional Approve — 不关任务`** — 后端 endpoint + SQL 聚合 + fake-DB 单测 + 前端 tab/图表/表格全部按 AC 落地，**门 ③ 数据面打通**。但发现一条 **HIGH(语言一致性 + 范围外翻译)** 阻塞合并：Codex 把新 UI 全部写英文且**顺手把现有 audit zh-CN 字符串改成英文**，与 overview/users/models/credentials/virtual_models 五视图的 zh-CN 风格不一致,且超出任务范围。修完 HIGH 后我会切到 Approve；M-33 / NIT 不阻塞。

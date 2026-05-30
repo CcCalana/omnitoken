@@ -29,6 +29,8 @@
 | 05-23 | **上线门评估**：用户列三条 release-gate ①前端看报 ✅(overview 趋势+模型环图,无时间切换是已知非阻塞)/②管理员分配额度 ✅(users tab 月度预算编辑 + RBAC)/③审计查看用户使用场景 ❌ 缺口 → 落地为 T-AUDIT-USAGE-VIEW |
 | 05-23 | **T-AUDIT-USAGE-VIEW 任务体写好**（status:todo）。audit tab 加 tab 切换"管理操作流水 / 用户使用流水"；后者按 user_id 聚合 usage_events，含模型 top-N、小时分布、近 N 次调用详情 |
 | 05-30 | **用户决策: v1 发布后优先走 Phase 3-A 收尾 (T-045 协议转换)，再走 vNext 基础设施**。T-AUDIT-USAGE-VIEW H-8/M-33 已在 `e9d878a` 修复，用户确认无需二审。T-CONC-RERUN 经 T-MP-DEEPSEEK 100% 验证、H-6 关闭，签字 done。v1 底座三角完整就绪 |
+| 05-30 | **T-045 proposal (`b61600a`) → R-045-prop Approved**。5/5 决策采纳；handler 分层 `anthropic.MessagesHandler → usage.Middleware → proxy` 用 transforming ResponseWriter 让 usage 捕获 OpenAI bytes 不改 parser。Codex 开实施 |
+| 05-30 | **T-045 impl (`d17a430`) → R-045 Approved**。1070 行纯 stdlib，4 文件零改 usage 包。transforming ResponseWriter + SSE 状态机 + X-1/X-2/X-3 全部落地。Phase 3-A "demoable moment" 达成——Claude Code 可通过 OmniToken `/v1/messages` 调用任意 OpenAI-compatible 上游 |
 
 ---
 
@@ -157,7 +159,7 @@ E2E 验收通过，但**前端假数据 + admin 无鉴权 + 未验证并发**。
 | 2 | T-042 Codex 适配 | `~/.codex/config.toml` + `auth.json` 无损 toml_edit | 2d | T-041 | ✅ `ceb123c` |
 | 3 | T-043 OpenCode 适配 | `~/.config/opencode/opencode.json` 加 XDG 路径解析 | 1d | T-042 | ✅ `5254c48` |
 | 4 | T-040 抽象层提取（后置） | 三处重复后抽 `Registry` + `AgentConfig` interface | 1d | T-043 | ✅ `147502da` |
-| 5 | T-045 Anthropic → OpenAI 协议转换 | gateway 多挂 `/v1/messages`；Anthropic↔OpenAI 双向转换，让 Claude Code 真正能跑 | 4d | T-041 ✅ + T-016 ✅ | todo (v1 发布后首务) |
+| 5 | T-045 Anthropic → OpenAI 协议转换 | gateway 多挂 `/v1/messages`；Anthropic↔OpenAI 双向转换，让 Claude Code 真正能跑 | 4d | T-041 ✅ + T-016 ✅ | ✅ `d17a430` |
 | 6 | T-044 路由规则联动 | apply 配置 = 同步生成 OmniToken 内部 `virtual_models` + admin 端可视化 | 2d | T-040 | todo |
 | 7 | T-046 一键 onboard CLI 收口 | `omnitoken adopt <agent>` 统一入口 + 退出 / restore | 1d | T-044 + T-045 | todo |
 
@@ -165,7 +167,7 @@ E2E 验收通过，但**前端假数据 + admin 无鉴权 + 未验证并发**。
 
 ---
 
-## T-045 Anthropic → OpenAI 协议转换 [phase:3-A] [owner:codex] [status:review] [started:2026-05-30 10:27 CST]
+## T-045 Anthropic → OpenAI 协议转换 [phase:3-A] [owner:codex] [status:done] [started:2026-05-30 10:27 CST]
 
 **目标**: gateway 新增 `POST /v1/messages` 端点，接收 Anthropic Messages API 格式请求，转换为 OpenAI chat completions 格式后走既有 proxy + middleware 管道，上游响应转换回 Anthropic 格式返回客户端。使 Claude Code 能通过 OmniToken 调用任意 OpenAI-compatible 上游（Ark / DeepSeek / 未来 provider）。
 
@@ -265,6 +267,8 @@ Anthropic 转换器作为一个 `http.Handler` wrapper，包裹既有的 OpenAI 
 - OpenAI golden fixtures：`testdata/golden/ark/openai_*.json` / `openai_stream_*.txt`
 - Anthropic Messages API 文档：`https://docs.anthropic.com/en/api/messages`
 - Claude Code adapter：`internal/agent_adapter/claude_code.go`（`ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL` 生成逻辑）
+
+Result: `d17a430` + `fd35718` — 1070 行纯 stdlib，4 文件零改 usage 包；transforming ResponseWriter + SSE 状态机 + X-1/X-2/X-3 全部落地；make lint/test/test-race + proxy e2e 全绿；no undeclared deviation.
 
 **Result**: `d17a430` — `make lint` / `make test` / `make test-race` / proxy e2e all green; R-045-prop X-1/X-2/X-3 covered, no deviation.
 
