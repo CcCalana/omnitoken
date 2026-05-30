@@ -34,8 +34,8 @@ func TestRunCLIAdoptClaudeCodeUsesHomeOverride(t *testing.T) {
 	if strings.Contains(stdout.String(), "omt_secret") || strings.Contains(stderr.String(), "omt_secret") {
 		t.Fatalf("CLI output leaked token stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "managed_env ANTHROPIC_BASE_URL") {
-		t.Fatalf("managed env list missing from stdout: %s", stdout.String())
+	if !strings.Contains(stdout.String(), "✓ claude-code configured") {
+		t.Fatalf("success summary missing from stdout: %s", stdout.String())
 	}
 }
 
@@ -167,7 +167,9 @@ func TestRunCLIInvalidExistingConfigExitsTwo(t *testing.T) {
 }
 
 func TestRunCLIRestoreClaudeCode(t *testing.T) {
-	t.Parallel()
+	oldTTY := inputTTY
+	inputTTY = func() bool { return false }
+	defer func() { inputTTY = oldTTY }()
 
 	home := t.TempDir()
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
@@ -235,10 +237,9 @@ requires_openai_auth = false
 		t.Fatalf("CLI output leaked token stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 	for _, want := range []string{
-		"WARN cli_auth_credentials_store: system -> file",
-		"WARN requires_openai_auth: false -> true",
-		"managed_env OPENAI_API_KEY",
-		"managed_toml model,model_provider",
+		"✓ codex configured",
+		"gateway https://gateway.example",
+		"model chat-balanced",
 	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
@@ -281,7 +282,9 @@ func TestRunCLIAdoptCodexInvalidConfigExitsTwo(t *testing.T) {
 }
 
 func TestRunCLIRestoreCodex(t *testing.T) {
-	t.Parallel()
+	oldTTY := inputTTY
+	inputTTY = func() bool { return false }
+	defer func() { inputTTY = oldTTY }()
 
 	home := t.TempDir()
 	backupDir := filepath.Join(home, ".omnitoken", "backups", "codex")
@@ -307,7 +310,7 @@ func TestRunCLIRestoreCodex(t *testing.T) {
 	if !strings.Contains(string(configData), `"backup"`) {
 		t.Fatalf("config was not restored: %s", configData)
 	}
-	if !strings.Contains(stdout.String(), "restored ") || !strings.Contains(stdout.String(), "from ") {
+	if !strings.Contains(stdout.String(), "已恢复原始配置") || !strings.Contains(stdout.String(), "from ") {
 		t.Fatalf("restore output missing paths: %s", stdout.String())
 	}
 }
@@ -336,8 +339,8 @@ func TestRunCLIAdoptOpenCodeUsesHomeOverride(t *testing.T) {
 	if strings.Contains(stdout.String(), "omt_secret") || strings.Contains(stderr.String(), "omt_secret") {
 		t.Fatalf("CLI output leaked token stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "managed_provider provider.omnitoken.name") {
-		t.Fatalf("managed provider list missing from stdout: %s", stdout.String())
+	if !strings.Contains(stdout.String(), "✓ opencode configured") {
+		t.Fatalf("success summary missing from stdout: %s", stdout.String())
 	}
 	if _, err := os.Stat(filepath.Join(xdg, "opencode", "opencode.json")); !os.IsNotExist(err) {
 		t.Fatalf("XDG config should not be written when --home is set: %v", err)
@@ -379,7 +382,9 @@ func TestRunCLIAdoptOpenCodeInvalidConfigExitsTwo(t *testing.T) {
 }
 
 func TestRunCLIRestoreOpenCode(t *testing.T) {
-	t.Parallel()
+	oldTTY := inputTTY
+	inputTTY = func() bool { return false }
+	defer func() { inputTTY = oldTTY }()
 
 	home := t.TempDir()
 	backupDir := filepath.Join(home, ".omnitoken", "backups", "opencode")
@@ -402,7 +407,175 @@ func TestRunCLIRestoreOpenCode(t *testing.T) {
 	if !strings.Contains(string(configData), `"backup"`) {
 		t.Fatalf("config was not restored: %s", configData)
 	}
-	if !strings.Contains(stdout.String(), "restored ") || !strings.Contains(stdout.String(), "from ") {
+	if !strings.Contains(stdout.String(), "已恢复原始配置") || !strings.Contains(stdout.String(), "from ") {
 		t.Fatalf("restore output missing paths: %s", stdout.String())
+	}
+}
+
+func TestRunCLIAdoptDryRunDoesNotWrite(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := runCLI([]string{
+		"adopt",
+		"claude-code",
+		"--gateway-url",
+		"https://gateway.example",
+		"--token",
+		"omt_secret",
+		"--home",
+		home,
+		"--dry-run",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d stderr=%s", code, stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "settings.json")); !os.IsNotExist(err) {
+		t.Fatalf("dry-run should not write settings: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "Would write settings to ") {
+		t.Fatalf("dry-run output missing planned write path: %s", stdout.String())
+	}
+}
+
+func TestRunCLIStatusListsAllAgents(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := runCLI([]string{"status", "--home", home}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d stderr=%s", code, stderr.String())
+	}
+	for _, want := range []string{"claude-code: 未配置", "codex: 未配置", "opencode: 未配置"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
+		}
+	}
+}
+
+func TestRunCLIStatusClaudeCodeRedactsToken(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("mkdir settings dir: %v", err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(`{"env":{"ANTHROPIC_BASE_URL":"https://gateway.example","ANTHROPIC_MODEL":"chat-fast","ANTHROPIC_AUTH_TOKEN":"omt_secret_token"}}`), 0o600); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runCLI([]string{"status", "claude-code", "--home", home}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "claude-code: 已配置") || !strings.Contains(out, "token=omt_secr...") {
+		t.Fatalf("status output missing configured summary: %s", out)
+	}
+	if strings.Contains(out, "omt_secret_token") {
+		t.Fatalf("status output leaked token: %s", out)
+	}
+}
+
+func TestRunCLIAdoptPromptsWhenRequiredFlagsMissing(t *testing.T) {
+	home := t.TempDir()
+	oldStdin := cliStdin
+	oldTTY := inputTTY
+	cliStdin = strings.NewReader("https://gateway.example\nomt_secret\n\nskip\n")
+	inputTTY = func() bool { return true }
+	defer func() {
+		cliStdin = oldStdin
+		inputTTY = oldTTY
+	}()
+
+	var stdout, stderr bytes.Buffer
+	code := runCLI([]string{"adopt", "claude-code", "--home", home}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "settings.json")); err != nil {
+		t.Fatalf("settings file not written from prompts: %v", err)
+	}
+	if strings.Contains(stdout.String(), "omt_secret") || strings.Contains(stderr.String(), "omt_secret") {
+		t.Fatalf("CLI output leaked prompted token stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+func TestRunCLIRestoreTTYCancelDoesNotRestore(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	backupDir := filepath.Join(home, ".omnitoken", "backups", "claude-code")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("mkdir settings dir: %v", err)
+	}
+	if err := os.MkdirAll(backupDir, 0o755); err != nil {
+		t.Fatalf("mkdir backup dir: %v", err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(`{"env":{"ANTHROPIC_MODEL":"current"}}`), 0o600); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(backupDir, "settings.json.20260519T100204.000000004Z.bak"), []byte(`{"env":{"ANTHROPIC_MODEL":"backup"}}`), 0o600); err != nil {
+		t.Fatalf("write backup: %v", err)
+	}
+	oldStdin := cliStdin
+	oldTTY := inputTTY
+	cliStdin = strings.NewReader("n\n")
+	inputTTY = func() bool { return true }
+	defer func() {
+		cliStdin = oldStdin
+		inputTTY = oldTTY
+	}()
+
+	var stdout, stderr bytes.Buffer
+	code := runCLI([]string{"restore", "claude-code", "--home", home}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+	if !strings.Contains(string(data), `"current"`) {
+		t.Fatalf("settings should remain current after cancelled restore: %s", data)
+	}
+}
+
+func TestRunCLIAdoptEnsureUnauthorizedPolish(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	home := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := runCLI([]string{
+		"adopt",
+		"claude-code",
+		"--gateway-url",
+		"https://gateway.example",
+		"--token",
+		"bad-token",
+		"--model",
+		"chat-fast",
+		"--home",
+		home,
+		"--admin-url",
+		server.URL,
+		"--real-model",
+		"deepseek-v4-flash",
+		"--provider",
+		"deepseek",
+	}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "admin API 401") {
+		t.Fatalf("stderr missing polished 401 guidance: %s", stderr.String())
 	}
 }
