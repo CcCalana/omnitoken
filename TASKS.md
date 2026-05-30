@@ -165,7 +165,7 @@ E2E 验收通过，但**前端假数据 + admin 无鉴权 + 未验证并发**。
 
 ---
 
-## T-045 Anthropic → OpenAI 协议转换 [phase:3-A] [owner:codex] [status:todo]
+## T-045 Anthropic → OpenAI 协议转换 [phase:3-A] [owner:codex] [status:review] [started:2026-05-30 10:27 CST]
 
 **目标**: gateway 新增 `POST /v1/messages` 端点，接收 Anthropic Messages API 格式请求，转换为 OpenAI chat completions 格式后走既有 proxy + middleware 管道，上游响应转换回 Anthropic 格式返回客户端。使 Claude Code 能通过 OmniToken 调用任意 OpenAI-compatible 上游（Ark / DeepSeek / 未来 provider）。
 
@@ -265,6 +265,8 @@ Anthropic 转换器作为一个 `http.Handler` wrapper，包裹既有的 OpenAI 
 - OpenAI golden fixtures：`testdata/golden/ark/openai_*.json` / `openai_stream_*.txt`
 - Anthropic Messages API 文档：`https://docs.anthropic.com/en/api/messages`
 - Claude Code adapter：`internal/agent_adapter/claude_code.go`（`ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL` 生成逻辑）
+
+**Result**: `d17a430` — `make lint` / `make test` / `make test-race` / proxy e2e all green; R-045-prop X-1/X-2/X-3 covered, no deviation.
 
 ---
 
