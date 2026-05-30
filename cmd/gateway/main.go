@@ -117,6 +117,13 @@ func newMux(logger *slog.Logger, store auth.VirtualKeyStore, budgetChecker quota
 	mux.HandleFunc("GET /healthz", handleHealthz)
 	mux.Handle("GET /v1/models", protectGatewayRoute(store, http.HandlerFunc(handleModels)))
 	mux.Handle("POST /v1/chat/completions", protectGatewayRoute(store, enforceMonthlyBudget(logger, budgetChecker)(resolveVirtualModel(resolver)(chatHandler))))
+	mux.Handle("POST /v1/messages", protectGatewayRoute(store,
+		enforceMonthlyBudget(logger, budgetChecker)(
+			resolveVirtualModel(resolver)(
+				proxy.NewAnthropicMessagesHandler(chatHandler, logger, proxy.AnthropicMessagesConfig{}),
+			),
+		),
+	))
 
 	return httpx.RequestID(httpx.RequestLogger(logger)(mux))
 }
