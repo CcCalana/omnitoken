@@ -5,13 +5,12 @@ import (
 	"strings"
 )
 
-func RequireVirtualKey(store VirtualKeyStore, unauthorized func(http.ResponseWriter)) func(http.Handler) http.Handler {
+func RequireVirtualKey(store VirtualKeyStore, unauthorized func(http.ResponseWriter, *http.Request)) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			header := strings.TrimSpace(r.Header.Get("Authorization"))
-			token, ok := strings.CutPrefix(header, "Bearer ")
-			if !ok || strings.TrimSpace(token) == "" {
-				unauthorized(w)
+			token := extractGatewayToken(r)
+			if token == "" {
+				unauthorized(w, r)
 				return
 			}
 
@@ -21,11 +20,22 @@ func RequireVirtualKey(store VirtualKeyStore, unauthorized func(http.ResponseWri
 				return
 			}
 			if !authenticated {
-				unauthorized(w)
+				unauthorized(w, r)
 				return
 			}
 
 			next.ServeHTTP(w, r.WithContext(WithSubject(r.Context(), subject)))
 		})
 	}
+}
+
+func extractGatewayToken(r *http.Request) string {
+	header := strings.TrimSpace(r.Header.Get("Authorization"))
+	if token, ok := strings.CutPrefix(header, "Bearer "); ok {
+		token = strings.TrimSpace(token)
+		if token != "" {
+			return token
+		}
+	}
+	return strings.TrimSpace(r.Header.Get("x-api-key"))
 }

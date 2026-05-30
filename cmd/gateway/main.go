@@ -219,6 +219,26 @@ func protectGatewayRoute(store auth.VirtualKeyStore, next http.Handler) http.Han
 	return auth.RequireVirtualKey(store, writeGatewayUnauthorized)(next)
 }
 
+func writeGatewayUnauthorized(w http.ResponseWriter, r *http.Request) {
+	if isAnthropicMessagesPath(r.URL.Path) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write(anthropicErrorBytes("authentication_error", "invalid x-api-key"))
+		return
+	}
+	httpx.WriteJSON(w, http.StatusUnauthorized, errorEnvelope{
+		Error: errorDetail{
+			Message: "unauthorized",
+			Type:    "authentication_error",
+			Code:    "invalid_api_key",
+		},
+	})
+}
+
+func isAnthropicMessagesPath(path string) bool {
+	return strings.HasPrefix(path, "/v1/messages")
+}
+
 func enforceMonthlyBudget(logger *slog.Logger, checker quota.BudgetChecker) func(http.Handler) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
@@ -371,14 +391,15 @@ func handleModels(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-func writeGatewayUnauthorized(w http.ResponseWriter) {
-	httpx.WriteJSON(w, http.StatusUnauthorized, errorEnvelope{
-		Error: errorDetail{
-			Message: "unauthorized",
-			Type:    "authentication_error",
-			Code:    "invalid_api_key",
+func anthropicErrorBytes(errorType string, message string) []byte {
+	body, _ := json.Marshal(map[string]any{
+		"type": "error",
+		"error": map[string]string{
+			"type":    errorType,
+			"message": message,
 		},
 	})
+	return body
 }
 
 func writeGatewayQuotaExceeded(w http.ResponseWriter) {
