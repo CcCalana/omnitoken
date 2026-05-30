@@ -46,6 +46,14 @@ function createAdminAPI(baseURL = resolveAdminBaseURL()) {
     getModels: () => fetchJSON(`${base}/api/admin/models`),
     getMe: () => fetchJSON(`${base}/api/admin/me`),
     getVirtualModels: () => fetchJSON(`${base}/api/admin/virtual-models`),
+    createVirtualModel: (payload) => fetchJSON(`${base}/api/admin/virtual-models`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+    updateVirtualModel: (name, payload) => fetchJSON(`${base}/api/admin/virtual-models/${encodeURIComponent(name)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
     getCredentials: () => fetchJSON(`${base}/api/admin/credentials`),
     getAuditLogs: (filters = {}) => fetchJSON(`${base}/api/admin/audit-logs${toQueryString(filters)}`),
     getUserUsage: (userID, filters = {}) => fetchJSON(`${base}/api/admin/users/${encodeURIComponent(userID)}/usage${toQueryString(filters)}`),

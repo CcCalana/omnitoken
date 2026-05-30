@@ -615,6 +615,164 @@ func TestCredentialsAliasRoute(t *testing.T) {
 	}
 }
 
+func TestCreateVirtualModelEndpointValidatesStoresAndAudits(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeOverviewStore{
+		createVirtualModelResult: adminVirtualModel{
+			Name:        "chat-fast",
+			RealModel:   "deepseek-v4-flash",
+			Provider:    "deepseek",
+			Status:      "active",
+			Description: "fast coding model",
+		},
+	}
+	recorder := newAdminAuditRecorder()
+	cfg := testAdminConfig()
+	cfg.BootstrapToken = "dev-bootstrap"
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/virtual-models", strings.NewReader(`{
+		"name":"chat-fast",
+		"real_model":"deepseek-v4-flash",
+		"provider":"deepseek",
+		"description":"fast coding model"
+	}`))
+	req.Header.Set("Authorization", "Bearer dev-bootstrap")
+	rec := httptest.NewRecorder()
+
+	newMux(testLogger(), cfg, store, nil, nil, recorder).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+	if store.createVirtualModelParams.Name != "chat-fast" ||
+		store.createVirtualModelParams.RealModel != "deepseek-v4-flash" ||
+		store.createVirtualModelParams.Provider != "deepseek" {
+		t.Fatalf("unexpected create params: %+v", store.createVirtualModelParams)
+	}
+	entry := recorder.wait(t)
+	if entry.Action != rbac.ActionCreateVirtualModel || entry.ResourceType != "virtual_model" || entry.ResourceID != "chat-fast" {
+		t.Fatalf("unexpected audit entry: %+v", entry)
+	}
+}
+
+func TestCreateVirtualModelEndpointRejectsConflictAndInvalidInput(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		body       string
+		storeErr   error
+		wantStatus int
+		wantCode   string
+	}{
+		{name: "empty name", body: `{"name":"","real_model":"m","provider":"ark"}`, wantStatus: http.StatusBadRequest, wantCode: "invalid_virtual_model"},
+		{name: "bad provider", body: `{"name":"chat","real_model":"m","provider":"openai"}`, wantStatus: http.StatusBadRequest, wantCode: "invalid_virtual_model"},
+		{name: "conflict", body: `{"name":"chat","real_model":"m","provider":"ark"}`, storeErr: errVirtualModelExists, wantStatus: http.StatusConflict, wantCode: "virtual_model_exists"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := &fakeOverviewStore{createVirtualModelErr: tt.storeErr}
+			req := httptest.NewRequest(http.MethodPost, "/api/admin/virtual-models", strings.NewReader(tt.body))
+			rec := httptest.NewRecorder()
+
+			makeCreateVirtualModelHandler(testLogger(), store).ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("expected status %d, got %d body=%s", tt.wantStatus, rec.Code, rec.Body.String())
+			}
+			assertErrorCode(t, rec, tt.wantCode)
+		})
+	}
+}
+
+func TestUpdateVirtualModelEndpointPatchesAndAudits(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeOverviewStore{
+		updateVirtualModelResult: updateVirtualModelResult{
+			Before: adminVirtualModel{Name: "chat-fast", RealModel: "glm-5.1", Provider: "ark", Status: "active", Description: "old"},
+			After:  adminVirtualModel{Name: "chat-fast", RealModel: "deepseek-v4-flash", Provider: "deepseek", Status: "disabled", Description: "new"},
+		},
+	}
+	recorder := newAdminAuditRecorder()
+	cfg := testAdminConfig()
+	cfg.BootstrapToken = "dev-bootstrap"
+	req := httptest.NewRequest(http.MethodPatch, "/api/admin/virtual-models/chat-fast", strings.NewReader(`{
+		"real_model":"deepseek-v4-flash",
+		"provider":"deepseek",
+		"status":"disabled",
+		"description":"new"
+	}`))
+	req.Header.Set("Authorization", "Bearer dev-bootstrap")
+	rec := httptest.NewRecorder()
+
+	newMux(testLogger(), cfg, store, nil, nil, recorder).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	if store.updateVirtualModelParams.Name != "chat-fast" ||
+		store.updateVirtualModelParams.RealModel == nil ||
+		*store.updateVirtualModelParams.RealModel != "deepseek-v4-flash" ||
+		store.updateVirtualModelParams.Status == nil ||
+		*store.updateVirtualModelParams.Status != "disabled" {
+		t.Fatalf("unexpected update params: %+v", store.updateVirtualModelParams)
+	}
+	entry := recorder.wait(t)
+	if entry.Action != rbac.ActionUpdateVirtualModel || entry.ResourceID != "chat-fast" {
+		t.Fatalf("unexpected audit entry: %+v", entry)
+	}
+}
+
+func TestUpdateVirtualModelEndpointRejectsMissingInvalidAndViewer(t *testing.T) {
+	t.Parallel()
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/admin/virtual-models/chat-fast", strings.NewReader(`{}`))
+	req.SetPathValue("name", "chat-fast")
+	rec := httptest.NewRecorder()
+	makeUpdateVirtualModelHandler(testLogger(), &fakeOverviewStore{}).ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusBadRequest, rec.Code, rec.Body.String())
+	}
+	assertErrorCode(t, rec, "invalid_virtual_model")
+
+	req = httptest.NewRequest(http.MethodPatch, "/api/admin/virtual-models/chat-fast", strings.NewReader(`{"status":"archived"}`))
+	req.SetPathValue("name", "chat-fast")
+	rec = httptest.NewRecorder()
+	makeUpdateVirtualModelHandler(testLogger(), &fakeOverviewStore{}).ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusBadRequest, rec.Code, rec.Body.String())
+	}
+	assertErrorCode(t, rec, "invalid_virtual_model")
+
+	req = httptest.NewRequest(http.MethodPatch, "/api/admin/virtual-models/missing", strings.NewReader(`{"status":"disabled"}`))
+	req.SetPathValue("name", "missing")
+	rec = httptest.NewRecorder()
+	makeUpdateVirtualModelHandler(testLogger(), &fakeOverviewStore{updateVirtualModelErr: errVirtualModelMissing}).ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusNotFound, rec.Code, rec.Body.String())
+	}
+	assertErrorCode(t, rec, "virtual_model_not_found")
+
+	sessionStore := auth.NewSessionStore(time.Hour)
+	token, _ := sessionStore.Create(uuid.New(), uuid.New(), "viewer")
+	recorder := newAdminAuditRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/virtual-models", strings.NewReader(`{"name":"chat","real_model":"m","provider":"ark"}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec = httptest.NewRecorder()
+	newMux(testLogger(), testAdminConfig(), &fakeOverviewStore{}, nil, sessionStore, recorder).ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusForbidden, rec.Code, rec.Body.String())
+	}
+	entry := recorder.wait(t)
+	if entry.Action != rbac.ActionCreateVirtualModel || entry.StatusCode != http.StatusForbidden {
+		t.Fatalf("unexpected audit entry: %+v", entry)
+	}
+}
+
 func TestCreateCredentialEndpointValidatesStoresAndAudits(t *testing.T) {
 	t.Parallel()
 
@@ -1748,46 +1906,54 @@ func (r *adminAuditRecorder) expectNoRecord(t *testing.T) {
 }
 
 type fakeOverviewStore struct {
-	response                overviewResponse
-	users                   usersResponse
-	models                  modelsResponse
-	auditLogs               []adminAuditLog
-	userUsage               userUsageResponse
-	updateResult            updateUserBudgetResult
-	err                     error
-	usersErr                error
-	modelsErr               error
-	auditLogsErr            error
-	userUsageErr            error
-	updateErr               error
-	called                  bool
-	usersCalled             bool
-	modelsCalled            bool
-	auditLogsCalled         bool
-	userUsageCalled         bool
-	updateCalled            bool
-	now                     time.Time
-	usersNow                time.Time
-	modelsNow               time.Time
-	userUsageNow            time.Time
-	auditLogFilters         auditLogFilters
-	userUsageUserID         uuid.UUID
-	userUsageFilters        userUsageFilters
-	updateUserID            uuid.UUID
-	updateBudgetCents       *int64
-	updateAt                time.Time
-	authUserID              uuid.UUID
-	authOrgID               uuid.UUID
-	authRole                string
-	authErr                 error
-	credentials             credentialsResponse
-	credentialsErr          error
-	createCredentialResult  credentials.PublicCredential
-	createCredentialErr     error
-	createCredentialParams  credentials.CreateParams
-	disableCredentialResult credentials.PublicCredential
-	disableCredentialErr    error
-	disableCredentialID     string
+	response                 overviewResponse
+	users                    usersResponse
+	models                   modelsResponse
+	auditLogs                []adminAuditLog
+	userUsage                userUsageResponse
+	updateResult             updateUserBudgetResult
+	err                      error
+	usersErr                 error
+	modelsErr                error
+	auditLogsErr             error
+	userUsageErr             error
+	updateErr                error
+	called                   bool
+	usersCalled              bool
+	modelsCalled             bool
+	auditLogsCalled          bool
+	userUsageCalled          bool
+	updateCalled             bool
+	now                      time.Time
+	usersNow                 time.Time
+	modelsNow                time.Time
+	userUsageNow             time.Time
+	auditLogFilters          auditLogFilters
+	userUsageUserID          uuid.UUID
+	userUsageFilters         userUsageFilters
+	updateUserID             uuid.UUID
+	updateBudgetCents        *int64
+	updateAt                 time.Time
+	authUserID               uuid.UUID
+	authOrgID                uuid.UUID
+	authRole                 string
+	authErr                  error
+	credentials              credentialsResponse
+	credentialsErr           error
+	virtualModels            virtualModelsResponse
+	virtualModelsErr         error
+	createVirtualModelResult adminVirtualModel
+	createVirtualModelErr    error
+	createVirtualModelParams createVirtualModelParams
+	updateVirtualModelResult updateVirtualModelResult
+	updateVirtualModelErr    error
+	updateVirtualModelParams updateVirtualModelParams
+	createCredentialResult   credentials.PublicCredential
+	createCredentialErr      error
+	createCredentialParams   credentials.CreateParams
+	disableCredentialResult  credentials.PublicCredential
+	disableCredentialErr     error
+	disableCredentialID      string
 }
 
 func (f *fakeOverviewStore) Authenticate(ctx context.Context, email, password string) (uuid.UUID, uuid.UUID, string, error) {
@@ -1799,7 +1965,17 @@ func (f *fakeOverviewStore) Authenticate(ctx context.Context, email, password st
 }
 
 func (f *fakeOverviewStore) LoadVirtualModels(ctx context.Context) (virtualModelsResponse, error) {
-	return virtualModelsResponse{}, errors.New("not implemented")
+	return f.virtualModels, f.virtualModelsErr
+}
+
+func (f *fakeOverviewStore) CreateVirtualModel(_ context.Context, params createVirtualModelParams) (adminVirtualModel, error) {
+	f.createVirtualModelParams = params
+	return f.createVirtualModelResult, f.createVirtualModelErr
+}
+
+func (f *fakeOverviewStore) UpdateVirtualModel(_ context.Context, params updateVirtualModelParams) (updateVirtualModelResult, error) {
+	f.updateVirtualModelParams = params
+	return f.updateVirtualModelResult, f.updateVirtualModelErr
 }
 
 func (f *fakeOverviewStore) LoadCredentials(ctx context.Context) (credentialsResponse, error) {

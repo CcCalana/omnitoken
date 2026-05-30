@@ -37,6 +37,8 @@ const (
 )
 
 var errAdminUserNotFound = errors.New("admin user not found")
+var errVirtualModelExists = errors.New("virtual model already exists")
+var errVirtualModelMissing = errors.New("virtual model not found")
 
 type healthResponse struct {
 	Status  string `json:"status"`
@@ -108,6 +110,40 @@ type adminVirtualModel struct {
 	Provider    string `json:"provider"`
 	Status      string `json:"status"`
 	Description string `json:"description"`
+}
+
+type createVirtualModelRequest struct {
+	Name        string `json:"name"`
+	RealModel   string `json:"real_model"`
+	Provider    string `json:"provider"`
+	Description string `json:"description"`
+}
+
+type updateVirtualModelRequest struct {
+	RealModel   *string `json:"real_model"`
+	Provider    *string `json:"provider"`
+	Status      *string `json:"status"`
+	Description *string `json:"description"`
+}
+
+type createVirtualModelParams struct {
+	Name        string
+	RealModel   string
+	Provider    string
+	Description string
+}
+
+type updateVirtualModelParams struct {
+	Name        string
+	RealModel   *string
+	Provider    *string
+	Status      *string
+	Description *string
+}
+
+type updateVirtualModelResult struct {
+	Before adminVirtualModel
+	After  adminVirtualModel
 }
 
 type adminModelUsage struct {
@@ -242,6 +278,8 @@ type overviewStore interface {
 	LoadUserUsage(context.Context, uuid.UUID, userUsageFilters, time.Time) (userUsageResponse, error)
 	UpdateUserBudget(context.Context, uuid.UUID, *int64, time.Time) (updateUserBudgetResult, error)
 	LoadVirtualModels(context.Context) (virtualModelsResponse, error)
+	CreateVirtualModel(context.Context, createVirtualModelParams) (adminVirtualModel, error)
+	UpdateVirtualModel(context.Context, updateVirtualModelParams) (updateVirtualModelResult, error)
 	LoadCredentials(context.Context) (credentialsResponse, error)
 	CreateCredential(context.Context, credentials.CreateParams) (credentials.PublicCredential, error)
 	DisableCredential(context.Context, string) (credentials.PublicCredential, error)
@@ -466,6 +504,8 @@ func newMux(logger *slog.Logger, cfg config.AdminConfig, overview overviewStore,
 	mux.Handle("GET /api/admin/users", protectedRead(http.HandlerFunc(makeUsersHandler(logger, overview, time.Now))))
 	mux.Handle("GET /api/admin/models", protectedRead(http.HandlerFunc(makeModelsHandler(logger, overview, time.Now))))
 	mux.Handle("GET /api/admin/virtual-models", protectedRead(http.HandlerFunc(makeVirtualModelsHandler(logger, overview))))
+	mux.Handle("POST /api/admin/virtual-models", protectedWrite(rbac.ActionCreateVirtualModel, http.HandlerFunc(makeCreateVirtualModelHandler(logger, overview))))
+	mux.Handle("PATCH /api/admin/virtual-models/{name}", protectedWrite(rbac.ActionUpdateVirtualModel, http.HandlerFunc(makeUpdateVirtualModelHandler(logger, overview))))
 	credentialsHandler := protectedRead(http.HandlerFunc(makeCredentialsHandler(logger, overview)))
 	mux.Handle("GET /admin/credentials", credentialsHandler)
 	mux.Handle("GET /api/admin/credentials", credentialsHandler)
@@ -577,6 +617,89 @@ func makeVirtualModelsHandler(logger *slog.Logger, store overviewStore) http.Han
 		}
 
 		httpx.WriteJSON(w, http.StatusOK, models)
+	}
+}
+
+func makeCreateVirtualModelHandler(logger *slog.Logger, store overviewStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		audit.SetAction(r.Context(), rbac.ActionCreateVirtualModel)
+		audit.SetResource(r.Context(), "virtual_model", "")
+		audit.SetBefore(r.Context(), nil)
+
+		var body createVirtualModelRequest
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
+			httpx.WriteJSON(w, http.StatusBadRequest, errorEnvelope("invalid request body", "invalid_request", "invalid_json"))
+			return
+		}
+		params, err := parseCreateVirtualModelRequest(body)
+		if err != nil {
+			httpx.WriteJSON(w, http.StatusBadRequest, errorEnvelope(err.Error(), "invalid_request", "invalid_virtual_model"))
+			return
+		}
+		audit.SetResource(r.Context(), "virtual_model", params.Name)
+		audit.SetAfter(r.Context(), virtualModelAuditView(adminVirtualModel{
+			Name:        params.Name,
+			RealModel:   params.RealModel,
+			Provider:    params.Provider,
+			Status:      "active",
+			Description: params.Description,
+		}))
+
+		if store == nil {
+			logger.Error("create virtual model without admin store")
+			httpx.WriteJSON(w, http.StatusServiceUnavailable, errorEnvelope("admin store is not configured", "server_error", "admin_store_not_configured"))
+			return
+		}
+		created, err := store.CreateVirtualModel(r.Context(), params)
+		if err != nil {
+			if errors.Is(err, errVirtualModelExists) {
+				httpx.WriteJSON(w, http.StatusConflict, errorEnvelope("virtual model already exists", "invalid_request", "virtual_model_exists"))
+				return
+			}
+			logger.Error("create virtual model", "name", params.Name, "error", err)
+			httpx.WriteJSON(w, http.StatusInternalServerError, errorEnvelope("failed to create virtual model", "server_error", "create_virtual_model_failed"))
+			return
+		}
+		audit.SetAfter(r.Context(), virtualModelAuditView(created))
+		httpx.WriteJSON(w, http.StatusCreated, created)
+	}
+}
+
+func makeUpdateVirtualModelHandler(logger *slog.Logger, store overviewStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := strings.TrimSpace(r.PathValue("name"))
+		audit.SetAction(r.Context(), rbac.ActionUpdateVirtualModel)
+		audit.SetResource(r.Context(), "virtual_model", name)
+
+		var body updateVirtualModelRequest
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
+			httpx.WriteJSON(w, http.StatusBadRequest, errorEnvelope("invalid request body", "invalid_request", "invalid_json"))
+			return
+		}
+		params, err := parseUpdateVirtualModelRequest(name, body)
+		if err != nil {
+			httpx.WriteJSON(w, http.StatusBadRequest, errorEnvelope(err.Error(), "invalid_request", "invalid_virtual_model"))
+			return
+		}
+
+		if store == nil {
+			logger.Error("update virtual model without admin store", "name", name)
+			httpx.WriteJSON(w, http.StatusServiceUnavailable, errorEnvelope("admin store is not configured", "server_error", "admin_store_not_configured"))
+			return
+		}
+		updated, err := store.UpdateVirtualModel(r.Context(), params)
+		if err != nil {
+			if errors.Is(err, errVirtualModelMissing) {
+				httpx.WriteJSON(w, http.StatusNotFound, errorEnvelope("virtual model not found", "invalid_request", "virtual_model_not_found"))
+				return
+			}
+			logger.Error("update virtual model", "name", name, "error", err)
+			httpx.WriteJSON(w, http.StatusInternalServerError, errorEnvelope("failed to update virtual model", "server_error", "update_virtual_model_failed"))
+			return
+		}
+		audit.SetBefore(r.Context(), virtualModelAuditView(updated.Before))
+		audit.SetAfter(r.Context(), virtualModelAuditView(updated.After))
+		httpx.WriteJSON(w, http.StatusOK, updated.After)
 	}
 }
 
@@ -702,6 +825,93 @@ func parseCreateCredentialRequest(body createCredentialRequest) (credentials.Cre
 		Priority: body.Priority,
 		Secret:   key,
 	}, nil
+}
+
+func parseCreateVirtualModelRequest(body createVirtualModelRequest) (createVirtualModelParams, error) {
+	name := strings.TrimSpace(body.Name)
+	if name == "" {
+		return createVirtualModelParams{}, fmt.Errorf("name is required")
+	}
+	realModel := strings.TrimSpace(body.RealModel)
+	if realModel == "" {
+		return createVirtualModelParams{}, fmt.Errorf("real_model is required")
+	}
+	provider := strings.TrimSpace(body.Provider)
+	if err := validateVirtualModelProvider(provider); err != nil {
+		return createVirtualModelParams{}, err
+	}
+	return createVirtualModelParams{
+		Name:        name,
+		RealModel:   realModel,
+		Provider:    provider,
+		Description: strings.TrimSpace(body.Description),
+	}, nil
+}
+
+func parseUpdateVirtualModelRequest(name string, body updateVirtualModelRequest) (updateVirtualModelParams, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return updateVirtualModelParams{}, fmt.Errorf("name is required")
+	}
+	if body.RealModel == nil && body.Provider == nil && body.Status == nil && body.Description == nil {
+		return updateVirtualModelParams{}, fmt.Errorf("at least one field is required")
+	}
+	params := updateVirtualModelParams{Name: name}
+	hasNonEmpty := false
+	if body.RealModel != nil {
+		value := strings.TrimSpace(*body.RealModel)
+		if value == "" {
+			return updateVirtualModelParams{}, fmt.Errorf("real_model must not be empty")
+		}
+		params.RealModel = &value
+		hasNonEmpty = true
+	}
+	if body.Provider != nil {
+		value := strings.TrimSpace(*body.Provider)
+		if err := validateVirtualModelProvider(value); err != nil {
+			return updateVirtualModelParams{}, err
+		}
+		params.Provider = &value
+		hasNonEmpty = true
+	}
+	if body.Status != nil {
+		value := strings.TrimSpace(*body.Status)
+		if value != "active" && value != "disabled" {
+			return updateVirtualModelParams{}, fmt.Errorf("status must be active or disabled")
+		}
+		params.Status = &value
+		hasNonEmpty = true
+	}
+	if body.Description != nil {
+		value := strings.TrimSpace(*body.Description)
+		params.Description = &value
+		if value != "" {
+			hasNonEmpty = true
+		}
+	}
+	if !hasNonEmpty {
+		return updateVirtualModelParams{}, fmt.Errorf("at least one field is required")
+	}
+	return params, nil
+}
+
+func validateVirtualModelProvider(provider string) error {
+	switch provider {
+	case "ark", "deepseek":
+		return nil
+	default:
+		return fmt.Errorf("provider must be ark or deepseek")
+	}
+}
+
+func virtualModelAuditView(model adminVirtualModel) map[string]any {
+	return map[string]any{
+		"name":        model.Name,
+		"real_model":  model.RealModel,
+		"provider":    model.Provider,
+		"status":      model.Status,
+		"description": model.Description,
+	}
 }
 
 func credentialAuditView(provider, alias string, priority int, baseURL string, status string, healthState string) map[string]any {
@@ -1400,6 +1610,98 @@ ORDER BY name ASC`
 		return virtualModelsResponse{}, fmt.Errorf("iterate virtual models: %w", err)
 	}
 	return response, nil
+}
+
+func (s *postgresOverviewStore) CreateVirtualModel(ctx context.Context, params createVirtualModelParams) (adminVirtualModel, error) {
+	const query = `
+INSERT INTO virtual_models (name, real_model, provider, status, description)
+VALUES ($1, $2, $3, 'active', NULLIF($4, ''))
+ON CONFLICT (name) DO NOTHING
+RETURNING name, real_model, provider, status, COALESCE(description, '')`
+
+	var created adminVirtualModel
+	err := s.db.QueryRowContext(ctx, query, params.Name, params.RealModel, params.Provider, params.Description).Scan(
+		&created.Name,
+		&created.RealModel,
+		&created.Provider,
+		&created.Status,
+		&created.Description,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return adminVirtualModel{}, errVirtualModelExists
+	}
+	if err != nil {
+		return adminVirtualModel{}, fmt.Errorf("insert virtual model: %w", err)
+	}
+	return created, nil
+}
+
+func (s *postgresOverviewStore) UpdateVirtualModel(ctx context.Context, params updateVirtualModelParams) (updateVirtualModelResult, error) {
+	before, err := s.getVirtualModel(ctx, params.Name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return updateVirtualModelResult{}, errVirtualModelMissing
+	}
+	if err != nil {
+		return updateVirtualModelResult{}, err
+	}
+
+	after := before
+	if params.RealModel != nil {
+		after.RealModel = *params.RealModel
+	}
+	if params.Provider != nil {
+		after.Provider = *params.Provider
+	}
+	if params.Status != nil {
+		after.Status = *params.Status
+	}
+	if params.Description != nil {
+		after.Description = *params.Description
+	}
+
+	const query = `
+UPDATE virtual_models
+SET real_model = $2,
+    provider = $3,
+    status = $4,
+    description = NULLIF($5, ''),
+    updated_at = now()
+WHERE name = $1
+RETURNING name, real_model, provider, status, COALESCE(description, '')`
+
+	var updated adminVirtualModel
+	if err := s.db.QueryRowContext(ctx, query, after.Name, after.RealModel, after.Provider, after.Status, after.Description).Scan(
+		&updated.Name,
+		&updated.RealModel,
+		&updated.Provider,
+		&updated.Status,
+		&updated.Description,
+	); err != nil {
+		return updateVirtualModelResult{}, fmt.Errorf("update virtual model: %w", err)
+	}
+	return updateVirtualModelResult{Before: before, After: updated}, nil
+}
+
+func (s *postgresOverviewStore) getVirtualModel(ctx context.Context, name string) (adminVirtualModel, error) {
+	const query = `
+SELECT name, real_model, COALESCE(provider, 'ark') AS provider, status, COALESCE(description, '')
+FROM virtual_models
+WHERE name = $1`
+
+	var model adminVirtualModel
+	if err := s.db.QueryRowContext(ctx, query, name).Scan(
+		&model.Name,
+		&model.RealModel,
+		&model.Provider,
+		&model.Status,
+		&model.Description,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return adminVirtualModel{}, err
+		}
+		return adminVirtualModel{}, fmt.Errorf("query virtual model: %w", err)
+	}
+	return model, nil
 }
 
 func (s *postgresOverviewStore) LoadCredentials(ctx context.Context) (credentialsResponse, error) {

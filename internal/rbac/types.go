@@ -14,16 +14,18 @@ const (
 	StatusActive   = "active"
 	StatusDisabled = "disabled"
 
-	ActionViewOverview      = "view_overview"
-	ActionViewUsers         = "view_users"
-	ActionViewModels        = "view_models"
-	ActionViewAuditLogs     = "view_audit_logs"
-	ActionViewOwnUsage      = "view_own_usage"
-	ActionCreateVirtualKey  = "create_virtual_key"
-	ActionDisableVirtualKey = "disable_virtual_key"
-	ActionCreateCredential  = "create_provider_credential"
-	ActionDisableCredential = "disable_provider_credential"
-	ActionUpdateQuota       = "update_quota"
+	ActionViewOverview       = "view_overview"
+	ActionViewUsers          = "view_users"
+	ActionViewModels         = "view_models"
+	ActionViewAuditLogs      = "view_audit_logs"
+	ActionViewOwnUsage       = "view_own_usage"
+	ActionCreateVirtualKey   = "create_virtual_key"
+	ActionDisableVirtualKey  = "disable_virtual_key"
+	ActionCreateCredential   = "create_provider_credential"
+	ActionDisableCredential  = "disable_provider_credential"
+	ActionCreateVirtualModel = "create_virtual_model"
+	ActionUpdateVirtualModel = "update_virtual_model"
+	ActionUpdateQuota        = "update_quota"
 
 	ReasonAllowedByAdmin     = "allowed_by_admin"
 	ReasonAllowedByViewer    = "allowed_by_viewer"
@@ -60,5 +62,7 @@ var AllActions = []string{
 	ActionDisableVirtualKey,
 	ActionCreateCredential,
 	ActionDisableCredential,
+	ActionCreateVirtualModel,
+	ActionUpdateVirtualModel,
 	ActionUpdateQuota,
 }

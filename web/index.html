@@ -202,8 +202,11 @@
 
     <section id="view-virtualModels" class="view">
       <div class="view-intro">
-        <p>虚拟模型映射来自网关解析器，改变此处请调整数据库或 seed 数据。</p>
-        <button class="secondary-button" type="button" data-action="reload-virtual-models">刷新映射</button>
+        <p>虚拟模型映射来自网关解析器，可同步给 agent 配置使用。</p>
+        <div class="view-actions">
+          <button class="primary-button" type="button" data-action="open-virtual-model-modal">新建</button>
+          <button class="secondary-button" type="button" data-action="reload-virtual-models">刷新映射</button>
+        </div>
       </div>
       <div id="virtual-models-alert" class="alert is-hidden"></div>
 
@@ -214,16 +217,59 @@
               <tr>
                 <th>虚拟模型 (Virtual)</th>
                 <th>真实模型 (Real)</th>
+                <th>Provider</th>
                 <th>状态</th>
                 <th>描述</th>
+                <th class="align-right">操作</th>
               </tr>
             </thead>
             <tbody id="virtual-models-table-body">
-              <tr><td colspan="4" class="table-state">等待加载</td></tr>
+              <tr><td colspan="6" class="table-state">等待加载</td></tr>
             </tbody>
           </table>
         </div>
       </article>
+
+      <div id="virtual-model-modal" class="modal-backdrop is-hidden" role="dialog" aria-modal="true" aria-labelledby="virtual-model-modal-title">
+        <form id="virtual-model-form" class="modal-panel">
+          <div class="panel-header">
+            <h2 id="virtual-model-modal-title">新建虚拟模型</h2>
+            <button class="ghost-button" type="button" data-action="close-virtual-model-modal">关闭</button>
+          </div>
+          <div class="form-grid">
+            <label>
+              <span>虚拟模型名</span>
+              <input id="virtual-model-name" type="text" required>
+            </label>
+            <label>
+              <span>真实模型</span>
+              <input id="virtual-model-real-model" type="text" required>
+            </label>
+            <label>
+              <span>Provider</span>
+              <select id="virtual-model-provider" required>
+                <option value="ark">ark</option>
+                <option value="deepseek">deepseek</option>
+              </select>
+            </label>
+            <label>
+              <span>状态</span>
+              <select id="virtual-model-status">
+                <option value="active">active</option>
+                <option value="disabled">disabled</option>
+              </select>
+            </label>
+            <label class="form-field-wide">
+              <span>描述</span>
+              <input id="virtual-model-description" type="text">
+            </label>
+          </div>
+          <div class="modal-actions">
+            <button class="secondary-button" type="button" data-action="close-virtual-model-modal">取消</button>
+            <button class="primary-button" type="submit">保存</button>
+          </div>
+        </form>
+      </div>
     </section>
 
     <section id="view-credentials" class="view">

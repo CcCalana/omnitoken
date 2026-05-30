@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,6 +36,99 @@ func TestRunCLIAdoptClaudeCodeUsesHomeOverride(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "managed_env ANTHROPIC_BASE_URL") {
 		t.Fatalf("managed env list missing from stdout: %s", stdout.String())
+	}
+}
+
+func TestRunCLIAdoptEnsuresVirtualModelBeforeWriting(t *testing.T) {
+	t.Parallel()
+
+	var posted bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer admin-token" {
+			t.Fatalf("missing admin authorization: %q", r.Header.Get("Authorization"))
+		}
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/admin/virtual-models":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"virtual_models":[]}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/admin/virtual-models":
+			posted = true
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"name":"chat-fast","real_model":"deepseek-v4-flash","provider":"deepseek"}`))
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	home := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := runCLI([]string{
+		"adopt",
+		"claude-code",
+		"--gateway-url",
+		"https://gateway.example",
+		"--token",
+		"admin-token",
+		"--model",
+		"chat-fast",
+		"--home",
+		home,
+		"--admin-url",
+		server.URL,
+		"--real-model",
+		"deepseek-v4-flash",
+		"--provider",
+		"deepseek",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d stderr=%s", code, stderr.String())
+	}
+	if !posted {
+		t.Fatal("expected virtual model create request")
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "settings.json")); err != nil {
+		t.Fatalf("settings file not written after ensure: %v", err)
+	}
+}
+
+func TestRunCLIAdoptEnsureMismatchExitsBeforeWriting(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"virtual_models":[{"name":"chat-fast","real_model":"glm-5.1","provider":"ark"}]}`))
+	}))
+	defer server.Close()
+
+	home := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := runCLI([]string{
+		"adopt",
+		"claude-code",
+		"--gateway-url",
+		"https://gateway.example",
+		"--token",
+		"admin-token",
+		"--model",
+		"chat-fast",
+		"--home",
+		home,
+		"--admin-url",
+		server.URL,
+		"--real-model",
+		"deepseek-v4-flash",
+		"--provider",
+		"deepseek",
+	}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "settings.json")); !os.IsNotExist(err) {
+		t.Fatalf("settings should not be written on ensure mismatch: %v", err)
 	}
 }
 
