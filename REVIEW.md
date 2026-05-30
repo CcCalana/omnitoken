@@ -85,7 +85,37 @@
 
 ---
 
-## R-AUDIT-USAGE-VIEW (T-AUDIT-USAGE-VIEW 实施, impl `7b9b0653` + `57775cae` + status `8d1d78a4`)
+## R-044 (T-044 实施, impl `8fb054e` + status `24f726e`)
+
+**结论: `[+] Approved`** — 接受标准全达，后端 API + CLI ensure + 前端 CRUD + RBAC + audit 全部闭环。无 CRITICAL/HIGH。3 NIT 不阻塞。**virtual_models 从"只读 seed SQL 表"升级为"admin UI + CLI 可管的动态路由规则"**。
+
+**正面信号**:
+
+1. ✅ **API 设计完整对标 T-016b-MIN credential CRUD**：`POST` create + `PATCH` update（含 status toggle），都用 `protectedWrite` + RBAC action + audit_logs。handler 结构（parse → validate → store call → audit before/after → JSON response）与 credential handler 一致。`TestCreateVirtualModelEndpointValidatesStoresAndAudits` 验证了 audit entry 含正确的 action / resource_type / resource_id。
+
+2. ✅ **`parseUpdateVirtualModelRequest` 指针字段区分"未提供"和"设为空"**：`RealModel *string` / `Provider *string` / `Status *string` / `Description *string` —— `nil` = 不更新，非 nil = 更新为该值。避免了 JSON `omitempty` 的经典坑（`""` 既可能是"没传"也可能是"要清空"）。`hasNonEmpty` 守卫确保至少一个字段被实质性变更。
+
+3. ✅ **`POST ... ON CONFLICT (name) DO NOTHING RETURNING` + `sql.ErrNoRows` = 并发安全的幂等创建**：不用 `SELECT` + `INSERT` 两步（有 race），而是单 SQL `ON CONFLICT DO NOTHING` + `RETURNING`。`ErrNoRows` → conflict → 409。比 T-016b-MIN credential create 的 `SELECT` + `INSERT` 模式更安全。
+
+4. ✅ **`UpdateVirtualModel` 返回 before/after 快照**：`getVirtualModel` → 应用 patch → `UPDATE ... RETURNING` → `updateVirtualModelResult{Before, After}`。handler 用 before/after 写 audit_logs，运维可追溯每次改了什么。
+
+5. ✅ **`omnitoken-adopt --admin-url` 三种 agent 全接入**：claude-code / codex / opencode 三个 `runAdopt*` 函数都加了 `ensureVirtualModelIfRequested`，在写 config 文件之前先调 admin API。`TestRunCLIAdoptEnsuresVirtualModelBeforeWriting:74` 断言 `settings.json` 在 ensure 成功后才写入——确保"先保证路由存在，再写 agent 配置"的顺序。
+
+6. ✅ **`TestRunCLIAdoptEnsureMismatchExitsBeforeWriting` — 冲突不写盘**：existing model 的 provider/real_model 与 `--provider/--real-model` 不一致 → exit 1 + settings.json 不存在。这防止了"admin 改了 virtual model 映射，但 agent 配置还指向旧 model name"的静默不一致。
+
+7. ✅ **RBAC 两新 action 落地完整**：`ActionCreateVirtualModel` / `ActionUpdateVirtualModel` 加入 `AllActions` + `defaultPolicy`（admin=true, viewer/member=false）。`TestUpdateVirtualModelEndpointRejectsMissingInvalidAndViewer` 验证 viewer 被 403 + audit 记 forbidden。
+
+8. ✅ **前端 event delegation 干净**：`onTableClick` 用 `event.target.closest("[data-edit-virtual-model]")` 处理动态渲染的行按钮，不绑 N 个 listener。edit + toggle 两种 action 单 handler 处理。
+
+**N-35 (NIT) — PATCH 仅设 description 为空字符串时被拒绝**：`parseUpdateVirtualModelRequest` 中 `if body.Description != nil && value == ""` → `hasNonEmpty` 不设 true。如果请求体只有 `{"description": ""}`，validation 返回"at least one field is required"。这意味着用户无法单次 PATCH 仅清空 description——需附带另一个字段变更。实践中清空 description 通常伴随其他改动，不会触发。v1.1 可改为 description 单独算 `hasNonEmpty`。
+
+**N-36 (NIT) — admin client 每次 Ensure 都 GET 全量 virtual_models 列表**：`adminVirtualModelClient.find()` 调 `GET /api/admin/virtual-models` 拉全部列表再 O(n) 查找。v1 virtual_models 数量 < 20，完全可接受。v1.1 如果模型数增长，可改用 `GET /api/admin/virtual-models/{name}`（目前不存在这个端点）或加 query param filter。
+
+**N-37 (NIT) — `TestUpdateVirtualModelEndpointRejectsMissingInvalidAndViewer` 对 viewer 只测了 POST**：PATCH 走同 RBAC policy（`protectedWrite(rbac.ActionUpdateVirtualModel, ...)`），viewer 同样 403。加一条 PATCH + viewer 断言更完整。不阻塞。
+
+**Codex 下一步**: T-044 status 可切 `done`。N-35/N-36/N-37 不开任务。Phase 3-A 下一步：T-046 一键 onboard CLI 收口（依赖 T-044 + T-045 均 ✅，已解锁）。
+
+---
 
 **结论: `[~] Conditional Approve — 不关任务`** — 后端 endpoint + SQL 聚合 + fake-DB 单测 + 前端 tab/图表/表格全部按 AC 落地，**门 ③ 数据面打通**。但发现一条 **HIGH(语言一致性 + 范围外翻译)** 阻塞合并：Codex 把新 UI 全部写英文且**顺手把现有 audit zh-CN 字符串改成英文**，与 overview/users/models/credentials/virtual_models 五视图的 zh-CN 风格不一致,且超出任务范围。修完 HIGH 后我会切到 Approve；M-33 / NIT 不阻塞。
 
