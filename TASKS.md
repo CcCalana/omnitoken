@@ -798,6 +798,8 @@ Result: `8c8790c` — design tokens + dark theme + toast/modal landed; JS checks
 
 Proposal: `docs/proposals/2026-06-01-t100-l2-correctness.md`
 
+Result: `959f47f` — proposal only; recommends seed users + DeepSeek-only + direct PG verification, no code/test deviation.
+
 **目标**: 验证 OmniToken 在多用户并发场景下的正确性基线——账本闭环、RBAC 隔离、额度 enforcement、零 panic/race。在部署前确认系统在真实负载下行为正确。**稳定系统的前提验证**。
 
 **背景**: `规划.md` §10.1 定义 L2 为"1 admin + 10 user 真上游 e2e，11 goroutine 跑 5-10min"。当前测试覆盖了单用户功能性路径（T-SMOKE-AGENT），但从未验证：(a) 多人同时调用时 budget 是否正确扣减、(b) viewer 是否真的不能写、(c) member 是否真的不能管 key、(d) `cost_ledger` 金额与 `usage_events` 汇总是否对齐（账本闭环）、(e) 高并发下是否出现 data race 或 panic。
