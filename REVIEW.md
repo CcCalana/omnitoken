@@ -184,6 +184,35 @@
 
 ---
 
+## R-SMOKE-AGENT (T-SMOKE-AGENT 实施, impl `9bb08f0` + `cd118c9` + status `3ed2f13`)
+
+**结论: `[+] Approved`** — 接受标准全达。5 条集成测试 + 4 条 e2e 测试覆盖 Claude Code（`x-api-key` + Anthropic）和 Codex（`Authorization: Bearer` + OpenAI）的完整 auth → middleware → proxy 链路。无 CRITICAL/HIGH。1 NIT 不阻塞。
+
+**正面信号**:
+
+1. ✅ **`newAgentSmokeMux` 走真实 `newMux`**——不是 hand-rolled handler chain。`protectGatewayRoute → enforceMonthlyBudget → resolveVirtualModel → anthropic.MessagesHandler → usage.Middleware → proxy` 全部在生产代码路径上。`agentSmokeResolver` 模拟 virtual model 解析、`fakeBudgetChecker` 模拟额度检查、mock upstream httptest.Server 返非流式 + 流式两路响应。
+
+2. ✅ **5 条集成测试精准覆盖所有 AC**：
+   - `TestAgentSmokeClaudeCodeXAPIKey` — `x-api-key` + Anthropic body → 200 + `type:"message"` + usage record 含 `ModelRouted`
+   - `TestAgentSmokeCodexBearer` — `Authorization: Bearer` + OpenAI body → 200 + `choices[0].message.content` + usage
+   - `TestAgentSmokeInvalidXAPIKeyUsesAnthropicError` — 断言 `{"type":"error","error":{"type":"authentication_error"}}`（Anthropic 格式）
+   - `TestAgentSmokeInvalidBearerUsesOpenAIError` — 断言 `{"error":{"type":"authentication_error","code":"invalid_api_key"}}`（OpenAI 格式）
+   - `TestAgentSmokeMissingAuthHeaders` — 两个路径都 401，各自的 error 格式正确
+
+3. ✅ **e2e 测试用 golden Anthropic fixture 打真上游**：`loadAnthropicFixtureRequest` 读 `testdata/golden/ark/anthropic_nonstream_default.json` 的 `_meta.request`，`stream` 参数动态覆写。4 个子测试覆盖 Claude Code 流式/非流式 + Codex 流式/非流式。`waitCount(t, 4)` 等全部 4 条 usage records 就绪后断言 `ModelRouted` + `TotalTokens` 非空。
+
+4. ✅ **`MAX_REQUESTS` 成本硬上限**：`e2eMaxRequests` 默认 10，至少需要 4（4 个子测试各 1 请求）。`maxRequests < 4` 直接 `t.Skip`。4 请求 × max_tokens=32 ≈ ¥0.01 成本。
+
+5. ✅ **`agentSmokeUsageStore` 线程安全**：`sync.Mutex` + channel-based `ready`/`changed` 信号，支持并发子测试。`waitCount` 用 5s deadline 防 hanging。
+
+6. ✅ **零 regression**：5 条集成测试 `go test -count=1` 全部 PASS，无 flake。
+
+**N-40 (NIT) — e2e 仅支持 Ark 上游**：`newAgentSmokeE2EMux` 硬编码 `OMNITOKEN_ARK_API_KEY` + `config.DefaultArkOpenAIBaseURL`。用户当前 DeepSeek-only 部署会 `t.Skip`。建议后续加 `OMNITOKEN_DEEPSEEK_API_KEY` fallback，让 e2e 支持 DeepSeek 上游。**不阻塞 v1**——集成测试已覆盖全链路。
+
+**Codex 下一步**: T-SMOKE-AGENT status 可切 `done`。
+
+---
+
 ## R-AUDIT-USAGE-VIEW (T-AUDIT-USAGE-VIEW 实施, impl `7b9b0653` + `57775cae` + status `8d1d78a4`)
 
 **结论: `[~] Conditional Approve — 不关任务`** — 后端 endpoint + SQL 聚合 + fake-DB 单测 + 前端 tab/图表/表格全部按 AC 落地，**门 ③ 数据面打通**。但发现一条 **HIGH(语言一致性 + 范围外翻译)** 阻塞合并。修完 HIGH 后切到 Approve；M-33 / NIT 不阻塞。

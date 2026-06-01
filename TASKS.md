@@ -39,6 +39,7 @@
 | 05-30 | **T-SMOKE-AGENT 任务体写好**（status:todo）。两层测试：集成测试（mock 上游 + 完整 middleware 栈，CI 必跑）+ e2e 测试（真上游 + agent 格式请求） |
 | 06-01 | **服务器部署规划**：用户决定服务器部署测试（5-10 人、DeepSeek-only、暂无域名）。Claude 产出 runbook + nginx config + docker-compose.server.yml。T-DEPLOY 和 T-SMOKE-AGENT 任务体下给 Codex |
 | 06-01 | **T-DEPLOY impl (`31adccf`) → R-DEPLOY Approved**。preflight + smoketest 脚本就绪，4 条 runbook 偏差（master-key 挂载/DB user/Codex URL/nginx -t）已修 |
+| 06-01 | **T-SMOKE-AGENT impl (`9bb08f0` + `cd118c9`) → R-SMOKE-AGENT Approved**。519 行测试：5 条集成（mock + 真 middleware）+ 4 条 e2e（真上游 + agent 格式）。Claude Code + Codex 全链路验证闭环 |
 
 ---
 
@@ -133,7 +134,7 @@ E2E 验收通过，但**前端假数据 + admin 无鉴权 + 未验证并发**。
 
 | 优先级 | 任务 | 状态 | 说明 |
 |---|---|---|---|
-| 1 | **T-SMOKE-AGENT** | review | 全链路测试，Codex 实施中 |
+| 1 | **T-SMOKE-AGENT** | ✅ `9bb08f0` | 5 条集成 + 4 条 e2e，全链路 auth→proxy 覆盖 |
 | 2 | **T-DEPLOY** | ✅ `31adccf` | 预检 + smoketest 脚本就绪；4 条 runbook 偏差已修 |
 | 3 | **T-UI-L1-THEME** | todo | 前端视觉对齐，部署期间可并行（纯前端不阻塞） |
 
@@ -491,7 +492,7 @@ Result: `31adccf` — preflight + smoketest scripts landed; all green. 4 runbook
 
 ---
 
-## T-SMOKE-AGENT Agent 全链路 Smoke Test [phase:post-v1] [owner:codex] [status:review] [started:2026-05-30 16:05 CST]
+## T-SMOKE-AGENT Agent 全链路 Smoke Test [phase:post-v1] [owner:codex] [status:done] [started:2026-05-30 16:05 CST]
 
 **目标**: 用程序化 HTTP 请求模拟 Claude Code / Codex 的完整调用链路，验证 **auth header（`x-api-key` vs `Authorization: Bearer`）→ middleware 栈 → proxy → 真上游 → 协议转换** 端到端闭环。填补"没有任何测试走过完整 agent 调用路径"的缺口。
 
