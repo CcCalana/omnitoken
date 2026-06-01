@@ -786,7 +786,7 @@ Result: `4b3d6b32` — admin credential add/disable + 30s polling hot reload lan
 - 本地基线：`web/styles.css` (899 行) / `web/src/app.js` (114 行) / `web/src/views/*.js` (6 个 view, 共 ~1100 行)
 - README 已说明 web console 启动方式：`README.md` § "Open the web console"
 
-Result: `PENDING` — design tokens + dark theme + toast/modal landed; JS checks, view tests, static serve, lint/test green; no deviation.
+Result: `8c8790c` — design tokens + dark theme + toast/modal landed; JS checks, view tests, static serve, lint/test green; no deviation.
 
 ---
 
