@@ -430,7 +430,7 @@ Result: `00c9f4a` — prompts/status/dry-run/restore-confirm/error polish landed
 
 ---
 
-## T-DEPLOY 服务器部署验证与执行 [phase:deploy] [owner:codex] [status:todo]
+## T-DEPLOY 服务器部署验证与执行 [phase:deploy] [owner:codex] [status:review] [started:2026-06-01 00:00 CST]
 
 **目标**: 在服务器部署前，验证部署文件的正确性（docker-compose 语法、nginx 配置、runbook 完整性），产出预检脚本和部署 smoketest 脚本。部署执行由用户手动完成。
 
@@ -485,6 +485,8 @@ Result: `00c9f4a` — prompts/status/dry-run/restore-confirm/error polish landed
 - `deploy/Dockerfile.gateway` / `Dockerfile.admin` / `Dockerfile.migrate`
 - `internal/` / `cmd/`
 - `docs/operations/server-deployment.md`（报告问题，不改文件）
+
+Result: `PENDING` — deploy preflight/smoke scripts landed; all green. Deviations: runbook master-key file not mounted, DB user mismatch, Codex `/v1` URL duplication, bare nginx -t needs compose DNS/certs.
 
 ---
 
