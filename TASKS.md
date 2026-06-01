@@ -38,6 +38,7 @@
 | 05-30 | **T-FIX-AUTH-XAPIKEY (`9958f47`)**：`RequireVirtualKey` 加 `x-api-key` fallback + `/v1/messages` 路径返回 Anthropic error 格式。Claude Code 请求此前因 auth header 不匹配被 401 阻塞 |
 | 05-30 | **T-SMOKE-AGENT 任务体写好**（status:todo）。两层测试：集成测试（mock 上游 + 完整 middleware 栈，CI 必跑）+ e2e 测试（真上游 + agent 格式请求） |
 | 06-01 | **服务器部署规划**：用户决定服务器部署测试（5-10 人、DeepSeek-only、暂无域名）。Claude 产出 runbook + nginx config + docker-compose.server.yml。T-DEPLOY 和 T-SMOKE-AGENT 任务体下给 Codex |
+| 06-01 | **T-DEPLOY impl (`31adccf`) → R-DEPLOY Approved**。preflight + smoketest 脚本就绪，4 条 runbook 偏差（master-key 挂载/DB user/Codex URL/nginx -t）已修 |
 
 ---
 
@@ -133,7 +134,7 @@ E2E 验收通过，但**前端假数据 + admin 无鉴权 + 未验证并发**。
 | 优先级 | 任务 | 状态 | 说明 |
 |---|---|---|---|
 | 1 | **T-SMOKE-AGENT** | review | 全链路测试，Codex 实施中 |
-| 2 | **T-DEPLOY** | todo | 部署验证（预检脚本 + smoketest 脚本），Codex 取任务 |
+| 2 | **T-DEPLOY** | ✅ `31adccf` | 预检 + smoketest 脚本就绪；4 条 runbook 偏差已修 |
 | 3 | **T-UI-L1-THEME** | todo | 前端视觉对齐，部署期间可并行（纯前端不阻塞） |
 
 ### vNext（部署验证后）
@@ -430,7 +431,7 @@ Result: `00c9f4a` — prompts/status/dry-run/restore-confirm/error polish landed
 
 ---
 
-## T-DEPLOY 服务器部署验证与执行 [phase:deploy] [owner:codex] [status:review] [started:2026-06-01 00:00 CST]
+## T-DEPLOY 服务器部署验证与执行 [phase:deploy] [owner:codex] [status:done] [started:2026-06-01 00:00 CST]
 
 **目标**: 在服务器部署前，验证部署文件的正确性（docker-compose 语法、nginx 配置、runbook 完整性），产出预检脚本和部署 smoketest 脚本。部署执行由用户手动完成。
 
@@ -486,7 +487,7 @@ Result: `00c9f4a` — prompts/status/dry-run/restore-confirm/error polish landed
 - `internal/` / `cmd/`
 - `docs/operations/server-deployment.md`（报告问题，不改文件）
 
-Result: `31adccf` — deploy preflight/smoke scripts landed; all green. Deviations: runbook master-key file not mounted, DB user mismatch, Codex `/v1` URL duplication, bare nginx -t needs compose DNS/certs.
+Result: `31adccf` — preflight + smoketest scripts landed; all green. 4 runbook deviations found + fixed by Claude (master-key mount / DB user / Codex URL / nginx note).
 
 ---
 

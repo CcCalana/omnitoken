@@ -158,6 +158,32 @@
 
 ---
 
+## R-DEPLOY (T-DEPLOY 实施, impl `31adccf` + status `0631652`)
+
+**结论: `[+] Approved`** — 接受标准全达。preflight + smoketest 两脚本稳健，4 条 runbook 偏差经 Claude 修复。无 CRITICAL/HIGH/NIT。**部署文件就绪，用户可执行实际部署**。
+
+**正面信号**:
+
+1. ✅ **`deploy-check.sh` 7 项检查覆盖完整**：Docker 版本 + compose 可用性、端口 80/443 占用、`.env` 至少 1 把 DeepSeek key、master key 长度 ≥64 hex chars、SSL 证书文件存在、内存 ≥4GB、磁盘 ≥10GB。`version_ge` 用 `sort -V` 做语义化版本比较（不依赖 GNU sort 的 `-V` 标志在 macOS 也正常）。
+
+2. ✅ **`deploy-smoke.sh` 独立可运行**：接受 `<SERVER-IP>` `<VIRTUAL-KEY>` 两个必选参数 + `--cacert` 可选。Anthropic 请求用 `x-api-key` header、OpenAI 请求用 `Authorization: Bearer` header——两条路径都验证。`require_json_field` 用 `jq -e` 表达式做结构化断言，不是 grep 字符串。
+
+3. ✅ **`env_value` 解析器处理 .env 注释 + 引号**：`awk` 跳过 `#` 开头的行，`gsub` 剥离单/双引号和首尾空格。比 naive `grep KEY .env` 安全得多。
+
+4. ✅ **Codex 发现并写入 4 条 runbook 偏差**——全部修复：
+  - master-key file 未挂载 → `docker-compose.server.yml` gateway + admin 加 volume mount（`:ro`），env 切到容器内路径 `/run/secrets/master-key`
+  - DB user 不匹配 → runbook 移除 `.env` 中的 DB/Redis/NATS 条目（compose 已硬编码），消除混淆源
+  - Codex `/v1` URL 重复 → runbook 移除 `--gateway-url` 末尾的 `/v1`（Codex adapter 自己追加）
+  - nginx -t 需证书 → runbook 加备注说明（先 prepare 证书再检查，或 compose up 后验证）
+
+5. ✅ **零 Go 代码 / zero regression**：未追踪的 `admin`/`gateway` 本地二进制未动。`make lint`+`make test` 全绿。
+
+6. ✅ **smoke 请求体最小化**：`max_tokens=16`，每条请求 < 20 tokens 成本，验证跑一次 < ¥0.01。
+
+**Codex 下一步**: T-DEPLOY status 可切 `done`。执行部署按 runbook 第 2-6 步由用户手动执行。
+
+---
+
 ## R-AUDIT-USAGE-VIEW (T-AUDIT-USAGE-VIEW 实施, impl `7b9b0653` + `57775cae` + status `8d1d78a4`)
 
 **结论: `[~] Conditional Approve — 不关任务`** — 后端 endpoint + SQL 聚合 + fake-DB 单测 + 前端 tab/图表/表格全部按 AC 落地，**门 ③ 数据面打通**。但发现一条 **HIGH(语言一致性 + 范围外翻译)** 阻塞合并。修完 HIGH 后切到 Approve；M-33 / NIT 不阻塞。

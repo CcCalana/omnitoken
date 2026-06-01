@@ -96,10 +96,10 @@ services:
       OMNITOKEN_REDIS_ADDR: "redis:6379"
       OMNITOKEN_NATS_URL: "nats://nats:4222"
       OMNITOKEN_LOG_BODY_MODE: "${OMNITOKEN_LOG_BODY_MODE:-off}"
-      OMNITOKEN_MASTER_KEY_FILE: "${OMNITOKEN_MASTER_KEY_FILE:-}"
-      OMNITOKEN_MASTER_KEY: "${OMNITOKEN_MASTER_KEY:-}"
+      OMNITOKEN_MASTER_KEY_FILE: "/run/secrets/master-key"
       OMNITOKEN_CREDENTIAL_POLL_INTERVAL: "${OMNITOKEN_CREDENTIAL_POLL_INTERVAL:-30s}"
-    # 不暴露公网端口 — nginx 是唯一入口
+    volumes:
+      - "${OMNITOKEN_MASTER_KEY_FILE:-.omnitoken-master-key}:/run/secrets/master-key:ro"
     depends_on:
       seed:
         condition: service_completed_successfully
@@ -121,13 +121,14 @@ services:
       OMNITOKEN_REDIS_ADDR: "redis:6379"
       OMNITOKEN_NATS_URL: "nats://nats:4222"
       OMNITOKEN_LOG_BODY_MODE: "${OMNITOKEN_LOG_BODY_MODE:-off}"
-      OMNITOKEN_MASTER_KEY_FILE: "${OMNITOKEN_MASTER_KEY_FILE:-}"
-      OMNITOKEN_MASTER_KEY: "${OMNITOKEN_MASTER_KEY:-}"
+      OMNITOKEN_MASTER_KEY_FILE: "/run/secrets/master-key"
       OMNITOKEN_ADMIN_BOOTSTRAP_TOKEN: "${OMNITOKEN_ADMIN_BOOTSTRAP_TOKEN:-}"
       OMNITOKEN_ADMIN_SESSION_TTL: "${OMNITOKEN_ADMIN_SESSION_TTL:-24h}"
       OMNITOKEN_ADMIN_KEY_ANOMALY_RPM_5M: "${OMNITOKEN_ADMIN_KEY_ANOMALY_RPM_5M:-60}"
       OMNITOKEN_ADMIN_CORS_ORIGINS: "${OMNITOKEN_ADMIN_CORS_ORIGINS:-http://localhost:3000}"
       OMNITOKEN_ADMIN_CORS_METHODS: "${OMNITOKEN_ADMIN_CORS_METHODS:-GET,POST,PATCH,DELETE,OPTIONS}"
+    volumes:
+      - "${OMNITOKEN_MASTER_KEY_FILE:-.omnitoken-master-key}:/run/secrets/master-key:ro"
     depends_on:
       seed:
         condition: service_completed_successfully

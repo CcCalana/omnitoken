@@ -52,13 +52,9 @@ cp .env.example .env
 编辑 `.env`，填入以下内容（注释掉 Ark 相关行）：
 
 ```bash
-# ===== 必填 =====
-OMNITOKEN_DATABASE_URL=postgres://postgres:postgres@postgres:5432/omnitoken?sslmode=disable
-OMNITOKEN_REDIS_ADDR=redis:6379
-OMNITOKEN_NATS_URL=nats://nats:4222
-OMNITOKEN_MASTER_KEY_FILE=/run/secrets/master-key
-OMNITOKEN_GATEWAY_ADDR=:8080
-OMNITOKEN_ADMIN_ADDR=:8081
+# ===== 必填（DB/Redis/NATS/addr 已在 docker-compose.server.yml 中硬编码，.env 无需重复）=====
+OMNITOKEN_MASTER_KEY_FILE=.omnitoken-master-key
+OMNITOKEN_LOG_BODY_MODE=off
 
 # ===== DeepSeek（至少 3 把 key）=====
 OMNITOKEN_DEEPSEEK_KEYS_1=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
@@ -87,6 +83,8 @@ OMNITOKEN_ADMIN_CORS_ORIGINS=https://<SERVER-IP>
 ```
 
 ## 4. 构建与启动
+
+> **注意**: `nginx -t` 语法检查需要 SSL 证书文件存在且上游 hostname 可解析。如果 compose 未启动，`nginx -t` 会因为 `deploy/ssl/` 下无证书文件而失败。正确做法是先 `docker compose up -d nginx` 再验证，或单独准备证书文件后检查。
 
 ```bash
 # 构建镜像（gateway / admin / migrate）
@@ -177,7 +175,7 @@ omnitoken-adopt adopt claude-code \
 
 # Codex
 omnitoken-adopt adopt codex \
-  --gateway-url https://<SERVER-IP>/v1 \
+  --gateway-url https://<SERVER-IP> \
   --token <your-virtual-key> \
   --model chat-fast
 ```
