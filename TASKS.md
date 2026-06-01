@@ -41,6 +41,7 @@
 | 06-01 | **T-DEPLOY impl (`31adccf`) → R-DEPLOY Approved**。preflight + smoketest 脚本就绪，4 条 runbook 偏差（master-key 挂载/DB user/Codex URL/nginx -t）已修 |
 | 06-01 | **T-SMOKE-AGENT impl (`9bb08f0` + `cd118c9`) → R-SMOKE-AGENT Approved**。519 行测试：5 条集成（mock + 真 middleware）+ 4 条 e2e（真上游 + agent 格式）。Claude Code + Codex 全链路验证闭环 |
 | 06-01 | **T-UI-L1-THEME impl (`8c8790c`) → R-UI-L1-THEME Approved**。537 行纯前端：design tokens + dark theme + FOUC 防护 + Toast + Modal + 6 view alert/confirm 替换。零新依赖 |
+| 06-01 | **vNext 稳定系统路线确定**：优先级 T-100 > T-QUOTA-CACHE-PROBE > T-017b > T-018。T-100 + T-QUOTA-CACHE-PROBE 任务体已写好下发 |
 
 ---
 
@@ -139,12 +140,14 @@ E2E 验收通过，但**前端假数据 + admin 无鉴权 + 未验证并发**。
 | 2 | **T-DEPLOY** | ✅ `31adccf` | 预检 + smoketest 脚本就绪；4 条 runbook 偏差已修 |
 | 3 | **T-UI-L1-THEME** | ✅ `8c8790c` | design tokens + dark theme + Toast + Modal，纯 vanilla 零构建 |
 
-### vNext（部署验证后）
+### vNext 稳定系统路线（2026-06-01，优先级排序）
 
-- **T-017b fallback retry on 5xx/429**（2d，含 SSE 中途切换状态机）
-- **T-018 故障注入 e2e**（与 T-017b 配套，1-2d）
-- **T-100 L2 端到端正确性套件**（1 admin + 10 user 真方舟 e2e）
-- **T-QUOTA-CACHE-PROBE**（2026-05-21 外部专家提）：跑 mock upstream 高并发后，量 `monthlyBudgetStatusSQL`（`internal/quota/store_postgres.go:48` 双 LEFT JOIN + SUM）在真实 gateway 承载下的 PG CPU / 慢查询 / 连接池占用。如果发现是瓶颈，候选解：(a) `usage_events(organization_id, user_id, created_at)` + `cost_ledger(usage_event_id)` 加索引（低风险）；(b) Redis 月度额度缓存 + 异步入账后增量更新（架构性变更，需 ADR）。**先量再写实现**，本条只是观察任务。
+| 优先级 | 任务 | 估时 | 成本 | 说明 |
+|---|---|---|---|---|
+| 1 | **T-100** L2 多租户正确性套件 | 2-3d | ¥2-5/次 | 10 user × 5min 并发正确性验证 |
+| 2 | **T-QUOTA-CACHE-PROBE** | 1d | 零（mock） | PG 额度查询性能基线 |
+| 3 | T-017b fallback retry | 2d | 零 | 规模化后再议 |
+| 4 | T-018 故障注入 e2e | 1-2d | 零 | 依赖 T-017b |
 
 ### 旧任务状态同步
 
@@ -788,6 +791,118 @@ Result: `4b3d6b32` — admin credential add/disable + 30s polling hot reload lan
 - README 已说明 web console 启动方式：`README.md` § "Open the web console"
 
 Result: `8c8790c` — design tokens + dark theme + toast/modal landed; JS checks, view tests, static serve, lint/test green; no deviation.
+
+---
+
+## T-100 L2 多租户正确性并发套件 [phase:vNext] [owner:codex] [status:todo]
+
+**目标**: 验证 OmniToken 在多用户并发场景下的正确性基线——账本闭环、RBAC 隔离、额度 enforcement、零 panic/race。在部署前确认系统在真实负载下行为正确。**稳定系统的前提验证**。
+
+**背景**: `规划.md` §10.1 定义 L2 为"1 admin + 10 user 真上游 e2e，11 goroutine 跑 5-10min"。当前测试覆盖了单用户功能性路径（T-SMOKE-AGENT），但从未验证：(a) 多人同时调用时 budget 是否正确扣减、(b) viewer 是否真的不能写、(c) member 是否真的不能管 key、(d) `cost_ledger` 金额与 `usage_events` 汇总是否对齐（账本闭环）、(e) 高并发下是否出现 data race 或 panic。
+
+**涉及**:
+- `cmd/e2e-runner/main.go` (新增) — L2 e2e runner 程序
+- `test/e2e/l2_test.go` (新增, build tag `e2e`) — 测试用例
+- 无需修改 `internal/` 或 `cmd/gateway` / `cmd/admin`
+
+**测试场景设计**:
+
+| # | 场景 | 验证点 |
+|---|---|---|
+| 1 | **并发调用**：10 user 各发 N 次请求（非流式 + 流式混合），持续 5min | 0 panic / 0 5xx / 0 data race |
+| 2 | **额度 enforcement**：1 user 设 budget=0 → 全部请求返 402 | 402 envelope 格式正确 |
+| 3 | **RBAC viewer 隔离**：viewer 调 POST /api/admin/users/{id}/quota → 403 | viewer 不可写 |
+| 4 | **RBAC member 隔离**：member 调 POST /api/admin/virtual-models → 403 | member 不可管路由 |
+| 5 | **账本闭环**：`SUM(cost_ledger.cost_usd)` ≈ `SUM(usage_events JOIN usage_token_breakdown)` 的成本计算结果 | 误差 ≤ 1%（舍入容忍） |
+| 6 | **归因正确**：每个 user 的请求都写入正确的 `user_id` / `api_key_id` / `model_routed` / `upstream_credential_id` | `SELECT` 断言 |
+
+**接受标准**:
+- [ ] `cmd/e2e-runner` 可独立运行：接受 `--gateway-url` + `--admin-url` + `--admin-token` + `--deepseek-api-key`（或从 env 读），不依赖 docker-compose（直连已部署的 gateway/admin）
+- [ ] 10 user 自动创建 virtual keys（调 admin API）+ 设置异构 budget（`MAX_REQUESTS` 总量 ÷ 10，每人不同额度，其中 1 人设 budget=0）
+- [ ] 并发场景：10 goroutine 各跑 N 次（N = MAX_REQUESTS ÷ 10，每人至少 3 次），混合非流式 + 流式（每人至少 1 次 stream），持续约 5min
+- [ ] 断言：全部请求中 gateway 自身 5xx ≤ 0、panic ≤ 0（`-race` 模式跑 runner）
+- [ ] 额度 enforcement：budget=0 的用户全部请求返回 402（gateway `enforceMonthlyBudget` 拦截）；其他用户成功率 ≥ 90%（允许上游偶发 429）
+- [ ] RBAC viewer 不可写：用 viewer token 调 `PATCH /api/admin/users/{id}/quota` → 403 + audit_logs 记 forbidden
+- [ ] RBAC member 不可管路由：用 member token 调 `POST /api/admin/virtual-models` → 403
+- [ ] 账本闭环：所有请求完成后，查 `cost_ledger` 汇总 vs `usage_events` 汇总，误差 ≤ 1%
+- [ ] 归因正确：随机抽 3 个 user，`SELECT user_id, api_key_id, model_routed, upstream_credential_id FROM usage_events WHERE user_id = $1` 全部非空且一致
+- [ ] `MAX_REQUESTS` 硬上限（默认 50），runner 启动时打印 `预计成本 ≈ ¥X`（按 ¥1/M input + ¥2/M output × max_tokens=32 估算）
+- [ ] `go build -race ./cmd/e2e-runner` 通过；runner 自身 `-race` 干净
+
+**不在范围**:
+- ❌ 写死在 CI pipeline 中（先手动跑，验证通过后再考虑 nightly CI）
+- ❌ 上游 fallback 场景（T-017b/T-018 范围）
+- ❌ RPM/TPM 限流验证（当前限流中间件未完整落地）
+- ❌ 修改 `internal/` / `cmd/gateway` / `cmd/admin` 代码
+- ❌ T-QUOTA-CACHE-PROBE（独立任务）
+
+**Codex propose 前置**: **是**。PROPOSAL 答清 3 点：
+1. **用户数据准备**: (a) runner 自己调 admin API 创建 10 user + virtual keys + 设 budget（推荐——自包含，不依赖 seed 数据）；(b) 依赖 seed SQL 的 10 个 demo user。**默认推荐 (a)**——runner 可对任意已部署环境跑，不依赖特定 seed
+2. **上游选择**: (a) DeepSeek-only（`OMNITOKEN_DEEPSEEK_API_KEY` env var）；(b) 同时支持 Ark + DeepSeek（根据 env var 是否存在自动选）。**默认推荐 (a)**——用户当前 DeepSeek-only 部署
+3. **账本验证方式**: (a) runner 结束后直接查 PG（需要 DB 连接权限）；(b) runner 调 admin API `/api/admin/usage/summary` 做聚合对比（不直连 DB）。**默认推荐 (b)**——runner 只需要 gateway + admin URL，不需要 DB 直连权限
+
+**依赖**: T-044 ✅（virtual_models CRUD API）；T-045 ✅（`/v1/messages` 端点）；T-FIX-AUTH-XAPIKEY ✅（`x-api-key` fallback）；T-SMOKE-AGENT ✅（单用户验证已通过）
+
+**参考**:
+- 既有 e2e 模式：`internal/proxy/anthropic_e2e_test.go`（build tag `e2e` + `t.Skip` 模式）
+- Admin API：`cmd/admin/main.go`（`POST /api/admin/dev/virtual-keys` 创建 key / `PATCH /api/admin/users/{id}/quota` 改额度 / `GET /api/admin/users` 列用户）
+- L2 规格：`规划.md` §10.1
+- seed SQL 用户：`deploy/postgres/002_seed.sql`（10 demo users 结构参考）
+
+---
+
+## T-QUOTA-CACHE-PROBE 额度查询性能探测 [phase:vNext] [owner:codex] [status:todo]
+
+**目标**: 量化 `monthlyBudgetStatusSQL`（`internal/quota/store_postgres.go:48` 双 LEFT JOIN + SUM）在真实 gateway 承载下的 PG 性能表现，产出 baseline 数据。**不写优化代码**——先量，再决策是否需要优化。
+
+**背景**: T-CONC-RERUN 发现 100 并发 mock 上游时 PG 连接池被击穿（`too many clients`），quota SQL 平均延迟 391ms。外部专家 R-EXT-2026-05-21 将此标记为潜在瓶颈。T-MP-DEEPSEEK 30 并发 DeepSeek 实测中 PG 未饱和（成功率 100%），但缺乏系统的性能剖面数据。
+
+**涉及**:
+- `cmd/loadtest/` — 可能需加 profile 配置（quota-only 模式：只测 budget check，不实际发上游请求），或复用既有 mock 模式
+- `docs/release/v1-quota-baseline-2026-06.md` (新增) — baseline 报告
+
+**测量方案**:
+
+```
+mock upstream (< 1ms 响应, 永不 429)
+       ↓
+  gateway (真 middleware 栈)
+       ↓
+  PostgreSQL (真)
+  
+测量指标:
+- monthlyBudgetStatusSQL 的 mean/max 延迟 (pg_stat_statements)
+- PG 连接池峰值 (pg_stat_activity by application_name)
+- PG CPU 使用率趋势
+- gateway 自身的 RPS / P50/P95/P99
+```
+
+跑 3 个并发档位：10 / 30 / 50，每档 60s 稳定段（前 10s warmup 不计入）。
+
+**接受标准**:
+- [ ] 3 档并发（10 / 30 / 50）各跑 60s + 10s warmup，使用 mock upstream（< 1ms 永不 429）
+- [ ] 每档记录：gateway RPS / P50/P95/P99、gateway 5xx 数、memory/goroutine 终值
+- [ ] 每档采样 ≥ 3 次 `pg_stat_statements`（`monthlyBudgetStatusSQL` 的 calls/mean/max）、`pg_stat_activity`（按 application_name 分组的连接数）
+- [ ] **关键结论**：明确回答"quota check 路径在 N RPS 下是瓶颈吗？如果是，瓶颈在哪个档位开始出现？"
+- [ ] 报告位置：`docs/release/v1-quota-baseline-2026-06.md`（新建，参考 `v1-concurrency-rerun-2026-05-22.md` 的结构）
+- [ ] **严格 measurement-only**：不改 `internal/` 或 `cmd/gateway` 代码。如果发现瓶颈，写进报告 V2 candidates，不当场修
+- [ ] `go vet ./...` + `go test ./...` 全绿（如有改动仅在 `cmd/loadtest/` 内）
+
+**不在范围**:
+- ❌ Redis 额度缓存实现（如果 probe 确认是瓶颈，另起 ADR + 任务）
+- ❌ 索引优化（同上）
+- ❌ 修改 `internal/quota/` 或 gateway middleware
+- ❌ 真上游压测（只测 mock，排除上游 rate limit 干扰）
+
+**Codex propose 前置**: **跳过**。范围 = 上述 AC，T-CONC-RERUN 已建立 measurement-only 范式。
+
+**依赖**: T-CONC-RERUN ✅（mockark binary + pg_stat_statements 已启用）；T-CONC-DSN ✅（`application_name` 已设置）
+
+**参考**:
+- T-CONC-RERUN 报告模板：`docs/release/v1-concurrency-rerun-2026-05-22.md`（现位于 `docs/archive/releases/`）
+- quota SQL：`internal/quota/store_postgres.go:48`
+- mock upstream：`cmd/loadtest/mockark/main.go`
+- DB 采样 SQL：`cmd/loadtest/README.md`
 
 ---
 
