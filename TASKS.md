@@ -42,6 +42,7 @@
 | 06-01 | **T-SMOKE-AGENT impl (`9bb08f0` + `cd118c9`) → R-SMOKE-AGENT Approved**。519 行测试：5 条集成（mock + 真 middleware）+ 4 条 e2e（真上游 + agent 格式）。Claude Code + Codex 全链路验证闭环 |
 | 06-01 | **T-UI-L1-THEME impl (`8c8790c`) → R-UI-L1-THEME Approved**。537 行纯前端：design tokens + dark theme + FOUC 防护 + Toast + Modal + 6 view alert/confirm 替换。零新依赖 |
 | 06-01 | **vNext 稳定系统路线确定**：优先级 T-100 > T-QUOTA-CACHE-PROBE > T-017b > T-018。T-100 + T-QUOTA-CACHE-PROBE 任务体已写好下发 |
+| 06-01 | **T-100 proposal (`959f47f`) → R-100-prop Approved w/ M-36**。3 决策：seed users + DeepSeek-only + direct PG ledger。M-36：runner PG 只读，member password pre-flight 文档化 |
 
 ---
 
@@ -144,7 +145,7 @@ E2E 验收通过，但**前端假数据 + admin 无鉴权 + 未验证并发**。
 
 | 优先级 | 任务 | 估时 | 成本 | 说明 |
 |---|---|---|---|---|
-| 1 | **T-100** L2 多租户正确性套件 | 2-3d | ¥2-5/次 | 10 user × 5min 并发正确性验证 |
+| 1 | **T-100** L2 多租户正确性套件 | 2-3d | ¥2-5/次 | proposal approved → 实施中 |
 | 2 | **T-QUOTA-CACHE-PROBE** | 1d | 零（mock） | PG 额度查询性能基线 |
 | 3 | T-017b fallback retry | 2d | 零 | 规模化后再议 |
 | 4 | T-018 故障注入 e2e | 1-2d | 零 | 依赖 T-017b |

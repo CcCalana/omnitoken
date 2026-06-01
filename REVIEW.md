@@ -214,7 +214,43 @@
 
 ---
 
-## R-SMOKE-AGENT (T-SMOKE-AGENT 实施, impl `9bb08f0` + `cd118c9` + status `3ed2f13`)
+## R-100-prop (T-100 PROPOSAL, commit `959f47f`)
+
+**结论: `[+] Approved with modification`** — 3 个决策点方向正确。1 条修改要求（M-36）不阻塞 proposal 关门。Codex 可开 T-100 实施。
+
+**Decision 1: seed users — ACCEPT（含修改）**
+
+seed SQL 已有 1 admin + 1 viewer + 9 member，`GET /api/admin/users` 可发现。admin API 确实缺 create-user 端点——Codex 的判断正确，不在 T-100 里新增 production API。
+
+**M-36 (实施期修改) — runner 不应直接写 PG 设 member password**：proposal 建议"direct PG fixture setup to assign a temporary password hash to one seeded member"。runner 的角色是 test harness，不是 DB migration tool。改为：
+- runner 接受 `--member-email` + `--member-password`（或 `--viewer-email` + `--viewer-password`）作为可选 flag
+- 如果未提供，**skip** member/viewer RBAC 测试（打印 "SKIP: member credentials not provided"）——不 fail
+- password 的 PG 写入作为**文档化的 pre-flight 步骤**写在 runner README 中（一行 SQL：`UPDATE users SET password_hash = crypt('temp123', gen_salt('bf')) WHERE email = 'user02@...'`），由运维手动执行
+- runner 自身对 PG **只做 SELECT**（账本查询 + 归因查询）
+
+这样 runner 保持 clean——所有写操作走 admin API，PG 只读。
+
+**Decision 2: DeepSeek-only — ACCEPT**
+
+与任务体默认推荐一致。`--deepseek-api-key` 仅用于 preflight 验证（确保上游可达），不 mutation 已部署的 credential 记录。`chat-fast` 默认模型走既有的 virtual_models → DeepSeek credential pool。
+
+**Decision 3: direct PG for ledger — ACCEPT**
+
+`/api/admin/usage/summary` 端点不存在且不在 T-100 scope，`GET /api/admin/users/{id}/usage` 不暴露 `api_key_id` / `model_routed` / `upstream_credential_id`。直接 PG SELECT 是当前唯一能验证账本闭环和归因正确性的路径。**约束**：`--database-url` 只用于 SELECT，runner 不 INSERT/UPDATE/DELETE。
+
+**正面信号**:
+
+1. ✅ **3 个决策的 trade-off 分析诚实**：每个决策都列了"为什么不能走更简单的路径"——缺 create-user API、缺 usage summary API、member 无 password。不回避 gap，不让 reviewer 猜。
+
+2. ✅ **`max_requests < 30` 硬拒绝**：proposal 设了下限——10 user × 3 次/人 = 30。比任务体 AC 的 `MAX_REQUESTS ≥ 10` 更保守（任务体说你至少需要 4 次/人），但这是安全侧——多跑几次才有统计意义。
+
+3. ✅ **runner contract 清晰**：7 个 flag/env var 全列明。`--max-tokens=32` 默认——与 T-SMOKE-AGENT 一致，成本可控。
+
+4. ✅ **e2e test 设计正确**：`test/e2e/l2_test.go` 用 build tag `e2e` + shell out 到 runner，与既有 e2e 模式一致。
+
+**Codex 下一步**: T-100 proposal 关门。实施时遵守 M-36（runner PG 只读，member password pre-flight 文档化）。Decision 1/2/3 已锁定。
+
+---
 
 **结论: `[+] Approved`** — 接受标准全达。5 条集成测试 + 4 条 e2e 测试覆盖 Claude Code（`x-api-key` + Anthropic）和 Codex（`Authorization: Bearer` + OpenAI）的完整 auth → middleware → proxy 链路。无 CRITICAL/HIGH。1 NIT 不阻塞。
 
