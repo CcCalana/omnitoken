@@ -37,6 +37,7 @@
 | 05-30 | **T-046 impl (`00c9f4a`) → R-046 Approved**。638 行 CLI 层改动：交互式 prompts + status 三 agent + dry-run + restore 确认 + 中文 actionable 错误。**Phase 3-A 7/7 收官** |
 | 05-30 | **T-FIX-AUTH-XAPIKEY (`9958f47`)**：`RequireVirtualKey` 加 `x-api-key` fallback + `/v1/messages` 路径返回 Anthropic error 格式。Claude Code 请求此前因 auth header 不匹配被 401 阻塞 |
 | 05-30 | **T-SMOKE-AGENT 任务体写好**（status:todo）。两层测试：集成测试（mock 上游 + 完整 middleware 栈，CI 必跑）+ e2e 测试（真上游 + agent 格式请求） |
+| 06-01 | **服务器部署规划**：用户决定在服务器上部署测试，5-10 人 Claude Code + Codex，DeepSeek-only，暂无域名。产出：`docs/operations/server-deployment.md` + `deploy/nginx/nginx.conf` + `deploy/Dockerfile.nginx` + `deploy/docker-compose.server.yml` |
 
 ---
 
@@ -127,13 +128,24 @@ E2E 验收通过，但**前端假数据 + admin 无鉴权 + 未验证并发**。
 
 **v1 底座三角状态（2026-05-30）**: 全部 ✅。性价比（T-016 + T-MP-DEEPSEEK + T-016b-MIN）/ 权限额度（T-005a + T-015 + T-005b）/ 安全审计（T-013 + T-014 + T-AUDIT-USAGE-VIEW）。release gate ①②③ 全部满足。
 
-### vNext（v1 发布后再做）
+### 近期优先（2026-06-01）
+
+- **T-SMOKE-AGENT** Agent 全链路 Smoke Test [status:todo] — 确保 agent 请求从 auth → middleware → proxy → 上游全链路有测试覆盖
+- **T-DEPLOY 服务器部署** [status:todo] — DeepSeek-only 部署到服务器，nginx + 自签证书，5-10 人测试。产出文件已写好（`docs/operations/server-deployment.md` + `deploy/nginx/nginx.conf` + `deploy/Dockerfile.nginx` + `deploy/docker-compose.server.yml`），待执行：
+  1. 服务器初始化（Docker + git clone）
+  2. 生成 master key + 自签证书 + 配置 .env
+  3. `make docker-build` + `docker compose -f deploy/docker-compose.server.yml up -d`
+  4. 部署后配置（管理员账号 + virtual_models 切 DeepSeek + 创建 virtual keys）
+  5. 客户端信任自签证书 + `omnitoken-adopt` 配置 agent
+  6. Smoke 验证（curl 打 `/v1/messages` + 实际 agent 调用）
+- **T-UI-L1-THEME** 前端视觉对齐 [status:todo] — 部署期间可并行做，纯前端不阻塞
+
+### vNext（部署验证后）
 
 - **T-017b fallback retry on 5xx/429**（2d，含 SSE 中途切换状态机）
 - **T-018 故障注入 e2e**（与 T-017b 配套，1-2d）
 - **T-100 L2 端到端正确性套件**（1 admin + 10 user 真方舟 e2e）
 - **T-QUOTA-CACHE-PROBE**（2026-05-21 外部专家提）：跑 mock upstream 高并发后，量 `monthlyBudgetStatusSQL`（`internal/quota/store_postgres.go:48` 双 LEFT JOIN + SUM）在真实 gateway 承载下的 PG CPU / 慢查询 / 连接池占用。如果发现是瓶颈，候选解：(a) `usage_events(organization_id, user_id, created_at)` + `cost_ledger(usage_event_id)` 加索引（低风险）；(b) Redis 月度额度缓存 + 异步入账后增量更新（架构性变更，需 ADR）。**先量再写实现**，本条只是观察任务。
-- Phase 3-A Agent 适配 Epic（见 `规划.md` §十四）
 
 ### 旧任务状态同步
 
