@@ -794,7 +794,9 @@ Result: `8c8790c` — design tokens + dark theme + toast/modal landed; JS checks
 
 ---
 
-## T-100 L2 多租户正确性并发套件 [phase:vNext] [owner:codex] [status:todo]
+## T-100 L2 多租户正确性并发套件 [phase:vNext] [owner:codex] [status:review] [started:2026-06-01 17:32 CST]
+
+Proposal: `docs/proposals/2026-06-01-t100-l2-correctness.md`
 
 **目标**: 验证 OmniToken 在多用户并发场景下的正确性基线——账本闭环、RBAC 隔离、额度 enforcement、零 panic/race。在部署前确认系统在真实负载下行为正确。**稳定系统的前提验证**。
 
