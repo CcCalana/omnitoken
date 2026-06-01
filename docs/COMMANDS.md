@@ -64,6 +64,7 @@ Docker Compose 配置文件：`deploy/docker-compose.yml`（项目名 `omnitoken
 | `cmd/migrate/main.go` | 数据库迁移，支持 up/down/version | `migrate up` |
 | `cmd/loadtest/main.go` | 并发压测工具 | `-concurrency 30 -duration 30s` |
 | `cmd/loadtest/mockark/main.go` | Mock 上游（<1ms 响应） | 用于压测 gateway |
+| `cmd/e2e-runner/main.go` | T-100 L2 多租户正确性套件 | `--gateway-url --admin-url --admin-token --database-url` |
 | `cmd/upstream-credential-seed/main.go` | 读取 env 中 key → 加密写入 PG | `credential-seed` |
 | `cmd/omnitoken-adopt/main.go` | Agent 适配器（Claude/Codex/OpenCode） | `omnitoken-adopt adopt <agent>` |
 

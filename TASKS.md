@@ -795,7 +795,7 @@ Result: `8c8790c` — design tokens + dark theme + toast/modal landed; JS checks
 
 ---
 
-## T-100 L2 多租户正确性并发套件 [phase:vNext] [owner:codex] [status:review] [started:2026-06-01 17:32 CST]
+## T-100 L2 多租户正确性并发套件 [phase:vNext] [owner:codex] [status:in-progress] [started:2026-06-01 17:32 CST]
 
 Proposal: `docs/proposals/2026-06-01-t100-l2-correctness.md`
 
