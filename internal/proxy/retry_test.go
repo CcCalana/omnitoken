@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -57,6 +58,216 @@ func TestArkChatProxyRetries429WithNextCredential(t *testing.T) {
 	if strings.Join(seen, ",") != "secret-a,secret-b" {
 		t.Fatalf("seen credentials = %v", seen)
 	}
+}
+
+func TestCrossProviderFallbackAllExcluded(t *testing.T) {
+	var deepSeekCalls atomic.Int32
+	deepSeek := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		deepSeekCalls.Add(1)
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	t.Cleanup(deepSeek.Close)
+
+	var arkCalls atomic.Int32
+	ark := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		arkCalls.Add(1)
+		if got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "); got != "ark-secret" {
+			t.Fatalf("authorization secret = %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"deepseek-v4-flash","choices":[],"usage":{"total_tokens":1}}`))
+	}))
+	t.Cleanup(ark.Close)
+
+	var logs strings.Builder
+	handler := NewArkChatProxy(ArkChatConfig{
+		DefaultModel: testDefaultModel,
+		ModelCatalog: NewStaticModelCatalog([]ProviderModel{{
+			Provider:       "ark",
+			CanonicalModel: "deepseek-v4-flash",
+			ProviderModel:  "deepseek-v4-flash",
+		}}),
+		CredentialSelector: credentials.NewSelector([]credentials.Credential{
+			{ID: "deepseek-1", Provider: "deepseek", BaseURL: deepSeek.URL, Secret: "deepseek-secret", Priority: 1, Weight: 1, Status: credentials.StatusActive, HealthState: credentials.HealthHealthy},
+			{ID: "ark-1", Provider: "ark", BaseURL: ark.URL, Secret: "ark-secret", Priority: 1, Weight: 1, Status: credentials.StatusActive, HealthState: credentials.HealthHealthy},
+		}),
+		MaxCredentialRetries: 2,
+		DegradeDuration:      time.Second,
+		Timeouts:             testTimeouts(),
+	}, slog.New(slog.NewTextHandler(&logs, nil)), nil)
+
+	req := newProxyRequest(t, `{"model":"chat-fast","messages":[]}`)
+	ctx := httpx.WithVirtualModel(req.Context(), "chat-fast")
+	ctx = httpx.WithModelRouted(ctx, "deepseek-v4-flash")
+	ctx = httpx.WithProviderRouted(ctx, "deepseek")
+	req = req.WithContext(ctx)
+
+	rec := httptest.NewRecorder()
+	httpx.RequestID(handler).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if deepSeekCalls.Load() != 1 || arkCalls.Load() != 1 {
+		t.Fatalf("calls deepseek=%d ark=%d", deepSeekCalls.Load(), arkCalls.Load())
+	}
+	logText := logs.String()
+	for _, needle := range []string{
+		"cross provider fallback",
+		"from_provider=deepseek",
+		"to_provider=ark",
+		"model_requested=chat-fast",
+		"model_routed=deepseek-v4-flash",
+		"credential_id=ark-1",
+		"reason=all_excluded",
+	} {
+		if !strings.Contains(logText, needle) {
+			t.Fatalf("fallback log missing %q: %s", needle, logText)
+		}
+	}
+}
+
+func TestCrossProviderFallbackModelNotAvailable(t *testing.T) {
+	deepSeek := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	t.Cleanup(deepSeek.Close)
+
+	var arkCalls atomic.Int32
+	ark := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		arkCalls.Add(1)
+	}))
+	t.Cleanup(ark.Close)
+
+	handler := NewArkChatProxy(ArkChatConfig{
+		DefaultModel: testDefaultModel,
+		ModelCatalog: NewStaticModelCatalog(nil),
+		CredentialSelector: credentials.NewSelector([]credentials.Credential{
+			{ID: "deepseek-1", Provider: "deepseek", BaseURL: deepSeek.URL, Secret: "deepseek-secret", Priority: 1, Weight: 1, Status: credentials.StatusActive, HealthState: credentials.HealthHealthy},
+			{ID: "ark-1", Provider: "ark", BaseURL: ark.URL, Secret: "ark-secret", Priority: 1, Weight: 1, Status: credentials.StatusActive, HealthState: credentials.HealthHealthy},
+		}),
+		MaxCredentialRetries: 2,
+		DegradeDuration:      time.Second,
+		Timeouts:             testTimeouts(),
+	}, testLogger(), nil)
+
+	req := newProxyRequest(t, `{"model":"chat-fast","messages":[]}`)
+	ctx := httpx.WithVirtualModel(req.Context(), "chat-fast")
+	ctx = httpx.WithModelRouted(ctx, "deepseek-v4-flash")
+	ctx = httpx.WithProviderRouted(ctx, "deepseek")
+	req = req.WithContext(ctx)
+
+	rec := httptest.NewRecorder()
+	httpx.RequestID(handler).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	assertErrorCode(t, rec.Body.Bytes(), CodeModelNotAvailable)
+	if !strings.Contains(rec.Body.String(), "model deepseek-v4-flash is not available on any configured provider") {
+		t.Fatalf("missing model availability message: %s", rec.Body.String())
+	}
+	if arkCalls.Load() != 0 {
+		t.Fatalf("ark upstream calls = %d", arkCalls.Load())
+	}
+}
+
+func TestCrossProviderFallbackAllDegradedReason(t *testing.T) {
+	ark := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"deepseek-v4-flash","choices":[],"usage":{"total_tokens":1}}`))
+	}))
+	t.Cleanup(ark.Close)
+
+	selector := credentials.NewSelector([]credentials.Credential{
+		{ID: "deepseek-1", Provider: "deepseek", BaseURL: "https://deepseek.example", Secret: "deepseek-secret", Priority: 1, Weight: 1, Status: credentials.StatusActive, HealthState: credentials.HealthHealthy},
+		{ID: "ark-1", Provider: "ark", BaseURL: ark.URL, Secret: "ark-secret", Priority: 1, Weight: 1, Status: credentials.StatusActive, HealthState: credentials.HealthHealthy},
+	})
+	selector.MarkDegraded("deepseek-1", time.Minute)
+
+	var logs strings.Builder
+	handler := NewArkChatProxy(ArkChatConfig{
+		DefaultModel: testDefaultModel,
+		ModelCatalog: NewStaticModelCatalog([]ProviderModel{{
+			Provider:      "ark",
+			ProviderModel: "deepseek-v4-flash",
+		}}),
+		CredentialSelector:   selector,
+		MaxCredentialRetries: 1,
+		Timeouts:             testTimeouts(),
+	}, slog.New(slog.NewTextHandler(&logs, nil)), nil)
+
+	req := newProxyRequest(t, `{"model":"chat-fast","messages":[]}`)
+	ctx := httpx.WithVirtualModel(req.Context(), "chat-fast")
+	ctx = httpx.WithModelRouted(ctx, "deepseek-v4-flash")
+	ctx = httpx.WithProviderRouted(ctx, "deepseek")
+	req = req.WithContext(ctx)
+
+	rec := httptest.NewRecorder()
+	httpx.RequestID(handler).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(logs.String(), "reason=all_degraded") {
+		t.Fatalf("fallback log missing all_degraded: %s", logs.String())
+	}
+}
+
+func TestCrossProviderFallbackPreferredEmptyReason(t *testing.T) {
+	ark := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"deepseek-v4-flash","choices":[],"usage":{"total_tokens":1}}`))
+	}))
+	t.Cleanup(ark.Close)
+
+	var logs strings.Builder
+	handler := NewArkChatProxy(ArkChatConfig{
+		DefaultModel: testDefaultModel,
+		ModelCatalog: NewStaticModelCatalog([]ProviderModel{{
+			Provider:      "ark",
+			ProviderModel: "deepseek-v4-flash",
+		}}),
+		CredentialSelector: credentials.NewSelector([]credentials.Credential{
+			{ID: "ark-1", Provider: "ark", BaseURL: ark.URL, Secret: "ark-secret", Priority: 1, Weight: 1, Status: credentials.StatusActive, HealthState: credentials.HealthHealthy},
+		}),
+		MaxCredentialRetries: 1,
+		Timeouts:             testTimeouts(),
+	}, slog.New(slog.NewTextHandler(&logs, nil)), nil)
+
+	req := newProxyRequest(t, `{"model":"chat-fast","messages":[]}`)
+	ctx := httpx.WithVirtualModel(req.Context(), "chat-fast")
+	ctx = httpx.WithModelRouted(ctx, "deepseek-v4-flash")
+	ctx = httpx.WithProviderRouted(ctx, "deepseek")
+	req = req.WithContext(ctx)
+
+	rec := httptest.NewRecorder()
+	httpx.RequestID(handler).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(logs.String(), "reason=preferred_empty") {
+		t.Fatalf("fallback log missing preferred_empty: %s", logs.String())
+	}
+}
+
+func TestArkChatProxyReturnsPoolEmptyWhenSelectorHasNoHealthyCredentials(t *testing.T) {
+	handler := NewArkChatProxy(ArkChatConfig{
+		DefaultModel: testDefaultModel,
+		CredentialSelector: credentials.NewSelector([]credentials.Credential{
+			{ID: "disabled", Provider: "ark", BaseURL: "https://ark.example", Secret: "secret", Priority: 1, Status: credentials.StatusDisabled, HealthState: credentials.HealthHealthy},
+		}),
+		Timeouts: testTimeouts(),
+	}, testLogger(), nil)
+
+	rec := httptest.NewRecorder()
+	httpx.RequestID(handler).ServeHTTP(rec, newProxyRequest(t, `{"messages":[]}`))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	assertErrorCode(t, rec.Body.Bytes(), CodeUpstreamCredentialPoolEmpty)
 }
 
 func TestArkChatProxyRetriesStreamBeforeFirstChunk(t *testing.T) {

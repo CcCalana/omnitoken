@@ -74,6 +74,31 @@ func TestSelectorPrefersProviderThenFallsBack(t *testing.T) {
 	}
 }
 
+func TestSelectorReportsProviderAvailability(t *testing.T) {
+	now := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+	selector := NewSelectorWithClock([]Credential{
+		{ID: "excluded", Provider: "deepseek", Priority: 1, Status: StatusActive, HealthState: HealthHealthy},
+		{ID: "temporary-degraded", Provider: "deepseek", Priority: 1, Status: StatusActive, HealthState: HealthHealthy},
+		{ID: "disabled", Provider: "deepseek", Priority: 1, Status: StatusDisabled, HealthState: HealthHealthy},
+		{ID: "health-degraded", Provider: "deepseek", Priority: 1, Status: StatusActive, HealthState: HealthDegraded},
+		{ID: "ark", Provider: "ark", Priority: 1, Status: StatusActive, HealthState: HealthHealthy},
+	}, func() time.Time { return now })
+	selector.MarkDegraded("temporary-degraded", time.Minute)
+
+	got := selector.AvailabilityForProvider("deepseek", map[string]struct{}{"excluded": {}})
+	want := ProviderAvailability{ActiveHealthy: 2, Excluded: 1, Degraded: 1, Available: 0}
+	if got != want {
+		t.Fatalf("availability = %+v want %+v", got, want)
+	}
+
+	now = now.Add(time.Minute + time.Second)
+	got = selector.AvailabilityForProvider("deepseek", map[string]struct{}{"excluded": {}})
+	want = ProviderAvailability{ActiveHealthy: 2, Excluded: 1, Available: 1}
+	if got != want {
+		t.Fatalf("availability after expiry = %+v want %+v", got, want)
+	}
+}
+
 func TestSelectorHandlesNilAndDefaults(t *testing.T) {
 	var nilSelector *Selector
 	if nilSelector.Len() != 0 {

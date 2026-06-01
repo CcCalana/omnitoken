@@ -72,6 +72,31 @@ func TestAnthropicToOpenAIRequestRejectsEmptyMessages(t *testing.T) {
 	}
 }
 
+func TestAnthropicToOpenAIRequestValidation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "missing model", body: `{"messages":[{"role":"user","content":"hi"}]}`, want: "model is required"},
+		{name: "trailing object", body: `{"model":"m","messages":[{"role":"user","content":"hi"}]} {}`, want: "request body must contain one JSON object"},
+		{name: "missing role", body: `{"model":"m","messages":[{"content":"hi"}]}`, want: "message role is required"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, _, err := anthropicToOpenAIRequest([]byte(tt.body))
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("err = %v want %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestAnthropicHandlerNonStreamConvertsResponseAndUsageSeesOpenAI(t *testing.T) {
 	t.Parallel()
 
@@ -126,6 +151,76 @@ func TestAnthropicHandlerNonStreamConvertsResponseAndUsageSeesOpenAI(t *testing.
 	}
 }
 
+func TestOpenAIToAnthropicMessageVariants(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+		want []string
+	}{
+		{
+			name: "empty choices default content and usage",
+			body: `{"id":"","model":"m","choices":[]}`,
+			want: []string{`"content":[{"text":"","type":"text"}]`, `"input_tokens":0`, `"stop_reason":"end_turn"`},
+		},
+		{
+			name: "tool calls finish",
+			body: `{"id":"chatcmpl-1","model":"m","choices":[{"finish_reason":"tool_calls","message":{"content":"pong"}}]}`,
+			want: []string{`"stop_reason":"tool_use"`, `"text":"pong"`},
+		},
+		{
+			name: "unknown finish",
+			body: `{"id":"chatcmpl-1","model":"m","choices":[{"finish_reason":"weird","message":{"content":"pong"}}]}`,
+			want: []string{`"stop_reason":"end_turn"`},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := openAIToAnthropicMessage([]byte(tt.body))
+			if err != nil {
+				t.Fatalf("convert message: %v", err)
+			}
+			for _, needle := range tt.want {
+				if !strings.Contains(string(got), needle) {
+					t.Fatalf("missing %q in %s", needle, string(got))
+				}
+			}
+		})
+	}
+}
+
+func TestAnthropicStreamConverterHandlesThinkingMalformedAndCRLF(t *testing.T) {
+	t.Parallel()
+
+	var out strings.Builder
+	var logs strings.Builder
+	converter := newAnthropicStreamConverter(slog.New(slog.NewTextHandler(&logs, nil)))
+	stream := strings.Join([]string{
+		"data: not-json\r\n\r\n",
+		`data: {"id":"1","model":"m","choices":[{"index":0,"delta":{"reasoning_content":"think"}}]}` + "\r\n\r\n",
+		`data: {"choices":[{"index":0,"delta":{"content":"pong"}}]}` + "\r\n\r\n",
+		`data: {"choices":[{"index":0,"finish_reason":"stop"}],"usage":{"completion_tokens":2}}` + "\r\n\r\n",
+		"data: [DONE]\r\n\r\n",
+	}, "")
+
+	if err := converter.Write([]byte(stream), &out); err != nil {
+		t.Fatalf("convert stream: %v", err)
+	}
+	got := out.String()
+	for _, needle := range []string{"thinking_delta", "text_delta", "content_block_stop", "message_delta", "message_stop"} {
+		if !strings.Contains(got, needle) {
+			t.Fatalf("stream missing %q: %s", needle, got)
+		}
+	}
+	if !strings.Contains(logs.String(), "malformed") {
+		t.Fatalf("expected malformed frame warning, got %s", logs.String())
+	}
+}
+
 func TestAnthropicHandlerStreamConvertsSSEAndPreservesFlush(t *testing.T) {
 	t.Parallel()
 
@@ -160,6 +255,102 @@ func TestAnthropicHandlerStreamConvertsSSEAndPreservesFlush(t *testing.T) {
 	}
 }
 
+func TestAnthropicHandlerErrorEnvelopes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		method       string
+		next         http.Handler
+		body         string
+		wantStatus   int
+		wantType     string
+		wantMessage  string
+		maxBodyBytes int64
+	}{
+		{
+			name:        "method not allowed",
+			method:      http.MethodGet,
+			next:        http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
+			body:        `{"model":"m","messages":[{"role":"user","content":"hi"}]}`,
+			wantStatus:  http.StatusMethodNotAllowed,
+			wantType:    "invalid_request_error",
+			wantMessage: "method not allowed",
+		},
+		{
+			name:        "nil upstream",
+			method:      http.MethodPost,
+			body:        `{"model":"m","messages":[{"role":"user","content":"hi"}]}`,
+			wantStatus:  http.StatusServiceUnavailable,
+			wantType:    "api_error",
+			wantMessage: "upstream is not configured",
+		},
+		{
+			name:        "invalid request",
+			method:      http.MethodPost,
+			next:        http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
+			body:        `{"model":`,
+			wantStatus:  http.StatusBadRequest,
+			wantType:    "invalid_request_error",
+			wantMessage: "invalid request body",
+		},
+		{
+			name:   "upstream rate limit",
+			method: http.MethodPost,
+			next: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusTooManyRequests)
+				_, _ = w.Write([]byte(`{"error":{"message":"rate limited"}}`))
+			}),
+			body:        `{"model":"m","messages":[{"role":"user","content":"hi"}]}`,
+			wantStatus:  http.StatusTooManyRequests,
+			wantType:    "rate_limit_error",
+			wantMessage: "rate limited",
+		},
+		{
+			name:   "upstream bad gateway without message",
+			method: http.MethodPost,
+			next: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusBadGateway)
+				_, _ = w.Write([]byte(`not-json`))
+			}),
+			body:        `{"model":"m","messages":[{"role":"user","content":"hi"}]}`,
+			wantStatus:  http.StatusBadGateway,
+			wantType:    "api_error",
+			wantMessage: "upstream request failed",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			handler := NewAnthropicMessagesHandler(tt.next, testLogger(), AnthropicMessagesConfig{MaxRequestBytes: tt.maxBodyBytes})
+			req := httptest.NewRequest(tt.method, "/v1/messages", strings.NewReader(tt.body))
+			rec := httptest.NewRecorder()
+
+			httpx.RequestID(handler).ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+			}
+			var payload struct {
+				Type  string `json:"type"`
+				Error struct {
+					Type    string `json:"type"`
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+				t.Fatalf("decode error: %v body=%s", err, rec.Body.String())
+			}
+			if payload.Type != "error" || payload.Error.Type != tt.wantType || payload.Error.Message != tt.wantMessage {
+				t.Fatalf("error envelope = %#v", payload)
+			}
+		})
+	}
+}
+
 func TestAnthropicStreamIgnoresTrailingDataAfterDone(t *testing.T) {
 	t.Parallel()
 
@@ -175,6 +366,16 @@ func TestAnthropicStreamIgnoresTrailingDataAfterDone(t *testing.T) {
 	}
 	if strings.Count(got, "event: message_stop") != 1 {
 		t.Fatalf("message_stop count mismatch: %s", got)
+	}
+}
+
+func TestAnthropicResponseWriterUnwrapsDestination(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	writer := newAnthropicResponseWriter(rec, testLogger(), false)
+	if writer.Unwrap() != rec {
+		t.Fatal("unexpected wrapped response writer")
 	}
 }
 

@@ -32,6 +32,7 @@ const (
 	CodeUpstream429                 = "upstream_429"
 	CodeUpstreamInvalidResponse     = "upstream_invalid_response"
 	CodeUpstreamCredentialPoolEmpty = "upstream_credential_pool_empty"
+	CodeModelNotAvailable           = "model_not_available"
 	defaultConnectTimeout           = 5 * time.Second
 	defaultWriteTimeout             = 10 * time.Second
 	defaultFirstByteTimeout         = 20 * time.Second
@@ -54,6 +55,7 @@ type ArkChatConfig struct {
 	MaxRequestBytes      int64
 	Timeouts             TimeoutConfig
 	CredentialSelector   *credentials.Selector
+	ModelCatalog         ModelCatalog
 	MaxCredentialRetries int
 	DegradeDuration      time.Duration
 }
@@ -93,6 +95,11 @@ type streamCopyResult struct {
 type readResult struct {
 	n   int
 	err error
+}
+
+type requestModelInfo struct {
+	requested string
+	routed    string
 }
 
 func NewArkChatProxy(cfg ArkChatConfig, logger *slog.Logger, client *http.Client) *ArkChatProxy {
@@ -155,7 +162,7 @@ func (p *ArkChatProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, streamRequest, err := p.rewriteRequest(w, r)
+	body, streamRequest, models, err := p.rewriteRequest(w, r)
 	stream = streamRequest
 	if err != nil {
 		status = http.StatusBadRequest
@@ -164,7 +171,7 @@ func (p *ArkChatProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status, code = p.doWithRetries(w, r, body, stream)
+	status, code = p.doWithRetries(w, r, body, stream, models)
 }
 
 func (p *ArkChatProxy) configured() bool {
@@ -174,7 +181,7 @@ func (p *ArkChatProxy) configured() bool {
 	return p.cfg.CredentialSelector != nil && p.cfg.CredentialSelector.Len() > 0
 }
 
-func (p *ArkChatProxy) rewriteRequest(w http.ResponseWriter, r *http.Request) ([]byte, bool, error) {
+func (p *ArkChatProxy) rewriteRequest(w http.ResponseWriter, r *http.Request) ([]byte, bool, requestModelInfo, error) {
 	reader := http.MaxBytesReader(w, r.Body, p.cfg.MaxRequestBytes)
 	defer reader.Close()
 
@@ -183,21 +190,33 @@ func (p *ArkChatProxy) rewriteRequest(w http.ResponseWriter, r *http.Request) ([
 
 	var payload map[string]any
 	if err := decoder.Decode(&payload); err != nil {
-		return nil, false, err
+		return nil, false, requestModelInfo{}, err
 	}
 	if payload == nil {
-		return nil, false, errors.New("request body must be an object")
+		return nil, false, requestModelInfo{}, errors.New("request body must be an object")
 	}
 
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
-		return nil, false, errors.New("request body must contain one JSON object")
+		return nil, false, requestModelInfo{}, errors.New("request body must contain one JSON object")
 	}
 
+	requested, _ := payload["model"].(string)
+	models := requestModelInfo{
+		requested: strings.TrimSpace(requested),
+	}
+	if virtualModel := strings.TrimSpace(httpx.VirtualModelFromContext(r.Context())); virtualModel != "" {
+		models.requested = virtualModel
+	}
 	if routed := strings.TrimSpace(httpx.ModelRoutedFromContext(r.Context())); routed != "" {
 		payload["model"] = routed
+		models.routed = routed
 	} else {
 		payload["model"] = p.cfg.DefaultModel
+		models.routed = p.cfg.DefaultModel
+	}
+	if models.requested == "" {
+		models.requested = models.routed
 	}
 	if p.cfg.DisableThinking && shouldDisableThinking(r.Context()) {
 		payload["thinking"] = map[string]any{"type": "disabled"}
@@ -215,9 +234,9 @@ func (p *ArkChatProxy) rewriteRequest(w http.ResponseWriter, r *http.Request) ([
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return nil, false, err
+		return nil, false, requestModelInfo{}, err
 	}
-	return body, stream, nil
+	return body, stream, models, nil
 }
 
 func shouldDisableThinking(ctx context.Context) bool {
@@ -225,7 +244,7 @@ func shouldDisableThinking(ctx context.Context) bool {
 	return provider == "" || provider == "ark"
 }
 
-func (p *ArkChatProxy) doWithRetries(w http.ResponseWriter, r *http.Request, body []byte, stream bool) (int, string) {
+func (p *ArkChatProxy) doWithRetries(w http.ResponseWriter, r *http.Request, body []byte, stream bool, models requestModelInfo) (int, string) {
 	exclude := map[string]struct{}{}
 	maxAttempts := p.cfg.MaxCredentialRetries + 1
 	if maxAttempts <= 0 {
@@ -234,13 +253,41 @@ func (p *ArkChatProxy) doWithRetries(w http.ResponseWriter, r *http.Request, bod
 	if p.cfg.CredentialSelector == nil || p.cfg.CredentialSelector.Len() == 0 {
 		maxAttempts = 1
 	}
+	selectionLimit := maxAttempts
+	if p.cfg.CredentialSelector != nil {
+		selectionLimit += p.cfg.CredentialSelector.Len()
+	}
 
-	for attempt := 0; attempt < maxAttempts; attempt++ {
+	attempts := 0
+	modelUnavailable := false
+	loggedFallback := false
+	for selections := 0; selections < selectionLimit && attempts < maxAttempts; selections++ {
 		credential, ok := p.nextCredential(r.Context(), exclude)
 		if !ok {
-			writeError(w, http.StatusServiceUnavailable, "no healthy upstream credential", "gateway_error", CodeUpstreamCredentialPoolEmpty)
-			return http.StatusServiceUnavailable, CodeUpstreamCredentialPoolEmpty
+			if modelUnavailable {
+				p.writeModelNotAvailable(w, models)
+				return http.StatusBadRequest, CodeModelNotAvailable
+			}
+			return p.writeCredentialPoolEmpty(w)
 		}
+		fallback := p.isCrossProviderFallback(r.Context(), credential)
+		if fallback && p.cfg.ModelCatalog != nil {
+			if _, ok := p.cfg.ModelCatalog.LookupProviderModel(r.Context(), credential.Provider, models.routed); !ok {
+				modelUnavailable = true
+				if credential.ID == "" {
+					p.writeModelNotAvailable(w, models)
+					return http.StatusBadRequest, CodeModelNotAvailable
+				}
+				exclude[credential.ID] = struct{}{}
+				continue
+			}
+		}
+		if fallback && !loggedFallback {
+			p.logCrossProviderFallback(r.Context(), credential, models, p.fallbackReason(r.Context(), exclude))
+			loggedFallback = true
+		}
+		attempt := attempts
+		attempts++
 		upstreamReq, cancel, err := p.newUpstreamRequest(r, body, stream, credential)
 		if err != nil {
 			writeError(w, http.StatusServiceUnavailable, "upstream is not configured", "gateway_error", CodeUpstreamNotConfigured)
@@ -251,7 +298,7 @@ func (p *ArkChatProxy) doWithRetries(w http.ResponseWriter, r *http.Request, bod
 		if err != nil {
 			cancel()
 			code := classifyUpstreamRequestError(err)
-			if shouldRetryCode(code) && credential.ID != "" && attempt+1 < maxAttempts {
+			if shouldRetryCode(code) && credential.ID != "" && attempts < maxAttempts {
 				exclude[credential.ID] = struct{}{}
 				p.logCredentialRetry(r.Context(), credential.ID, 0, code, attempt+1)
 				continue
@@ -284,7 +331,7 @@ func (p *ArkChatProxy) doWithRetries(w http.ResponseWriter, r *http.Request, bod
 		if stream && isSuccessful(resp.StatusCode) {
 			result := p.copyStreamingResponse(w, r.Context(), cancel, resp)
 			_ = resp.Body.Close()
-			if result.err != nil && !result.wroteHeader && !result.final && credential.ID != "" && attempt+1 < maxAttempts {
+			if result.err != nil && !result.wroteHeader && !result.final && credential.ID != "" && attempts < maxAttempts {
 				exclude[credential.ID] = struct{}{}
 				p.logCredentialRetry(r.Context(), credential.ID, result.status, result.code, attempt+1)
 				continue
@@ -306,8 +353,50 @@ func (p *ArkChatProxy) doWithRetries(w http.ResponseWriter, r *http.Request, bod
 		return copyStatus, copyCode
 	}
 
+	if modelUnavailable {
+		p.writeModelNotAvailable(w, models)
+		return http.StatusBadRequest, CodeModelNotAvailable
+	}
+	return p.writeCredentialPoolEmpty(w)
+}
+
+func (p *ArkChatProxy) writeCredentialPoolEmpty(w http.ResponseWriter) (int, string) {
 	writeError(w, http.StatusServiceUnavailable, "no healthy upstream credential", "gateway_error", CodeUpstreamCredentialPoolEmpty)
 	return http.StatusServiceUnavailable, CodeUpstreamCredentialPoolEmpty
+}
+
+func (p *ArkChatProxy) writeModelNotAvailable(w http.ResponseWriter, models requestModelInfo) {
+	model := strings.TrimSpace(models.routed)
+	if model == "" {
+		model = strings.TrimSpace(models.requested)
+	}
+	writeError(w, http.StatusBadRequest, "model "+model+" is not available on any configured provider", "invalid_request", CodeModelNotAvailable)
+}
+
+func (p *ArkChatProxy) isCrossProviderFallback(ctx context.Context, credential credentials.Credential) bool {
+	routedProvider := strings.TrimSpace(httpx.ProviderRoutedFromContext(ctx))
+	if routedProvider == "" {
+		return false
+	}
+	return normalizeProvider(credential.Provider) != normalizeProvider(routedProvider)
+}
+
+func (p *ArkChatProxy) fallbackReason(ctx context.Context, exclude map[string]struct{}) string {
+	provider := strings.TrimSpace(httpx.ProviderRoutedFromContext(ctx))
+	if provider == "" || p.cfg.CredentialSelector == nil {
+		return "preferred_empty"
+	}
+	status := p.cfg.CredentialSelector.AvailabilityForProvider(provider, exclude)
+	switch {
+	case status.ActiveHealthy == 0:
+		return "preferred_empty"
+	case status.Excluded == status.ActiveHealthy:
+		return "all_excluded"
+	case status.Available == 0 && status.Degraded > 0:
+		return "all_degraded"
+	default:
+		return "preferred_empty"
+	}
 }
 
 func (p *ArkChatProxy) nextCredential(ctx context.Context, exclude map[string]struct{}) (credentials.Credential, bool) {
@@ -574,6 +663,18 @@ func (p *ArkChatProxy) logCredentialRetry(ctx context.Context, credentialID stri
 		attrs = append(attrs, "upstream_status", upstreamStatus)
 	}
 	p.logger.Warn("upstream credential retry", attrs...)
+}
+
+func (p *ArkChatProxy) logCrossProviderFallback(ctx context.Context, credential credentials.Credential, models requestModelInfo, reason string) {
+	p.logger.Warn("cross provider fallback",
+		"request_id", httpx.RequestIDFromContext(ctx),
+		"from_provider", strings.TrimSpace(httpx.ProviderRoutedFromContext(ctx)),
+		"to_provider", normalizeProvider(credential.Provider),
+		"model_requested", models.requested,
+		"model_routed", models.routed,
+		"credential_id", credential.ID,
+		"reason", reason,
+	)
 }
 
 func flush(w http.ResponseWriter) {

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -78,6 +79,11 @@ func main() {
 	}()
 
 	resolver := router.NewPostgresStore(db)
+	modelCatalog, err := loadModelCatalog(context.Background(), db)
+	if err != nil {
+		logger.Error("load model catalog", "error", err)
+		os.Exit(1)
+	}
 	credentialStore, selector := loadCredentialSelector(context.Background(), logger, db, cfg)
 	if selector != nil {
 		startCredentialPolling(context.Background(), logger, credentialStore, selector, credentialPollInterval(logger))
@@ -85,7 +91,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              cfg.Gateway.Addr,
-		Handler:           newMux(logger, auth.NewPostgresStore(db), quota.NewChecker(quota.NewPostgresStore(db)), resolver, newChatHandler(cfg, logger, db, selector)),
+		Handler:           newMux(logger, auth.NewPostgresStore(db), quota.NewChecker(quota.NewPostgresStore(db)), resolver, newChatHandler(cfg, logger, db, selector, modelCatalog)),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -194,17 +200,44 @@ func credentialPollInterval(logger *slog.Logger) time.Duration {
 	return interval
 }
 
-func newArkChatProxy(cfg config.Config, logger *slog.Logger, selector *credentials.Selector) http.Handler {
+func loadModelCatalog(ctx context.Context, db *sql.DB) (proxy.ModelCatalog, error) {
+	const query = `
+SELECT provider, canonical_model, provider_model
+FROM model_catalog
+WHERE status = 'active'
+ORDER BY provider, canonical_model`
+	rows, err := db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("query model catalog: %w", err)
+	}
+	defer rows.Close()
+
+	models := []proxy.ProviderModel{}
+	for rows.Next() {
+		var model proxy.ProviderModel
+		if err := rows.Scan(&model.Provider, &model.CanonicalModel, &model.ProviderModel); err != nil {
+			return nil, fmt.Errorf("scan model catalog: %w", err)
+		}
+		models = append(models, model)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate model catalog: %w", err)
+	}
+	return proxy.NewStaticModelCatalog(models), nil
+}
+
+func newArkChatProxy(cfg config.Config, logger *slog.Logger, selector *credentials.Selector, modelCatalog proxy.ModelCatalog) http.Handler {
 	return proxy.NewArkChatProxy(proxy.ArkChatConfig{
 		BaseURL:            cfg.Ark.OpenAIBaseURL,
 		APIKey:             cfg.Ark.APIKey,
 		DefaultModel:       cfg.Ark.DefaultModel,
 		DisableThinking:    cfg.Ark.DisableThinking,
 		CredentialSelector: selector,
+		ModelCatalog:       modelCatalog,
 	}, logger, nil)
 }
 
-func newChatHandler(cfg config.Config, logger *slog.Logger, db *sql.DB, selector *credentials.Selector) http.Handler {
+func newChatHandler(cfg config.Config, logger *slog.Logger, db *sql.DB, selector *credentials.Selector, modelCatalog proxy.ModelCatalog) http.Handler {
 	return usage.Middleware(
 		usage.NewRecorder(usage.NewPostgresStore(db), logger),
 		usage.MiddlewareConfig{
@@ -212,7 +245,7 @@ func newChatHandler(cfg config.Config, logger *slog.Logger, db *sql.DB, selector
 			ModelFallback: cfg.Ark.DefaultModel,
 			Logger:        logger,
 		},
-	)(newArkChatProxy(cfg, logger, selector))
+	)(newArkChatProxy(cfg, logger, selector, modelCatalog))
 }
 
 func protectGatewayRoute(store auth.VirtualKeyStore, next http.Handler) http.Handler {

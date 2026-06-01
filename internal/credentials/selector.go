@@ -19,6 +19,13 @@ type Selector struct {
 	degraded    map[string]time.Time
 }
 
+type ProviderAvailability struct {
+	ActiveHealthy int
+	Excluded      int
+	Degraded      int
+	Available     int
+}
+
 func NewSelector(items []Credential) *Selector {
 	return NewSelectorWithClock(items, time.Now)
 }
@@ -98,6 +105,34 @@ func (s *Selector) MarkDegraded(id string, duration time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.degraded[id] = s.clock().Add(duration)
+}
+
+func (s *Selector) AvailabilityForProvider(provider string, exclude map[string]struct{}) ProviderAvailability {
+	if s == nil {
+		return ProviderAvailability{}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := s.clock()
+	provider = normalizedProvider(provider)
+	var status ProviderAvailability
+	for _, item := range s.credentials {
+		if normalizedProvider(item.Provider) != provider || !eligible(item) {
+			continue
+		}
+		status.ActiveHealthy++
+		if _, skip := exclude[item.ID]; skip {
+			status.Excluded++
+			continue
+		}
+		if until, degraded := s.degraded[item.ID]; degraded && now.Before(until) {
+			status.Degraded++
+			continue
+		}
+		status.Available++
+	}
+	return status
 }
 
 func (s *Selector) providerOrderLocked(preferredProvider string) []string {
