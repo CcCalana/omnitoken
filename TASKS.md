@@ -858,7 +858,9 @@ Result: `8df224e` — L2 runner + e2e shell-out landed; M-36 PG read-only and cr
 
 ---
 
-## T-QUOTA-CACHE-PROBE 额度查询性能探测 [phase:vNext] [owner:codex] [status:todo]
+## T-QUOTA-CACHE-PROBE 额度查询性能探测 [phase:vNext] [owner:codex] [status:review] [started:2026-06-01 19:48 CST]
+
+Result: `94b4607` — 10/30/50 mock probe report landed; quota SQL bottleneck starts at 30c latency, 50c still 100% 2xx/0 5xx; all green.
 
 **目标**: 量化 `monthlyBudgetStatusSQL`（`internal/quota/store_postgres.go:48` 双 LEFT JOIN + SUM）在真实 gateway 承载下的 PG 性能表现，产出 baseline 数据。**不写优化代码**——先量，再决策是否需要优化。
 
