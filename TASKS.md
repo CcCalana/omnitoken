@@ -968,6 +968,8 @@ mock upstream (< 1ms 响应, 永不 429)
 
 Proposal: `docs/proposals/2026-06-01-t017b-cross-provider-fallback.md`
 
+Result: `c498850` — proposal only; chose injected in-memory catalog, validation-only fallback, and `httptest` provider mocks; diff check green.
+
 **依赖**: T-016 ✅（多 key 池 + selector 跨 provider 排序）；T-MP-DEEPSEEK ✅（多 provider credentials 已 seed）；T-045 ✅（`/v1/messages` 端点）
 
 **参考**:
