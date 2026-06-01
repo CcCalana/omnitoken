@@ -915,6 +915,69 @@ mock upstream (< 1ms 响应, 永不 429)
 
 ---
 
+## T-017b Cross-Provider Fallback Retry [phase:vNext] [owner:codex] [status:review] [started:2026-06-01 20:37 CST]
+
+**目标**: 补齐跨 provider fallback 的三块缺口——(a) model_catalog 资格校验防止把模型发给不认识的 provider、(b) 跨 provider 切换时结构化日志、(c) 跨 provider fallback 集成测试覆盖。**不改 selector 核心算法**（`NextForProvider` 的 provider ordering 和 priority-based round-robin 已经正确）。
+
+**背景**: `internal/credentials/selector.go` `NextForProvider` 已实现跨 provider 排序（preferred → 其他），`internal/proxy/proxy.go` `doWithRetries` 每次尝试调 `nextCredential` → `NextForProvider`。当所有 DeepSeek credentials 被 exclude/degrade 后，selector 自动返回 Ark credentials。但存在三块缺口：
+
+1. **Model compatibility (M-30)**: 当 gateway 从 DeepSeek fallback 到 Ark 时，请求体里 `model=deepseek-v4-flash` 原样发给 Ark → Ark 404。`model_catalog` 表已有 provider ↔ model 映射，应利用它做跨 provider 时的 model name 转换，或至少校验 fallback provider 是否有该模型。
+2. **Observability**: 跨 provider 切换静默发生，无结构化日志。运维排查"为什么请求打到了 Ark"时只能靠猜。
+3. **Test coverage**: `NextForProvider` 的跨 provider fallback 只在单测覆盖，未在集成/端到端层面验证 proxy retry loop + selector 的完整路径。
+
+**涉及**:
+- `internal/proxy/proxy.go` — `nextCredential` 或 `doWithRetries` 加跨 provider model 校验 + 结构化日志
+- `internal/proxy/proxy_test.go` — 跨 provider fallback 集成测试（mock upstream per provider）
+- `internal/credentials/selector_test.go` — 已有 `TestNextForProvider`，可能需补跨 provider 场景
+- `cmd/gateway/main.go` — 路由注册无变化（已有 `/v1/chat/completions` + `/v1/messages`）
+- `cmd/loadtest/mockark/` — 可能需加 provider-specific mock 变体或复用现有 mock + 不同 endpoint
+
+**接受标准**:
+- [ ] **Model 资格校验**：`doWithRetries` 在 `nextCredential` 返回跨 provider credential 时，查 `model_catalog` 确认该 provider 是否有请求的 model（`model_requested` 或 `model_routed` 匹配 `provider_model` 字段）。若不在 catalog 中，skip 该 credential 并继续尝试下一个；若所有 provider 都不支持该 model，返回 400 + 明确错误信息（"model X is not available on any configured provider"）
+- [ ] **Model name 转换（可选但推荐）**：若 model_catalog 定义了两个 provider 对同一 `canonical_model` 的不同 `provider_model`，在 fallback 时改写 `payload["model"]` 为 fallback provider 的 `provider_model`。这是加分项——先做校验，转换可在 PROPOSAL 中决定
+- [ ] **结构化日志**：跨 provider fallback 发生时 emit WARN 日志，含 `from_provider` / `to_provider` / `model_requested` / `model_routed` / `credential_id` / `reason`（all_excluded / all_degraded / preferred_empty）。沿用既有 `logCredentialRetry` 的日志模式（`p.logger.Warn` + `[]any` attrs）
+- [ ] **集成测试**：至少 2 条 mock-based 测试覆盖：
+  - `TestCrossProviderFallbackAllExcluded`: preferred provider credentials 全部被 exclude → 自动选 fallback provider → 200
+  - `TestCrossProviderFallbackModelNotAvailable`: 仅剩 fallback provider credential 但不支持该 model → skip → 400
+- [ ] **E2E 测试**（可选）：`test/e2e/` 下新增 build tag `e2e` 测试，用 docker-compose 完整链路验证跨 provider fallback。不阻塞 task closure——若 compose 环境就绪则做，否则标记为 follow-up
+- [ ] `go vet ./...` + `go test ./...` 全绿（含新增集成测试）
+- [ ] proxy 单测覆盖率不下降（当前基线 86.7%）
+
+**不在范围**:
+- ❌ 改 selector 核心算法（provider ordering / priority / round-robin 保持不动）
+- ❌ cost-aware routing（按价格选 provider——v1.1+ 范畴）
+- ❌ circuit breaker / exponential backoff（T-018 故障注入范围）
+- ❌ model_catalog schema 变更（只读已有表）
+- ❌ `cmd/omnitoken-adopt` 联动
+
+**设计约束**:
+
+1. **Model catalog 查询方式**：`doWithRetries` 目前不持有 DB 连接。有两种方案：
+   - (a) 在 proxy 构造时注入 `ModelCatalog` interface（`LookupProviderModel(ctx, provider, model) (string, bool)`），gateway 启动时从 `model_catalog` 表加载到内存，或查 PG
+   - (b) `nextCredential` 在返回跨 provider credential 前不做校验，改为在 fallback 发生后由 `doWithRetries` 对比请求 model 与 credential.Provider
+   **默认推荐 (a)**——内存加载简单且 model_catalog 是小表（当前 5 行），查询零延迟。PROPOSAL 中拍板。
+
+2. **Mock upstream 设计**：集成测试需要两个不同 provider 的 mock upstream。可复用 `cmd/loadtest/mockark`（它不检查 provider），启动两个实例在不同端口，selector 配置两份 credential（不同 base_url）。
+
+3. **Model name 转换边界**：若做 model name 转换，注意：(a) 原始 `model_routed` 仍记录 gateway 路由决定时的模型名；(b) 改写只影响 upstream 请求体中的 `payload["model"]`；(c) `usage_events.model_actual` 仍由上游响应中的 `model` 字段决定。
+
+**Codex propose 前置**: **是**。PROPOSAL 答清 3 点：
+1. Model catalog 查询方式：(a) 内存 interface 注入 / (b) nextCredential 内联校验？推荐 (a)
+2. Model name 转换是否在 T-017b 范围内？默认：**先做校验，转换推 v1.1**
+3. 集成测试 mock 设计：复用 mockark 双实例 or 新建 test-only mock？
+
+Proposal: `docs/proposals/2026-06-01-t017b-cross-provider-fallback.md`
+
+**依赖**: T-016 ✅（多 key 池 + selector 跨 provider 排序）；T-MP-DEEPSEEK ✅（多 provider credentials 已 seed）；T-045 ✅（`/v1/messages` 端点）
+
+**参考**:
+- M-30 (R-MP-DEEPSEEK): "跨 provider fallback 静默 404 风险"
+- selector cross-provider: `internal/credentials/selector.go:65-89` `NextForProvider` / `providerOrderLocked`
+- proxy retry loop: `internal/proxy/proxy.go:228-310` `doWithRetries`
+- model_catalog schema: `migrations/000001_init.up.sql:1-17`
+
+---
+
 ## T-AUDIT-USAGE-VIEW Audit Tab 加用户使用流水（上线门 ③） [phase:v1-release] [owner:codex] [status:done]
 
 Start: 2026-05-23 17:16 +08:00
