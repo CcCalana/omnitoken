@@ -40,6 +40,7 @@
 | 06-01 | **服务器部署规划**：用户决定服务器部署测试（5-10 人、DeepSeek-only、暂无域名）。Claude 产出 runbook + nginx config + docker-compose.server.yml。T-DEPLOY 和 T-SMOKE-AGENT 任务体下给 Codex |
 | 06-01 | **T-DEPLOY impl (`31adccf`) → R-DEPLOY Approved**。preflight + smoketest 脚本就绪，4 条 runbook 偏差（master-key 挂载/DB user/Codex URL/nginx -t）已修 |
 | 06-01 | **T-SMOKE-AGENT impl (`9bb08f0` + `cd118c9`) → R-SMOKE-AGENT Approved**。519 行测试：5 条集成（mock + 真 middleware）+ 4 条 e2e（真上游 + agent 格式）。Claude Code + Codex 全链路验证闭环 |
+| 06-01 | **T-UI-L1-THEME impl (`8c8790c`) → R-UI-L1-THEME Approved**。537 行纯前端：design tokens + dark theme + FOUC 防护 + Toast + Modal + 6 view alert/confirm 替换。零新依赖 |
 
 ---
 
@@ -136,7 +137,7 @@ E2E 验收通过，但**前端假数据 + admin 无鉴权 + 未验证并发**。
 |---|---|---|---|
 | 1 | **T-SMOKE-AGENT** | ✅ `9bb08f0` | 5 条集成 + 4 条 e2e，全链路 auth→proxy 覆盖 |
 | 2 | **T-DEPLOY** | ✅ `31adccf` | 预检 + smoketest 脚本就绪；4 条 runbook 偏差已修 |
-| 3 | **T-UI-L1-THEME** | todo | 前端视觉对齐，部署期间可并行（纯前端不阻塞） |
+| 3 | **T-UI-L1-THEME** | ✅ `8c8790c` | design tokens + dark theme + Toast + Modal，纯 vanilla 零构建 |
 
 ### vNext（部署验证后）
 
@@ -728,7 +729,7 @@ Result: `4b3d6b32` — admin credential add/disable + 30s polling hot reload lan
 
 ---
 
-## T-UI-L1-THEME 前端视觉对齐 L1 + Toast/Modal + Dark Theme [phase:post-v1] [owner:codex] [status:review] [started:2026-06-01 15:03 CST]
+## T-UI-L1-THEME 前端视觉对齐 L1 + Toast/Modal + Dark Theme [phase:post-v1] [owner:codex] [status:done] [started:2026-06-01 15:03 CST]
 
 **目标**: 借鉴 [cita-777/metapi](https://github.com/cita-777/metapi)（MIT 许可）的前端设计语言到 `web/`，**只做 L1 视觉对齐**：design tokens CSS + dark theme 切换 + Toast 组件 + Modal 组件。**不引入** React/Tailwind/Vite/任何构建工具，守住 OmniToken `web/` 当前的纯静态、零构建形态。
 

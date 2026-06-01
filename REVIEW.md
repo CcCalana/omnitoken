@@ -184,6 +184,36 @@
 
 ---
 
+## R-UI-L1-THEME (T-UI-L1-THEME 实施, impl `8c8790c` + status `9514ac9`)
+
+**结论: `[+] Approved`** — 接受标准全达。design tokens + dark theme + FOUC 防护 + Toast + Modal + 6 个 view 的 alert/confirm 替换全部落地。零新依赖，纯 vanilla JS。无 CRITICAL/HIGH。1 NIT 不阻塞。
+
+**正面信号**:
+
+1. ✅ **Design tokens 体系完整**：36 个 `--color-*` + `--radius-*` + `--shadow-*` + `--topbar-height` + `--sidebar-width` + `--z-*`。既有 CSS 变量（`--bg`、`--surface` 等）改为别名引用 `var(--color-*)`，所有现有 class 零改动即可吃 tokens。metapi 命名风格清晰可见（`--color-primary-soft`、`--shadow-card` 等）。
+
+2. ✅ **Dark theme 覆盖完整**：`[data-theme="dark"]` 下覆写全部颜色变量 + shadow 适配（dark 下 shadow 更深/更大）。`--color-overlay` 从浅色 `rgba(15,23,42,0.42)` 变为深色 `rgba(2,6,23,0.68)`——细节到位。
+
+3. ✅ **FOUC 防护教科书级实现**：`<head>` 内 inline `<script>` 在 `styles.css` 之前读 `localStorage` + `matchMedia("prefers-color-scheme: dark")`，直接设 `documentElement.dataset.theme`。CSS 加载时 theme 已确定，零闪烁。
+
+4. ✅ **三态主题切换**：system / light / dark cycle。`omnitoken.theme` localStorage key。system 模式监听 `matchMedia` change 事件自动跟随。按钮含图标（◐/●/○）+ 文字标签同步更新。
+
+5. ✅ **Toast 组件自包含**：`showToast(message, kind)` 四种 kind（info/success/warning/danger）。4s 自动消失、hover 暂停计时器、最多堆叠 3 条（溢出时 dismiss 最早的）。`<div aria-live="polite">` 容器。zero dependency。
+
+6. ✅ **Modal 组件无依赖完整**：focus trap（Tab/Shift+Tab 在 modal 内循环）、ESC 关闭、背景点击关闭、`aria-modal="true"` + `role="dialog"` + `aria-labelledby`、关闭后 restore 之前的 focus。`confirmModal` 快捷方法（title + message + confirm/cancel）。全部 `document.createElement` API，零 innerHTML XSS 面。
+
+7. ✅ **alert() / confirm() 全部替换**：credentials 的 disable confirm 走 `confirmModal`、overview/users/models 的 error 走 `setAlert`（inline alert banner）+ `showToast`。6 个 view 零 `alert()` / `confirm()` 调用。
+
+8. ✅ **零新依赖、零构建工具**：纯 vanilla JS + CSS。`web/` 仍可 `python -m http.server 3000` 直接 serve。`web/styles.css` 增量改动（design tokens 追加 + dark 覆写 + toast/modal/theme styles），不是重写。
+
+9. ✅ **go vet / test 零 regression**：纯前端改动，后端不碰。
+
+**N-41 (NIT) — commit message 缺 MIT attribution**：AC 要求 "commit message 体里注明 Design tokens inspired by metapi (MIT) — github.com/cita-777/metapi"。当前 commit `8c8790c` 的 body 只有 `refs T-UI-L1-THEME.`。**建议**: 下次 chore commit（如修 CSS 细节）时在 body 补一行 attribution。不阻塞 approval——metapi is MIT licensed，attribution 是礼貌不是法律义务。
+
+**Codex 下一步**: T-UI-L1-THEME status 可切 `done`。
+
+---
+
 ## R-SMOKE-AGENT (T-SMOKE-AGENT 实施, impl `9bb08f0` + `cd118c9` + status `3ed2f13`)
 
 **结论: `[+] Approved`** — 接受标准全达。5 条集成测试 + 4 条 e2e 测试覆盖 Claude Code（`x-api-key` + Anthropic）和 Codex（`Authorization: Bearer` + OpenAI）的完整 auth → middleware → proxy 链路。无 CRITICAL/HIGH。1 NIT 不阻塞。
