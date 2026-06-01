@@ -138,6 +138,7 @@ func TestRunSendsRequestsAndChecksOverview(t *testing.T) {
 		"p50_latency\t",
 		"p99_latency\t",
 		"runtime_goroutines_final\t",
+		"runtime_heap_alloc_final_bytes\t",
 		"usage_total_tokens\t123",
 	} {
 		if !strings.Contains(output, want) {

@@ -352,6 +352,9 @@ func printSummary(out io.Writer, report summary) {
 	fmt.Fprintf(out, "p99_latency\t%s\n", percentileLatency(report.latencies, 0.99).Round(time.Millisecond))
 	fmt.Fprintf(out, "max_latency\t%s\n", maxLatency(report.latencies).Round(time.Millisecond))
 	fmt.Fprintf(out, "runtime_goroutines_final\t%d\n", runtime.NumGoroutine())
+	var mem runtime.MemStats
+	runtime.ReadMemStats(&mem)
+	fmt.Fprintf(out, "runtime_heap_alloc_final_bytes\t%d\n", mem.HeapAlloc)
 	fmt.Fprintf(out, "usage_total_tokens\t%d\n", report.usage.TotalTokens)
 }
 
