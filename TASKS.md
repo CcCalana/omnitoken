@@ -486,7 +486,7 @@ Result: `00c9f4a` — prompts/status/dry-run/restore-confirm/error polish landed
 - `internal/` / `cmd/`
 - `docs/operations/server-deployment.md`（报告问题，不改文件）
 
-Result: `PENDING` — deploy preflight/smoke scripts landed; all green. Deviations: runbook master-key file not mounted, DB user mismatch, Codex `/v1` URL duplication, bare nginx -t needs compose DNS/certs.
+Result: `31adccf` — deploy preflight/smoke scripts landed; all green. Deviations: runbook master-key file not mounted, DB user mismatch, Codex `/v1` URL duplication, bare nginx -t needs compose DNS/certs.
 
 ---
 
