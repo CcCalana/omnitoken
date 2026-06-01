@@ -1,13 +1,24 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>OmniToken Admin Console</title>
+  <script>
+    (() => {
+      const key = "omnitoken.theme";
+      const stored = localStorage.getItem(key) || "system";
+      const systemDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+      document.documentElement.dataset.theme = stored === "dark" || (stored === "system" && systemDark) ? "dark" : "light";
+      document.documentElement.dataset.themeMode = stored;
+    })();
+  </script>
   <link rel="stylesheet" href="./styles.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script defer src="./src/utils.js"></script>
   <script defer src="./src/api.js"></script>
+  <script defer src="./src/components/toast.js"></script>
+  <script defer src="./src/components/modal.js"></script>
   <script defer src="./src/views/overview.js"></script>
   <script defer src="./src/views/users.js"></script>
   <script defer src="./src/views/models.js"></script>
@@ -68,6 +79,10 @@
       </div>
       <div class="topbar-actions">
         <span class="period-chip">账期 <strong id="current-period">--</strong></span>
+        <button id="theme-toggle-button" class="theme-toggle-button" type="button" aria-label="切换主题" title="切换主题">
+          <span id="theme-toggle-icon" aria-hidden="true">◐</span>
+          <span id="theme-toggle-label">System</span>
+        </button>
         <button id="refresh-button" class="secondary-button" type="button">刷新</button>
         <button id="logout-button" class="ghost-button" type="button">退出</button>
       </div>
@@ -277,7 +292,6 @@
         <p>Provider keys are stored encrypted. Additions and disables are picked up by gateway polling.</p>
         <button class="primary-button" type="button" data-action="open-credential-modal">Add</button>
       </div>
-      <div id="credentials-banner" class="alert alert-loading is-hidden"></div>
       <div id="credentials-alert" class="alert is-hidden"></div>
 
       <article class="panel table-panel">

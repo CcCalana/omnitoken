@@ -1,5 +1,6 @@
 (function () {
 const {
+  cssVar,
   escapeHTML,
   formatNumber,
   formatTokens,
@@ -67,6 +68,13 @@ function createAuditView(api) {
   });
   nodes.tabs.forEach((tab) => {
     tab.addEventListener("click", () => switchAuditView(tab.dataset.auditView || "logs"));
+  });
+  window.addEventListener?.("omnitoken:themechange", () => {
+    if (!hourlyChart) return;
+    const colors = chartColors();
+    hourlyChart.data.datasets[0].backgroundColor = colors.primary;
+    hourlyChart.options.scales.y.grid.color = colors.borderSoft;
+    hourlyChart.update();
   });
 
   function switchAuditView(view) {
@@ -250,6 +258,7 @@ function createAuditView(api) {
     const hasData = localHourly.some((count) => count > 0);
     setEmptyOverlay(nodes.usageHourlyEmpty, !hasData);
     if (!window.Chart || !nodes.usageHourlyCanvas?.getContext) return;
+    const colors = chartColors();
     if (!hourlyChart) {
       hourlyChart = new Chart(nodes.usageHourlyCanvas.getContext("2d"), {
         type: "bar",
@@ -258,7 +267,7 @@ function createAuditView(api) {
           datasets: [{
             label: "调用次数",
             data: localHourly,
-            backgroundColor: "#4f46e5",
+            backgroundColor: colors.primary,
             borderRadius: 6,
           }],
         },
@@ -267,7 +276,7 @@ function createAuditView(api) {
           maintainAspectRatio: false,
           plugins: { legend: { display: false } },
           scales: {
-            y: { beginAtZero: true, ticks: { precision: 0 }, grid: { color: "#f1f5f9" }, border: { display: false } },
+            y: { beginAtZero: true, ticks: { precision: 0 }, grid: { color: colors.borderSoft }, border: { display: false } },
             x: { grid: { display: false }, border: { display: false } },
           },
         },
@@ -275,6 +284,8 @@ function createAuditView(api) {
       return;
     }
     hourlyChart.data.datasets[0].data = localHourly;
+    hourlyChart.data.datasets[0].backgroundColor = colors.primary;
+    hourlyChart.options.scales.y.grid.color = colors.borderSoft;
     hourlyChart.update();
   }
 
@@ -398,6 +409,13 @@ function formatDateTime(value) {
 function formatJSON(value) {
   if (value === null || value === undefined) return "null";
   return JSON.stringify(value, null, 2);
+}
+
+function chartColors() {
+  return {
+    primary: cssVar("--color-primary"),
+    borderSoft: cssVar("--color-border-soft"),
+  };
 }
 
 window.OmniTokenViews = { ...(window.OmniTokenViews || {}), createAuditView };

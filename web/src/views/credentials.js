@@ -1,13 +1,12 @@
 (function () {
 const { escapeHTML, setAlert } = window.OmniTokenUtils;
+const { showToast } = window.OmniTokenToast || {};
+const { confirmModal } = window.OmniTokenModal || {};
 
 function createCredentialsView(api) {
   let loaded = false;
-  let bannerTimer = null;
-
   const nodes = {
     alert: document.getElementById("credentials-alert"),
-    banner: document.getElementById("credentials-banner"),
     body: document.getElementById("credentials-table-body"),
     open: document.querySelector('[data-action="open-credential-modal"]'),
     modal: document.getElementById("credential-modal"),
@@ -35,17 +34,7 @@ function createCredentialsView(api) {
     const button = event.target.closest?.("[data-disable-credential]");
     if (!button) return;
     const id = button.dataset.disableCredential;
-    if (!window.confirm("Disable this upstream credential?")) return;
-    button.disabled = true;
-    try {
-      await api.disableCredential(id);
-      showReloadBanner();
-      await load(true);
-    } catch (error) {
-      setAlert(nodes.alert, "error", `Disable failed (${error.code || error.message}).`);
-    } finally {
-      button.disabled = false;
-    }
+    confirmDisable(id, button);
   });
 
   async function submitCredential(event) {
@@ -123,11 +112,36 @@ function createCredentialsView(api) {
   }
 
   function showReloadBanner() {
-    if (!nodes.banner) return;
-    setAlert(nodes.banner, "loading", "Written to DB. Gateway will reload the credential pool within 30s; restart gateway for immediate effect.");
-    nodes.banner.classList.remove("is-hidden");
-    clearTimeout(bannerTimer);
-    bannerTimer = setTimeout(() => nodes.banner.classList.add("is-hidden"), 30000);
+    if (typeof showToast === "function") {
+      showToast("已写入数据库。Gateway 会在 30 秒内重新加载 credential pool。", "success");
+    } else {
+      setAlert(nodes.alert, "loading", "Written to DB. Gateway will reload the credential pool within 30s; restart gateway for immediate effect.");
+    }
+  }
+
+  function confirmDisable(id, button) {
+    const run = async () => {
+      button.disabled = true;
+      try {
+        await api.disableCredential(id);
+        showReloadBanner();
+        await load(true);
+      } catch (error) {
+        setAlert(nodes.alert, "error", `Disable failed (${error.code || error.message}).`);
+      } finally {
+        button.disabled = false;
+      }
+    };
+    if (typeof confirmModal === "function") {
+      confirmModal({
+        title: "Disable credential",
+        message: "Disable this upstream credential?",
+        confirmLabel: "Disable",
+        onConfirm: run,
+      });
+      return;
+    }
+    run();
   }
 
   return { load };

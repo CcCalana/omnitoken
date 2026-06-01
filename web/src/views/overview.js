@@ -1,5 +1,6 @@
 (function () {
 const {
+  cssVar,
   formatNumber,
   formatPeriod,
   formatTokens,
@@ -24,10 +25,14 @@ function createOverviewView(api) {
     trendEmpty: document.getElementById("trend-empty"),
     shareEmpty: document.getElementById("model-share-empty"),
   };
+  window.addEventListener?.("omnitoken:themechange", () => {
+    if (trendChart || shareChart) renderCharts();
+  });
 
   function initCharts() {
     if (trendChart || !window.Chart) return;
 
+    const colors = chartColors();
     const trendContext = document.getElementById("trend-chart").getContext("2d");
     trendChart = new Chart(trendContext, {
       type: "line",
@@ -36,11 +41,11 @@ function createOverviewView(api) {
         datasets: [{
           label: "每日总消耗",
           data: [],
-          borderColor: "#4f46e5",
-          backgroundColor: "rgba(79, 70, 229, 0.12)",
+          borderColor: colors.primary,
+          backgroundColor: colors.primarySoft,
           borderWidth: 2,
-          pointBackgroundColor: "#ffffff",
-          pointBorderColor: "#4f46e5",
+          pointBackgroundColor: colors.surface,
+          pointBorderColor: colors.primary,
           pointBorderWidth: 2,
           pointRadius: 4,
           fill: true,
@@ -62,7 +67,7 @@ function createOverviewView(api) {
           y: {
             beginAtZero: true,
             ticks: { callback: (value) => formatTokens(value) },
-            grid: { color: "#f1f5f9" },
+            grid: { color: colors.borderSoft },
             border: { display: false },
           },
           x: {
@@ -80,7 +85,7 @@ function createOverviewView(api) {
         labels: ["暂无数据"],
         datasets: [{
           data: [1],
-          backgroundColor: ["#e2e8f0"],
+          backgroundColor: [colors.border],
           borderWidth: 0,
         }],
       },
@@ -128,7 +133,13 @@ function createOverviewView(api) {
 
   function renderCharts() {
     const trendRows = overview.trend.filter((item) => Number(item.tokens) > 0 || Number(item.cost_usd) > 0);
+    const colors = chartColors();
     if (trendChart) {
+      trendChart.data.datasets[0].borderColor = colors.primary;
+      trendChart.data.datasets[0].backgroundColor = colors.primarySoft;
+      trendChart.data.datasets[0].pointBackgroundColor = colors.surface;
+      trendChart.data.datasets[0].pointBorderColor = colors.primary;
+      trendChart.options.scales.y.grid.color = colors.borderSoft;
       trendChart.data.labels = trendRows.map((item) => formatTrendLabel(item.date));
       trendChart.data.datasets[0].data = trendRows.map((item) => Number(item.tokens) || 0);
       trendChart.update();
@@ -140,8 +151,8 @@ function createOverviewView(api) {
       shareChart.data.labels = rows.length ? rows.map((item) => item.model || "unknown") : ["暂无数据"];
       shareChart.data.datasets[0].data = rows.length ? rows.map((item) => Number(item.tokens) || 0) : [1];
       shareChart.data.datasets[0].backgroundColor = rows.length
-        ? ["#4f46e5", "#0ea5e9", "#10b981", "#f59e0b", "#8b5cf6", "#ef4444"]
-        : ["#e2e8f0"];
+        ? [colors.primary, colors.info, colors.success, colors.warning, colors.primaryStrong, colors.danger]
+        : [colors.border];
       shareChart.update();
     }
     setEmptyOverlay(nodes.shareEmpty, rows.length === 0);
@@ -194,6 +205,21 @@ function normalizeModelUsage(raw) {
     cost_usd: Math.max(0, Number(item.cost_usd) || 0),
     share: Math.max(0, Number(item.share) || 0),
   }));
+}
+
+function chartColors() {
+  return {
+    primary: cssVar("--color-primary"),
+    primaryStrong: cssVar("--color-primary-strong"),
+    primarySoft: cssVar("--color-primary-soft"),
+    info: cssVar("--color-info"),
+    success: cssVar("--color-success"),
+    warning: cssVar("--color-warning"),
+    danger: cssVar("--color-danger"),
+    surface: cssVar("--color-surface"),
+    border: cssVar("--color-border"),
+    borderSoft: cssVar("--color-border-soft"),
+  };
 }
 
 window.OmniTokenViews = {

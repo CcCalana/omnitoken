@@ -60,7 +60,12 @@ function setEmptyOverlay(element, visible) {
   element.classList.toggle("is-hidden", !visible);
 }
 
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
 window.OmniTokenUtils = {
+  cssVar,
   escapeHTML,
   formatNumber,
   formatPeriod,

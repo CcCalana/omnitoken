@@ -728,7 +728,7 @@ Result: `4b3d6b32` — admin credential add/disable + 30s polling hot reload lan
 
 ---
 
-## T-UI-L1-THEME 前端视觉对齐 L1 + Toast/Modal + Dark Theme [phase:post-v1] [owner:codex] [status:todo]
+## T-UI-L1-THEME 前端视觉对齐 L1 + Toast/Modal + Dark Theme [phase:post-v1] [owner:codex] [status:review] [started:2026-06-01 15:03 CST]
 
 **目标**: 借鉴 [cita-777/metapi](https://github.com/cita-777/metapi)（MIT 许可）的前端设计语言到 `web/`，**只做 L1 视觉对齐**：design tokens CSS + dark theme 切换 + Toast 组件 + Modal 组件。**不引入** React/Tailwind/Vite/任何构建工具，守住 OmniToken `web/` 当前的纯静态、零构建形态。
 
@@ -785,6 +785,8 @@ Result: `4b3d6b32` — admin credential add/disable + 30s polling hot reload lan
 - 上游灵感：`github.com/cita-777/metapi` (MIT) — 仅 `src/web/index.css` + `src/web/components/Toast.tsx` + `src/web/components/CenteredModal.tsx`
 - 本地基线：`web/styles.css` (899 行) / `web/src/app.js` (114 行) / `web/src/views/*.js` (6 个 view, 共 ~1100 行)
 - README 已说明 web console 启动方式：`README.md` § "Open the web console"
+
+Result: `PENDING` — design tokens + dark theme + toast/modal landed; JS checks, view tests, static serve, lint/test green; no deviation.
 
 ---
 

@@ -1,5 +1,5 @@
 (function () {
-const { escapeHTML, formatNumber, formatTokens, formatUSD, setAlert, setEmptyOverlay } = window.OmniTokenUtils;
+const { cssVar, escapeHTML, formatNumber, formatTokens, formatUSD, setAlert, setEmptyOverlay } = window.OmniTokenUtils;
 
 function createModelsView(api) {
   let models = [];
@@ -15,9 +15,13 @@ function createModelsView(api) {
   };
 
   nodes.reload?.addEventListener("click", () => load(true));
+  window.addEventListener?.("omnitoken:themechange", () => {
+    if (chart) render();
+  });
 
   function initChart() {
     if (chart || !window.Chart) return;
+    const colors = chartColors();
     const context = document.getElementById("models-bar-chart").getContext("2d");
     chart = new Chart(context, {
       type: "bar",
@@ -27,13 +31,13 @@ function createModelsView(api) {
           {
             label: "Prompt Tokens",
             data: [0],
-            backgroundColor: "#93c5fd",
+            backgroundColor: colors.info,
             borderRadius: 4,
           },
           {
             label: "Completion Tokens",
             data: [0],
-            backgroundColor: "#3b82f6",
+            backgroundColor: colors.primary,
             borderRadius: 4,
           },
         ],
@@ -54,7 +58,7 @@ function createModelsView(api) {
             stacked: true,
             beginAtZero: true,
             ticks: { callback: (value) => formatTokens(value) },
-            grid: { color: "#f1f5f9" },
+            grid: { color: colors.borderSoft },
             border: { display: false },
           },
           x: {
@@ -70,7 +74,11 @@ function createModelsView(api) {
   function render() {
     initChart();
     const rows = visibleRows();
+    const colors = chartColors();
     if (chart) {
+      chart.data.datasets[0].backgroundColor = colors.info;
+      chart.data.datasets[1].backgroundColor = colors.primary;
+      chart.options.scales.y.grid.color = colors.borderSoft;
       chart.data.labels = rows.length ? rows.map((model) => model.model) : ["暂无数据"];
       chart.data.datasets[0].data = rows.length ? rows.map((model) => model.prompt_tokens) : [0];
       chart.data.datasets[1].data = rows.length ? rows.map((model) => model.completion_tokens) : [0];
@@ -148,6 +156,14 @@ function normalizeModels(raw) {
     cost_usd: Math.max(0, Number(model.cost_usd) || 0),
     call_count: Math.max(0, Number(model.call_count) || 0),
   }));
+}
+
+function chartColors() {
+  return {
+    info: cssVar("--color-info"),
+    primary: cssVar("--color-primary"),
+    borderSoft: cssVar("--color-border-soft"),
+  };
 }
 
 window.OmniTokenViews = { ...(window.OmniTokenViews || {}), createModelsView };

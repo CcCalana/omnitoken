@@ -5,6 +5,7 @@ const { createAuditView, createCredentialsView, createModelsView, createOverview
 const api = createAdminAPI();
 const state = {
   role: "viewer",
+  themeMode: localStorage.getItem("omnitoken.theme") || "system",
 };
 const views = {
   overview: createOverviewView(api),
@@ -48,10 +49,15 @@ const titles = {
 };
 
 let activeTab = "overview";
+const themeQuery = window.matchMedia?.("(prefers-color-scheme: dark)");
 
 document.getElementById("admin-origin").textContent = api.baseURL;
 document.getElementById("refresh-button").addEventListener("click", () => {
   views[activeTab]?.load(true);
+});
+document.getElementById("theme-toggle-button")?.addEventListener("click", cycleTheme);
+themeQuery?.addEventListener?.("change", () => {
+  if (state.themeMode === "system") applyTheme();
 });
 
 document.querySelectorAll("[data-tab]").forEach((button) => {
@@ -71,6 +77,7 @@ window.addEventListener("omnitoken:unauthorized", () => {
 init();
 
 async function init() {
+  applyTheme();
   const urlParams = new URLSearchParams(window.location.search);
   if (!localStorage.getItem("omnitokenAdminToken") && !urlParams.get("token")) {
     window.dispatchEvent(new Event("omnitoken:unauthorized"));
@@ -85,6 +92,27 @@ async function init() {
   } catch (_) {
     window.dispatchEvent(new Event("omnitoken:unauthorized"));
   }
+}
+
+function cycleTheme() {
+  const order = ["system", "light", "dark"];
+  const current = order.includes(state.themeMode) ? state.themeMode : "system";
+  state.themeMode = order[(order.indexOf(current) + 1) % order.length];
+  localStorage.setItem("omnitoken.theme", state.themeMode);
+  applyTheme();
+}
+
+function applyTheme() {
+  const systemDark = Boolean(themeQuery?.matches);
+  const resolved = state.themeMode === "dark" || (state.themeMode === "system" && systemDark) ? "dark" : "light";
+  const previous = document.documentElement.dataset.theme;
+  document.documentElement.dataset.theme = resolved;
+  document.documentElement.dataset.themeMode = state.themeMode;
+  const label = document.getElementById("theme-toggle-label");
+  const icon = document.getElementById("theme-toggle-icon");
+  if (label) label.textContent = state.themeMode === "system" ? "System" : state.themeMode === "dark" ? "Dark" : "Light";
+  if (icon) icon.textContent = state.themeMode === "system" ? "◐" : state.themeMode === "dark" ? "●" : "○";
+  if (previous && previous !== resolved) window.dispatchEvent(new Event("omnitoken:themechange"));
 }
 
 function showAuthenticatedShell(isAuthenticated) {
