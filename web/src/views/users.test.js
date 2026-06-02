@@ -10,6 +10,7 @@ test("users view shows quota editing for admin role", async () => {
     getUsers: async () => ({
       users: [{
         user_id: "user-1",
+        organization_id: "org-1",
         email: "admin@democorp.local",
         display_name: "Demo Admin",
         used_tokens: 42,
@@ -23,6 +24,7 @@ test("users view shows quota editing for admin role", async () => {
   await view.load(true);
 
   const html = harness.element("users-table-body").innerHTML;
+  assert.match(html, /data-action="generate-key"/);
   assert.match(html, /data-action="edit-quota"/);
   assert.match(html, /\$0\.38 \/ \$1\.00/);
   assert.match(html, /进度按分向上取整展示/);
@@ -34,6 +36,7 @@ test("users view hides quota editing for viewer role", async () => {
     getUsers: async () => ({
       users: [{
         user_id: "user-1",
+        organization_id: "org-1",
         email: "viewer@democorp.local",
         display_name: "Demo Viewer",
         used_tokens: 7,
@@ -47,6 +50,7 @@ test("users view hides quota editing for viewer role", async () => {
   await view.load(true);
 
   const html = harness.element("users-table-body").innerHTML;
+  assert.doesNotMatch(html, /data-action="generate-key"/);
   assert.doesNotMatch(html, /data-action="edit-quota"/);
   assert.match(html, /\$0\.01 \/ \$0\.50/);
 });
@@ -88,6 +92,7 @@ class FakeDocument {
       this.elements.set(id, new FakeElement(id));
     }
     this.actions.set("reload-users", new FakeElement("reload-users"));
+    this.actions.set("open-user-modal", new FakeElement("open-user-modal"));
   }
 
   getElementById(id) {

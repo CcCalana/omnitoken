@@ -19,6 +19,7 @@ const (
 	ActionViewModels         = "view_models"
 	ActionViewAuditLogs      = "view_audit_logs"
 	ActionViewOwnUsage       = "view_own_usage"
+	ActionCreateUser         = "create_user"
 	ActionCreateVirtualKey   = "create_virtual_key"
 	ActionDisableVirtualKey  = "disable_virtual_key"
 	ActionCreateCredential   = "create_provider_credential"
@@ -58,6 +59,7 @@ var AllActions = []string{
 	ActionViewModels,
 	ActionViewAuditLogs,
 	ActionViewOwnUsage,
+	ActionCreateUser,
 	ActionCreateVirtualKey,
 	ActionDisableVirtualKey,
 	ActionCreateCredential,

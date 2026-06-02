@@ -297,6 +297,138 @@ func TestUsersReturnsStoreData(t *testing.T) {
 	}
 }
 
+func TestCreateUserEndpointCreatesAndAudits(t *testing.T) {
+	t.Parallel()
+
+	adminID := uuid.New()
+	orgID := uuid.New()
+	userID := uuid.New()
+	store := &fakeOverviewStore{
+		createUserResult: createdAdminUser{
+			UserID:         userID,
+			OrganizationID: orgID,
+			Email:          "member@example.com",
+			DisplayName:    "New Member",
+			Role:           "member",
+		},
+	}
+	sessionStore := auth.NewSessionStore(time.Hour)
+	token, _ := sessionStore.Create(adminID, orgID, "admin")
+	recorder := newAdminAuditRecorder()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/users", strings.NewReader(`{"email":"Member@Example.com","display_name":"New Member","role":"member","password":"secret-pass"}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("User-Agent", "admin-test")
+	rec := httptest.NewRecorder()
+
+	newMux(testLogger(), testAdminConfig(), store, nil, sessionStore, recorder).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+	if store.createUserParams.OrganizationID != orgID ||
+		store.createUserParams.Email != "member@example.com" ||
+		store.createUserParams.DisplayName != "New Member" ||
+		store.createUserParams.Role != "member" ||
+		store.createUserParams.Password != "secret-pass" {
+		t.Fatalf("unexpected create params: %+v", store.createUserParams)
+	}
+	var body createUserResponse
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode create user response: %v", err)
+	}
+	if body.UserID != userID.String() || body.OrganizationID != orgID.String() || body.Role != "member" {
+		t.Fatalf("unexpected create user response: %+v", body)
+	}
+
+	entry := recorder.wait(t)
+	if entry.Action != rbac.ActionCreateUser || entry.ResourceType != "user" || entry.ResourceID != userID.String() {
+		t.Fatalf("unexpected audit resource: %+v", entry)
+	}
+	if entry.Actor.ID != adminID.String() || entry.Actor.Type != "user" || entry.StatusCode != http.StatusCreated || entry.UserAgent != "admin-test" {
+		t.Fatalf("unexpected audit actor/status: %+v", entry)
+	}
+	after, ok := entry.After.(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected audit after snapshot type: %T", entry.After)
+	}
+	if after["email"] != "member@example.com" || after["role"] != "member" || after["user_id"] != userID.String() {
+		t.Fatalf("unexpected audit after snapshot: %#v", after)
+	}
+	if _, leaked := after["password"]; leaked {
+		t.Fatalf("audit after snapshot leaked password: %#v", after)
+	}
+}
+
+func TestCreateUserEndpointDeniesNonAdminAndAudits(t *testing.T) {
+	t.Parallel()
+
+	for _, role := range []string{"viewer", "member"} {
+		role := role
+		t.Run(role, func(t *testing.T) {
+			t.Parallel()
+
+			sessionStore := auth.NewSessionStore(time.Hour)
+			token, _ := sessionStore.Create(uuid.New(), uuid.New(), role)
+			recorder := newAdminAuditRecorder()
+			store := &fakeOverviewStore{}
+
+			req := httptest.NewRequest(http.MethodPost, "/api/admin/users", strings.NewReader(`{"email":"member@example.com","display_name":"New Member","role":"member","password":"secret-pass"}`))
+			req.Header.Set("Authorization", "Bearer "+token)
+			rec := httptest.NewRecorder()
+
+			newMux(testLogger(), testAdminConfig(), store, nil, sessionStore, recorder).ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("expected status %d, got %d", http.StatusForbidden, rec.Code)
+			}
+			if store.createUserParams.Email != "" {
+				t.Fatalf("create user store should not be called: %+v", store.createUserParams)
+			}
+			entry := recorder.wait(t)
+			if entry.Action != rbac.ActionCreateUser || entry.StatusCode != http.StatusForbidden {
+				t.Fatalf("unexpected audit entry: %+v", entry)
+			}
+		})
+	}
+}
+
+func TestCreateUserEndpointRejectsInvalidInput(t *testing.T) {
+	t.Parallel()
+
+	sessionStore := auth.NewSessionStore(time.Hour)
+	token, _ := sessionStore.Create(uuid.New(), uuid.New(), "admin")
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/users", strings.NewReader(`{"email":"not-an-email","display_name":"New Member","role":"member","password":"secret-pass"}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	newMux(testLogger(), testAdminConfig(), &fakeOverviewStore{}, nil, sessionStore).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
+	}
+	assertErrorCode(t, rec, "invalid_user")
+}
+
+func TestCreateUserEndpointReturnsConflictForDuplicate(t *testing.T) {
+	t.Parallel()
+
+	sessionStore := auth.NewSessionStore(time.Hour)
+	token, _ := sessionStore.Create(uuid.New(), uuid.New(), "admin")
+	store := &fakeOverviewStore{createUserErr: errAdminUserExists}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/users", strings.NewReader(`{"email":"member@example.com","display_name":"New Member","role":"member","password":"secret-pass"}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	newMux(testLogger(), testAdminConfig(), store, nil, sessionStore).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusConflict, rec.Code, rec.Body.String())
+	}
+	assertErrorCode(t, rec, "user_exists")
+}
+
 func TestUsersStoreErrorReturns500(t *testing.T) {
 	t.Parallel()
 
@@ -1152,10 +1284,10 @@ func TestPostgresOverviewStoreLoadUsersMapsSQLResults(t *testing.T) {
 	now := time.Date(2026, 5, 12, 10, 30, 0, 0, time.UTC)
 	db := openFakeAdminDB(t, []adminFakeSQLResponse{
 		{
-			columns: []string{"user_id", "email", "display_name", "used_tokens", "used_budget_cents", "monthly_budget_cents", "status"},
+			columns: []string{"user_id", "organization_id", "email", "display_name", "used_tokens", "used_budget_cents", "monthly_budget_cents", "status"},
 			rows: [][]driver.Value{
-				{"00000000-0000-0000-0000-000000000201", "admin@democorp.local", "Demo Admin", int64(300), int64(38), int64(100), "active"},
-				{"00000000-0000-0000-0000-000000000202", "user01@democorp.local", "Demo User 01", int64(0), int64(0), nil, "disabled"},
+				{"00000000-0000-0000-0000-000000000201", "00000000-0000-0000-0000-000000000101", "admin@democorp.local", "Demo Admin", int64(300), int64(38), int64(100), "active"},
+				{"00000000-0000-0000-0000-000000000202", "00000000-0000-0000-0000-000000000101", "user01@democorp.local", "Demo User 01", int64(0), int64(0), nil, "disabled"},
 			},
 		},
 	})
@@ -1169,7 +1301,8 @@ func TestPostgresOverviewStoreLoadUsersMapsSQLResults(t *testing.T) {
 	if len(got.Users) != 2 {
 		t.Fatalf("expected two users, got %+v", got.Users)
 	}
-	if got.Users[0].Email != "admin@democorp.local" || got.Users[0].UsedTokens != 300 ||
+	if got.Users[0].OrganizationID != "00000000-0000-0000-0000-000000000101" ||
+		got.Users[0].Email != "admin@democorp.local" || got.Users[0].UsedTokens != 300 ||
 		got.Users[0].UsedBudgetCents != 38 || got.Users[0].BudgetCents == nil ||
 		*got.Users[0].BudgetCents != 100 || got.Users[0].Quota != 100 {
 		t.Fatalf("unexpected first user row: %+v", got.Users[0])
@@ -1200,7 +1333,7 @@ func TestPostgresOverviewStoreLoadUsersMapsSQLResults(t *testing.T) {
 func TestPostgresOverviewStoreLoadUsersEmptyResults(t *testing.T) {
 	db := openFakeAdminDB(t, []adminFakeSQLResponse{
 		{
-			columns: []string{"user_id", "email", "display_name", "used_tokens", "used_budget_cents", "monthly_budget_cents", "status"},
+			columns: []string{"user_id", "organization_id", "email", "display_name", "used_tokens", "used_budget_cents", "monthly_budget_cents", "status"},
 			rows:    [][]driver.Value{},
 		},
 	})
@@ -1212,6 +1345,138 @@ func TestPostgresOverviewStoreLoadUsersEmptyResults(t *testing.T) {
 	}
 	if got.Users == nil || len(got.Users) != 0 {
 		t.Fatalf("expected empty users array, got %+v", got.Users)
+	}
+}
+
+func TestPostgresOverviewStoreCreateUserInsertsUserRoleAndHash(t *testing.T) {
+	orgID := uuid.New()
+	userID := uuid.New()
+	roleID := uuid.New()
+	db := openFakeAdminDB(t, []adminFakeSQLResponse{
+		{
+			columns: []string{"id", "organization_id", "email", "display_name"},
+			rows: [][]driver.Value{
+				{userID.String(), orgID.String(), "member@example.com", "New Member"},
+			},
+		},
+		{
+			columns: []string{"role_id"},
+			rows:    [][]driver.Value{{roleID.String()}},
+		},
+	})
+	store := &postgresOverviewStore{db: db}
+
+	got, err := store.CreateUser(context.Background(), createUserParams{
+		OrganizationID: orgID,
+		Email:          "member@example.com",
+		DisplayName:    "New Member",
+		Role:           "member",
+		Password:       "secret-pass",
+	})
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	if got.UserID != userID || got.OrganizationID != orgID || got.Email != "member@example.com" || got.Role != "member" {
+		t.Fatalf("unexpected created user: %+v", got)
+	}
+
+	queries := fakeAdminSQLSnapshot()
+	if len(queries) != 2 {
+		t.Fatalf("expected 2 queries, got %d", len(queries))
+	}
+	for _, want := range []string{"INSERT INTO users", "password_hash", "crypt($4, gen_salt('bf'))", "ON CONFLICT (organization_id, email) DO NOTHING"} {
+		if !strings.Contains(queries[0].query, want) {
+			t.Fatalf("insert user query missing %q: %s", want, queries[0].query)
+		}
+	}
+	if len(queries[0].args) != 5 ||
+		fmt.Sprint(queries[0].args[0]) != orgID.String() ||
+		queries[0].args[1] != "member@example.com" ||
+		queries[0].args[2] != "New Member" ||
+		queries[0].args[3] != "secret-pass" {
+		t.Fatalf("unexpected insert args: %#v", queries[0].args)
+	}
+	if _, ok := queries[0].args[4].(time.Time); !ok {
+		t.Fatalf("expected created_at arg to be time.Time, got %#v", queries[0].args[4])
+	}
+	for _, want := range []string{"INSERT INTO role_assignments", "FROM roles r", "r.canonical_name = $3", "RETURNING role_id"} {
+		if !strings.Contains(queries[1].query, want) {
+			t.Fatalf("role assignment query missing %q: %s", want, queries[1].query)
+		}
+	}
+	if len(queries[1].args) != 3 ||
+		fmt.Sprint(queries[1].args[0]) != orgID.String() ||
+		fmt.Sprint(queries[1].args[1]) != userID.String() ||
+		queries[1].args[2] != "member" {
+		t.Fatalf("unexpected role args: %#v", queries[1].args)
+	}
+}
+
+func TestPostgresOverviewStoreCreateUserUsesDefaultOrganization(t *testing.T) {
+	orgID := uuid.New()
+	userID := uuid.New()
+	roleID := uuid.New()
+	db := openFakeAdminDB(t, []adminFakeSQLResponse{
+		{
+			columns: []string{"id"},
+			rows:    [][]driver.Value{{orgID.String()}},
+		},
+		{
+			columns: []string{"id", "organization_id", "email", "display_name"},
+			rows: [][]driver.Value{
+				{userID.String(), orgID.String(), "viewer@example.com", "New Viewer"},
+			},
+		},
+		{
+			columns: []string{"role_id"},
+			rows:    [][]driver.Value{{roleID.String()}},
+		},
+	})
+	store := &postgresOverviewStore{db: db}
+
+	got, err := store.CreateUser(context.Background(), createUserParams{
+		Email:       "viewer@example.com",
+		DisplayName: "New Viewer",
+		Role:        "viewer",
+		Password:    "secret-pass",
+	})
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	if got.OrganizationID != orgID || got.UserID != userID || got.Role != "viewer" {
+		t.Fatalf("unexpected created user: %+v", got)
+	}
+
+	queries := fakeAdminSQLSnapshot()
+	if len(queries) != 3 {
+		t.Fatalf("expected 3 queries, got %d", len(queries))
+	}
+	if !strings.Contains(queries[0].query, "FROM organizations") || !strings.Contains(queries[0].query, "LIMIT 1") {
+		t.Fatalf("default organization query mismatch: %s", queries[0].query)
+	}
+	if fmt.Sprint(queries[1].args[0]) != orgID.String() || queries[2].args[2] != "viewer" {
+		t.Fatalf("unexpected create args after default org lookup: %#v / %#v", queries[1].args, queries[2].args)
+	}
+}
+
+func TestPostgresOverviewStoreCreateUserDuplicate(t *testing.T) {
+	db := openFakeAdminDB(t, []adminFakeSQLResponse{
+		{
+			columns: []string{"id", "organization_id", "email", "display_name"},
+			rows:    [][]driver.Value{},
+		},
+	})
+	store := &postgresOverviewStore{db: db}
+
+	_, err := store.CreateUser(context.Background(), createUserParams{
+		OrganizationID: uuid.New(),
+		Email:          "member@example.com",
+		DisplayName:    "New Member",
+		Role:           "member",
+		Password:       "secret-pass",
+	})
+	if !errors.Is(err, errAdminUserExists) {
+		t.Fatalf("expected duplicate user error, got %v", err)
 	}
 }
 
@@ -1948,6 +2213,9 @@ type fakeOverviewStore struct {
 	updateVirtualModelResult updateVirtualModelResult
 	updateVirtualModelErr    error
 	updateVirtualModelParams updateVirtualModelParams
+	createUserResult         createdAdminUser
+	createUserErr            error
+	createUserParams         createUserParams
 	createCredentialResult   credentials.PublicCredential
 	createCredentialErr      error
 	createCredentialParams   credentials.CreateParams
@@ -1976,6 +2244,11 @@ func (f *fakeOverviewStore) CreateVirtualModel(_ context.Context, params createV
 func (f *fakeOverviewStore) UpdateVirtualModel(_ context.Context, params updateVirtualModelParams) (updateVirtualModelResult, error) {
 	f.updateVirtualModelParams = params
 	return f.updateVirtualModelResult, f.updateVirtualModelErr
+}
+
+func (f *fakeOverviewStore) CreateUser(_ context.Context, params createUserParams) (createdAdminUser, error) {
+	f.createUserParams = params
+	return f.createUserResult, f.createUserErr
 }
 
 func (f *fakeOverviewStore) LoadCredentials(ctx context.Context) (credentialsResponse, error) {
@@ -2122,7 +2395,11 @@ func (adminFakeConn) Close() error {
 }
 
 func (adminFakeConn) Begin() (driver.Tx, error) {
-	return nil, errors.New("admin fake driver does not support transactions")
+	return adminFakeTx{}, nil
+}
+
+func (adminFakeConn) BeginTx(_ context.Context, _ driver.TxOptions) (driver.Tx, error) {
+	return adminFakeTx{}, nil
 }
 
 func (adminFakeConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
@@ -2147,6 +2424,16 @@ func (adminFakeConn) QueryContext(_ context.Context, query string, args []driver
 		columns: response.columns,
 		rows:    response.rows,
 	}, nil
+}
+
+type adminFakeTx struct{}
+
+func (adminFakeTx) Commit() error {
+	return nil
+}
+
+func (adminFakeTx) Rollback() error {
+	return nil
 }
 
 type adminFakeRows struct {

@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/mail"
 	"net/url"
 	"os"
 	"strconv"
@@ -37,6 +38,9 @@ const (
 )
 
 var errAdminUserNotFound = errors.New("admin user not found")
+var errAdminUserExists = errors.New("admin user already exists")
+var errAdminOrganizationNotFound = errors.New("admin organization not found")
+var errAdminRoleNotFound = errors.New("admin role not found")
 var errVirtualModelExists = errors.New("virtual model already exists")
 var errVirtualModelMissing = errors.New("virtual model not found")
 
@@ -75,6 +79,7 @@ type usersResponse struct {
 
 type adminUserUsage struct {
 	UserID          string `json:"user_id"`
+	OrganizationID  string `json:"organization_id"`
 	Email           string `json:"email"`
 	DisplayName     string `json:"display_name"`
 	UsedTokens      int64  `json:"used_tokens"`
@@ -94,6 +99,21 @@ type virtualModelsResponse struct {
 
 type credentialsResponse struct {
 	Credentials []credentials.PublicCredential `json:"credentials"`
+}
+
+type createUserRequest struct {
+	Email       string `json:"email"`
+	DisplayName string `json:"display_name"`
+	Role        string `json:"role"`
+	Password    string `json:"password"`
+}
+
+type createUserResponse struct {
+	UserID         string `json:"user_id"`
+	OrganizationID string `json:"organization_id"`
+	Email          string `json:"email"`
+	DisplayName    string `json:"display_name"`
+	Role           string `json:"role"`
 }
 
 type createCredentialRequest struct {
@@ -139,6 +159,22 @@ type updateVirtualModelParams struct {
 	Provider    *string
 	Status      *string
 	Description *string
+}
+
+type createUserParams struct {
+	OrganizationID uuid.UUID
+	Email          string
+	DisplayName    string
+	Role           string
+	Password       string
+}
+
+type createdAdminUser struct {
+	UserID         uuid.UUID
+	OrganizationID uuid.UUID
+	Email          string
+	DisplayName    string
+	Role           string
 }
 
 type updateVirtualModelResult struct {
@@ -276,6 +312,7 @@ type overviewStore interface {
 	LoadModels(context.Context, time.Time) (modelsResponse, error)
 	LoadAuditLogs(context.Context, auditLogFilters) ([]adminAuditLog, error)
 	LoadUserUsage(context.Context, uuid.UUID, userUsageFilters, time.Time) (userUsageResponse, error)
+	CreateUser(context.Context, createUserParams) (createdAdminUser, error)
 	UpdateUserBudget(context.Context, uuid.UUID, *int64, time.Time) (updateUserBudgetResult, error)
 	LoadVirtualModels(context.Context) (virtualModelsResponse, error)
 	CreateVirtualModel(context.Context, createVirtualModelParams) (adminVirtualModel, error)
@@ -502,6 +539,7 @@ func newMux(logger *slog.Logger, cfg config.AdminConfig, overview overviewStore,
 
 	mux.Handle("GET /api/admin/overview", protectedRead(http.HandlerFunc(makeOverviewHandler(logger, overview, time.Now))))
 	mux.Handle("GET /api/admin/users", protectedRead(http.HandlerFunc(makeUsersHandler(logger, overview, time.Now))))
+	mux.Handle("POST /api/admin/users", protectedWrite(rbac.ActionCreateUser, http.HandlerFunc(makeCreateUserHandler(logger, overview))))
 	mux.Handle("GET /api/admin/models", protectedRead(http.HandlerFunc(makeModelsHandler(logger, overview, time.Now))))
 	mux.Handle("GET /api/admin/virtual-models", protectedRead(http.HandlerFunc(makeVirtualModelsHandler(logger, overview))))
 	mux.Handle("POST /api/admin/virtual-models", protectedWrite(rbac.ActionCreateVirtualModel, http.HandlerFunc(makeCreateVirtualModelHandler(logger, overview))))
@@ -577,6 +615,67 @@ func makeUsersHandler(logger *slog.Logger, store overviewStore, now func() time.
 		}
 
 		httpx.WriteJSON(w, http.StatusOK, users)
+	}
+}
+
+func makeCreateUserHandler(logger *slog.Logger, store overviewStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		audit.SetAction(r.Context(), rbac.ActionCreateUser)
+		audit.SetResource(r.Context(), "user", "")
+		audit.SetBefore(r.Context(), nil)
+
+		var body createUserRequest
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
+			httpx.WriteJSON(w, http.StatusBadRequest, errorEnvelope("invalid request body", "invalid_request", "invalid_json"))
+			return
+		}
+		params, err := parseCreateUserRequest(body)
+		if err != nil {
+			httpx.WriteJSON(w, http.StatusBadRequest, errorEnvelope(err.Error(), "invalid_request", "invalid_user"))
+			return
+		}
+		if subject, ok := auth.SubjectFromContext(r.Context()); ok {
+			params.OrganizationID = subject.OrgID
+		}
+		audit.SetAfter(r.Context(), userAuditView(createdAdminUser{
+			OrganizationID: params.OrganizationID,
+			Email:          params.Email,
+			DisplayName:    params.DisplayName,
+			Role:           params.Role,
+		}))
+
+		if store == nil {
+			logger.Error("create user without admin store")
+			httpx.WriteJSON(w, http.StatusServiceUnavailable, errorEnvelope("admin store is not configured", "server_error", "admin_store_not_configured"))
+			return
+		}
+		created, err := store.CreateUser(r.Context(), params)
+		if err != nil {
+			switch {
+			case errors.Is(err, errAdminUserExists):
+				httpx.WriteJSON(w, http.StatusConflict, errorEnvelope("user already exists", "invalid_request", "user_exists"))
+				return
+			case errors.Is(err, errAdminOrganizationNotFound):
+				httpx.WriteJSON(w, http.StatusNotFound, errorEnvelope("organization not found", "invalid_request", "organization_not_found"))
+				return
+			case errors.Is(err, errAdminRoleNotFound):
+				httpx.WriteJSON(w, http.StatusInternalServerError, errorEnvelope("role is not configured", "server_error", "role_not_configured"))
+				return
+			default:
+				logger.Error("create user", "email", params.Email, "role", params.Role, "error", err)
+				httpx.WriteJSON(w, http.StatusInternalServerError, errorEnvelope("failed to create user", "server_error", "create_user_failed"))
+				return
+			}
+		}
+		audit.SetResource(r.Context(), "user", created.UserID.String())
+		audit.SetAfter(r.Context(), userAuditView(created))
+		httpx.WriteJSON(w, http.StatusCreated, createUserResponse{
+			UserID:         created.UserID.String(),
+			OrganizationID: created.OrganizationID.String(),
+			Email:          created.Email,
+			DisplayName:    created.DisplayName,
+			Role:           created.Role,
+		})
 	}
 }
 
@@ -827,6 +926,34 @@ func parseCreateCredentialRequest(body createCredentialRequest) (credentials.Cre
 	}, nil
 }
 
+func parseCreateUserRequest(body createUserRequest) (createUserParams, error) {
+	email := strings.ToLower(strings.TrimSpace(body.Email))
+	parsed, err := mail.ParseAddress(email)
+	if err != nil || parsed.Address != email {
+		return createUserParams{}, fmt.Errorf("email must be valid")
+	}
+	displayName := strings.TrimSpace(body.DisplayName)
+	if displayName == "" {
+		return createUserParams{}, fmt.Errorf("display_name is required")
+	}
+	role := strings.TrimSpace(body.Role)
+	switch role {
+	case string(rbac.RoleAdmin), string(rbac.RoleMember), string(rbac.RoleViewer):
+	default:
+		return createUserParams{}, fmt.Errorf("role must be admin, member, or viewer")
+	}
+	password := strings.TrimSpace(body.Password)
+	if password == "" {
+		return createUserParams{}, fmt.Errorf("password is required")
+	}
+	return createUserParams{
+		Email:       email,
+		DisplayName: displayName,
+		Role:        role,
+		Password:    password,
+	}, nil
+}
+
 func parseCreateVirtualModelRequest(body createVirtualModelRequest) (createVirtualModelParams, error) {
 	name := strings.TrimSpace(body.Name)
 	if name == "" {
@@ -902,6 +1029,21 @@ func validateVirtualModelProvider(provider string) error {
 	default:
 		return fmt.Errorf("provider must be ark or deepseek")
 	}
+}
+
+func userAuditView(user createdAdminUser) map[string]any {
+	view := map[string]any{
+		"email":        user.Email,
+		"display_name": user.DisplayName,
+		"role":         user.Role,
+	}
+	if user.UserID != uuid.Nil {
+		view["user_id"] = user.UserID.String()
+	}
+	if user.OrganizationID != uuid.Nil {
+		view["organization_id"] = user.OrganizationID.String()
+	}
+	return view
 }
 
 func virtualModelAuditView(model adminVirtualModel) map[string]any {
@@ -1255,6 +1397,7 @@ func (s *postgresOverviewStore) LoadUsers(ctx context.Context, now time.Time) (u
 	const usersQuery = `
 SELECT
   u.id::text AS user_id,
+  u.organization_id::text AS organization_id,
   u.email,
   u.display_name,
   COALESCE(SUM(utb.total_tokens), 0)::bigint AS used_tokens,
@@ -1270,7 +1413,7 @@ LEFT JOIN usage_events ue
   AND ue.created_at < $2
 LEFT JOIN usage_token_breakdown utb ON utb.usage_event_id = ue.id
 LEFT JOIN cost_ledger cl ON cl.usage_event_id = ue.id
-GROUP BY u.id, u.email, u.display_name, u.monthly_budget_cents, u.status
+GROUP BY u.id, u.organization_id, u.email, u.display_name, u.monthly_budget_cents, u.status
 ORDER BY used_tokens DESC, u.display_name ASC, u.email ASC`
 
 	rows, err := s.db.QueryContext(ctx, usersQuery, monthStart, monthEnd)
@@ -1283,7 +1426,7 @@ ORDER BY used_tokens DESC, u.display_name ASC, u.email ASC`
 	for rows.Next() {
 		var item adminUserUsage
 		var budgetCents sql.NullInt64
-		if err := rows.Scan(&item.UserID, &item.Email, &item.DisplayName, &item.UsedTokens, &item.UsedBudgetCents, &budgetCents, &item.Status); err != nil {
+		if err := rows.Scan(&item.UserID, &item.OrganizationID, &item.Email, &item.DisplayName, &item.UsedTokens, &item.UsedBudgetCents, &budgetCents, &item.Status); err != nil {
 			return usersResponse{}, fmt.Errorf("scan admin users: %w", err)
 		}
 		item.BudgetCents = nullableInt64Ptr(budgetCents)
@@ -1296,6 +1439,94 @@ ORDER BY used_tokens DESC, u.display_name ASC, u.email ASC`
 		return usersResponse{}, fmt.Errorf("iterate admin users: %w", err)
 	}
 	return response, nil
+}
+
+func (s *postgresOverviewStore) CreateUser(ctx context.Context, params createUserParams) (createdAdminUser, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return createdAdminUser{}, fmt.Errorf("begin create user transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	orgID := params.OrganizationID
+	if orgID == uuid.Nil {
+		orgID, err = defaultOrganizationID(ctx, tx)
+		if err != nil {
+			return createdAdminUser{}, err
+		}
+	}
+
+	now := time.Now().UTC()
+	const insertUserQuery = `
+INSERT INTO users (
+  organization_id,
+  email,
+  display_name,
+  status,
+  password_hash,
+  created_at,
+  updated_at
+)
+VALUES ($1, $2, $3, 'active', crypt($4, gen_salt('bf')), $5, $5)
+ON CONFLICT (organization_id, email) DO NOTHING
+RETURNING id, organization_id, email, display_name`
+
+	created := createdAdminUser{Role: params.Role}
+	if err := tx.QueryRowContext(ctx, insertUserQuery, orgID, params.Email, params.DisplayName, params.Password, now).Scan(
+		&created.UserID,
+		&created.OrganizationID,
+		&created.Email,
+		&created.DisplayName,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return createdAdminUser{}, errAdminUserExists
+		}
+		return createdAdminUser{}, fmt.Errorf("insert admin user: %w", err)
+	}
+
+	const assignRoleQuery = `
+INSERT INTO role_assignments (organization_id, user_id, role_id)
+SELECT $1, $2, r.id
+FROM roles r
+WHERE r.canonical_name = $3
+ON CONFLICT (organization_id, user_id, role_id) DO NOTHING
+RETURNING role_id`
+
+	var roleID uuid.UUID
+	if err := tx.QueryRowContext(ctx, assignRoleQuery, created.OrganizationID, created.UserID, params.Role).Scan(&roleID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return createdAdminUser{}, errAdminRoleNotFound
+		}
+		return createdAdminUser{}, fmt.Errorf("insert admin role assignment: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return createdAdminUser{}, fmt.Errorf("commit create user transaction: %w", err)
+	}
+	committed = true
+	return created, nil
+}
+
+func defaultOrganizationID(ctx context.Context, tx *sql.Tx) (uuid.UUID, error) {
+	const query = `
+SELECT id
+FROM organizations
+ORDER BY created_at ASC, id ASC
+LIMIT 1`
+
+	var orgID uuid.UUID
+	if err := tx.QueryRowContext(ctx, query).Scan(&orgID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return uuid.Nil, errAdminOrganizationNotFound
+		}
+		return uuid.Nil, fmt.Errorf("query default organization: %w", err)
+	}
+	return orgID, nil
 }
 
 func (s *postgresOverviewStore) UpdateUserBudget(ctx context.Context, userID uuid.UUID, budgetCents *int64, updatedAt time.Time) (updateUserBudgetResult, error) {

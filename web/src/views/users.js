@@ -1,5 +1,7 @@
 (function () {
 const { escapeHTML, formatTokens, formatUSD, setAlert } = window.OmniTokenUtils;
+const { openModal } = window.OmniTokenModal || {};
+const { showToast } = window.OmniTokenToast || {};
 
 function createUsersView(api, options = {}) {
   let users = [];
@@ -14,14 +16,20 @@ function createUsersView(api, options = {}) {
     alert: document.getElementById("users-alert"),
     body: document.getElementById("users-table-body"),
     reload: document.querySelector('[data-action="reload-users"]'),
+    open: document.querySelector('[data-action="open-user-modal"]'),
   };
 
+  syncRoleControls();
   nodes.reload?.addEventListener("click", () => load(true));
+  nodes.open?.addEventListener("click", openCreateUserModal);
   nodes.body?.addEventListener("click", (event) => {
     const button = event.target && event.target.closest ? event.target.closest("[data-action]") : null;
     if (!button) return;
     const userID = button.dataset.userId || "";
     switch (button.dataset.action) {
+      case "generate-key":
+        openGenerateKeyModal(userID);
+        break;
       case "edit-quota":
         editingUserID = userID;
         renderRows();
@@ -44,6 +52,7 @@ function createUsersView(api, options = {}) {
   });
 
   function renderRows() {
+    syncRoleControls();
     if (!users.length) {
       nodes.body.innerHTML = '<tr><td colspan="6" class="table-state">暂无用户用量数据</td></tr>';
       return;
@@ -121,7 +130,12 @@ function createUsersView(api, options = {}) {
         </div>
       `;
     }
-    return `<button class="mini-button" type="button" data-action="edit-quota" data-user-id="${escapeHTML(user.user_id)}">编辑</button>`;
+    return `
+      <div class="quota-actions">
+        <button class="mini-button" type="button" data-action="generate-key" data-user-id="${escapeHTML(user.user_id)}">生成 Key</button>
+        <button class="mini-button ghost-mini-button" type="button" data-action="edit-quota" data-user-id="${escapeHTML(user.user_id)}">编辑</button>
+      </div>
+    `;
   }
 
   function quotaInputCents(userID) {
@@ -146,8 +160,168 @@ function createUsersView(api, options = {}) {
     }
   }
 
+  function syncRoleControls() {
+    if (nodes.open) nodes.open.hidden = getRole() !== "admin";
+  }
+
+  function openCreateUserModal() {
+    if (getRole() !== "admin") return;
+    if (typeof openModal !== "function") {
+      setAlert(nodes.alert, "error", "无法打开新建用户窗口。");
+      return;
+    }
+
+    const body = document.createElement("div");
+    body.innerHTML = `
+      <form id="create-user-form" class="modal-form">
+        <div class="form-grid">
+          <label>
+            <span>邮箱</span>
+            <input name="email" type="email" autocomplete="off" required>
+          </label>
+          <label>
+            <span>显示名</span>
+            <input name="display_name" type="text" required>
+          </label>
+          <label>
+            <span>角色</span>
+            <select name="role" required>
+              <option value="member">member</option>
+              <option value="viewer">viewer</option>
+              <option value="admin">admin</option>
+            </select>
+          </label>
+          <label>
+            <span>初始密码</span>
+            <input name="password" type="password" autocomplete="new-password" required>
+          </label>
+        </div>
+        <div class="modal-actions">
+          <button class="secondary-button" type="button" data-action="close-create-user">取消</button>
+          <button class="primary-button" type="submit">创建用户</button>
+        </div>
+      </form>
+      <div class="key-result is-hidden" data-create-user-result></div>
+    `;
+
+    const modal = openModal({ title: "新建用户", body });
+    body.querySelector('[data-action="close-create-user"]')?.addEventListener("click", () => modal.close());
+    body.querySelector("#create-user-form")?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      await submitCreateUser(event.currentTarget, body.querySelector("[data-create-user-result]"));
+    });
+  }
+
+  async function submitCreateUser(form, resultNode) {
+    const submit = form.querySelector('button[type="submit"]');
+    submit.disabled = true;
+    const payload = {
+      email: form.elements.email.value.trim(),
+      display_name: form.elements.display_name.value.trim(),
+      role: form.elements.role.value,
+      password: form.elements.password.value,
+    };
+
+    try {
+      const created = await api.createUser(payload);
+      form.reset();
+      renderGenerateKeyPrompt(resultNode, normalizeUsers({ users: [created] })[0]);
+      await load(true);
+    } catch (error) {
+      setAlert(nodes.alert, "error", `无法创建用户 (${error.code || error.message})。`);
+    } finally {
+      submit.disabled = false;
+    }
+  }
+
+  function openGenerateKeyModal(userID) {
+    if (typeof openModal !== "function") {
+      setAlert(nodes.alert, "error", "无法打开 Key 生成窗口。");
+      return;
+    }
+    const user = users.find((item) => item.user_id === userID);
+    if (!user) return;
+    const body = document.createElement("div");
+    const result = document.createElement("div");
+    body.appendChild(result);
+    openModal({
+      title: `生成 Key · ${user.display_name || user.email}`,
+      body,
+      actions: [{ label: "关闭" }],
+    });
+    renderGenerateKeyPrompt(result, user);
+  }
+
+  function renderGenerateKeyPrompt(container, user) {
+    if (!container) return;
+    container.classList.remove("is-hidden");
+    container.innerHTML = `
+      <div class="key-result-panel">
+        <p class="modal-copy">为 <strong>${escapeHTML(user.display_name || user.email)}</strong> 生成一个新的 virtual key。</p>
+        <button class="primary-button" type="button" data-action="confirm-generate-key">生成 Key</button>
+      </div>
+    `;
+    container.querySelector('[data-action="confirm-generate-key"]')?.addEventListener("click", () => generateKeyForUser(user, container));
+  }
+
+  async function generateKeyForUser(user, container) {
+    const orgID = String(user.organization_id || "").trim();
+    if (!orgID) {
+      container.innerHTML = '<p class="modal-copy">该用户缺少 organization_id，无法生成 Key。</p>';
+      return;
+    }
+    const button = container.querySelector('[data-action="confirm-generate-key"]');
+    if (button) button.disabled = true;
+    try {
+      const response = await api.createVirtualKey({
+        organization_id: orgID,
+        user_id: user.user_id,
+      });
+      renderCreatedKey(container, response);
+    } catch (error) {
+      container.innerHTML = `<p class="modal-copy">无法生成 Key (${escapeHTML(error.code || error.message)})。</p>`;
+    }
+  }
+
+  function renderCreatedKey(container, response) {
+    const key = String(response?.virtual_key || "");
+    const prefix = String(response?.key_prefix || "");
+    container.innerHTML = `
+      <div class="key-result-panel">
+        <p class="security-note">请立即复制此 Key，关闭后不可再次查看</p>
+        <code class="key-code">${escapeHTML(key)}</code>
+        <div class="key-actions">
+          <span class="secondary-text">prefix: ${escapeHTML(prefix)}</span>
+          <button class="primary-button" type="button" data-action="copy-generated-key">复制</button>
+        </div>
+      </div>
+    `;
+    container.querySelector('[data-action="copy-generated-key"]')?.addEventListener("click", async (event) => {
+      await copyText(key);
+      event.currentTarget.textContent = "已复制";
+    });
+  }
+
+  async function copyText(value) {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+      await navigator.clipboard.writeText(value);
+    } else {
+      const textarea = document.createElement("textarea");
+      textarea.value = value;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      textarea.remove();
+    }
+    if (typeof showToast === "function") showToast("Key 已复制", "success");
+  }
+
   async function load(force = false) {
     if (loaded && !force) return;
+    syncRoleControls();
     setAlert(nodes.alert, "loading", "正在加载用户用量数据...");
     nodes.body.innerHTML = '<tr><td colspan="6" class="table-state">正在加载用户用量数据...</td></tr>';
 
@@ -181,8 +355,10 @@ function normalizeUsers(raw) {
     }
     return {
       user_id: String(user.user_id || email || displayName),
+      organization_id: String(user.organization_id || "").trim(),
       display_name: displayName,
       email,
+      role: String(user.role || "").trim(),
       used_tokens: Math.max(0, Number(user.used_tokens) || 0),
       used_budget_cents: Math.max(0, Math.round(Number(user.used_budget_cents) || 0)),
       budget_cents: budgetCents,

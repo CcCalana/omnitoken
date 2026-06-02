@@ -383,6 +383,13 @@ button {
   line-height: 1.7;
 }
 
+.view-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .alert {
   margin-bottom: 18px;
   padding: 12px 14px;
@@ -835,6 +842,52 @@ tbody tr:hover {
   line-height: 1.6;
 }
 
+.modal-form {
+  display: grid;
+  gap: 14px;
+}
+
+.key-result.is-hidden {
+  display: none;
+}
+
+.key-result-panel {
+  margin-top: 16px;
+  display: grid;
+  gap: 12px;
+}
+
+.security-note {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--color-warning);
+  border-radius: var(--radius);
+  background: var(--color-warning-soft);
+  color: var(--warning);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.key-code {
+  display: block;
+  max-width: 100%;
+  padding: 12px;
+  overflow-wrap: anywhere;
+  border-radius: var(--radius);
+  background: var(--color-code-bg);
+  color: var(--color-code-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.key-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .mono-cell {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 12px;
@@ -1083,6 +1136,13 @@ tbody tr:hover {
 
   .view-intro {
     align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .view-actions,
+  .key-actions {
+    width: 100%;
+    align-items: stretch;
     flex-direction: column;
   }
 
