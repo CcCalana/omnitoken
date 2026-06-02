@@ -12,6 +12,15 @@ cost ledger layer for companies that need to know who used which model, through
 which key, under which policy, at what cost — without leaking provider keys or
 prompt bodies.
 
+## Quick Deploy (Compose)
+
+1. `cd deploy && cp .env.example .env`
+2. Fill `OMNITOKEN_MASTER_KEY`, one upstream key, and `ADMIN_INITIAL_PASSWORD`.
+3. Optional: set `DOMAIN`, `SSL_CERT_PATH`, and `SSL_KEY_PATH`.
+4. `docker compose -f docker-compose.prod.yml up -d`
+5. Open `http://localhost/admin` or `https://<DOMAIN>/admin`.
+6. Sign in as `admin@democorp.local`, then create users and keys in the web UI.
+
 ## Why OmniToken
 
 | Market pattern | Examples | Strong at | OmniToken differentiation |

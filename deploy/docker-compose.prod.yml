@@ -1,0 +1,280 @@
+name: omnitoken-prod
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements"]
+    environment:
+      POSTGRES_USER: omnitoken
+      POSTGRES_PASSWORD: omnitoken
+      POSTGRES_DB: omnitoken
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U omnitoken -d omnitoken"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    image: omnitoken-migrate:prod
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.migrate
+    environment:
+      OMNITOKEN_DATABASE_URL: "postgres://omnitoken:omnitoken@postgres:5432/omnitoken?sslmode=disable"
+    command: ["up"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  seed:
+    image: postgres:16-alpine
+    environment:
+      PGPASSWORD: omnitoken
+    volumes:
+      - ./postgres/002_seed.sql:/init/002_seed.sql:ro
+    command:
+      [
+        "psql",
+        "-h", "postgres",
+        "-U", "omnitoken",
+        "-d", "omnitoken",
+        "-v", "ON_ERROR_STOP=1",
+        "-f", "/init/002_seed.sql"
+      ]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  admin-password:
+    image: postgres:16-alpine
+    environment:
+      PGPASSWORD: omnitoken
+      ADMIN_INITIAL_PASSWORD: "${ADMIN_INITIAL_PASSWORD:-}"
+    volumes:
+      - ./postgres/003_admin_password.sql:/init/003_admin_password.sql:ro
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        : "$${ADMIN_INITIAL_PASSWORD:?ADMIN_INITIAL_PASSWORD is required}"
+        psql -h postgres -U omnitoken -d omnitoken -v ON_ERROR_STOP=1 -v "password=$${ADMIN_INITIAL_PASSWORD}" -f /init/003_admin_password.sql
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+
+  credential-seed:
+    image: omnitoken-migrate:prod
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.migrate
+    entrypoint: ["/omnitoken-seed-upstream"]
+    environment:
+      OMNITOKEN_DATABASE_URL: "postgres://omnitoken:omnitoken@postgres:5432/omnitoken?sslmode=disable"
+      OMNITOKEN_MASTER_KEY: "${OMNITOKEN_MASTER_KEY:-}"
+      OMNITOKEN_ARK_KEYS_1: "${OMNITOKEN_ARK_KEYS_1:-}"
+      OMNITOKEN_ARK_KEYS_2: "${OMNITOKEN_ARK_KEYS_2:-}"
+      OMNITOKEN_ARK_KEYS_3: "${OMNITOKEN_ARK_KEYS_3:-}"
+      OMNITOKEN_ARK_OPENAI_BASE_URL: "${OMNITOKEN_ARK_OPENAI_BASE_URL:-https://ark.cn-beijing.volces.com/api/coding/v3}"
+      OMNITOKEN_DEEPSEEK_KEYS_1: "${OMNITOKEN_DEEPSEEK_KEYS_1:-}"
+      OMNITOKEN_DEEPSEEK_KEYS_2: "${OMNITOKEN_DEEPSEEK_KEYS_2:-}"
+      OMNITOKEN_DEEPSEEK_KEYS_3: "${OMNITOKEN_DEEPSEEK_KEYS_3:-}"
+      OMNITOKEN_DEEPSEEK_BASE_URL: "${OMNITOKEN_DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}"
+    depends_on:
+      admin-password:
+        condition: service_completed_successfully
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  nats:
+    image: nats:2.10-alpine
+    command: ["-js", "-m", "8222"]
+    volumes:
+      - nats_data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  gateway:
+    image: omnitoken-gateway:prod
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.gateway
+    environment:
+      OMNITOKEN_GATEWAY_ADDR: ":${GATEWAY_PORT:-8080}"
+      OMNITOKEN_DATABASE_URL: "postgres://omnitoken:omnitoken@postgres:5432/omnitoken?sslmode=disable"
+      OMNITOKEN_REDIS_ADDR: "redis:6379"
+      OMNITOKEN_NATS_URL: "nats://nats:4222"
+      OMNITOKEN_LOG_BODY_MODE: "${OMNITOKEN_LOG_BODY_MODE:-off}"
+      OMNITOKEN_MASTER_KEY: "${OMNITOKEN_MASTER_KEY:-}"
+      OMNITOKEN_CREDENTIAL_POLL_INTERVAL: "${OMNITOKEN_CREDENTIAL_POLL_INTERVAL:-30s}"
+      OMNITOKEN_ARK_API_KEY: "${OMNITOKEN_ARK_API_KEY:-}"
+      OMNITOKEN_ARK_OPENAI_BASE_URL: "${OMNITOKEN_ARK_OPENAI_BASE_URL:-https://ark.cn-beijing.volces.com/api/coding/v3}"
+      OMNITOKEN_ARK_ANTHROPIC_BASE_URL: "${OMNITOKEN_ARK_ANTHROPIC_BASE_URL:-https://ark.cn-beijing.volces.com/api/coding}"
+      OMNITOKEN_ARK_DEFAULT_MODEL: "${OMNITOKEN_ARK_DEFAULT_MODEL:-ark-code-latest}"
+      OMNITOKEN_ARK_DISABLE_THINKING: "${OMNITOKEN_ARK_DISABLE_THINKING:-true}"
+    depends_on:
+      admin-password:
+        condition: service_completed_successfully
+      credential-seed:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+
+  admin:
+    image: omnitoken-admin:prod
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.admin
+    environment:
+      OMNITOKEN_ADMIN_ADDR: ":${ADMIN_PORT:-8081}"
+      OMNITOKEN_DATABASE_URL: "postgres://omnitoken:omnitoken@postgres:5432/omnitoken?sslmode=disable"
+      OMNITOKEN_REDIS_ADDR: "redis:6379"
+      OMNITOKEN_NATS_URL: "nats://nats:4222"
+      OMNITOKEN_LOG_BODY_MODE: "${OMNITOKEN_LOG_BODY_MODE:-off}"
+      OMNITOKEN_MASTER_KEY: "${OMNITOKEN_MASTER_KEY:-}"
+      OMNITOKEN_ADMIN_BOOTSTRAP_TOKEN: ""
+      OMNITOKEN_ADMIN_SESSION_TTL: "${OMNITOKEN_ADMIN_SESSION_TTL:-24h}"
+      OMNITOKEN_ADMIN_KEY_ANOMALY_RPM_5M: "${OMNITOKEN_ADMIN_KEY_ANOMALY_RPM_5M:-60}"
+      OMNITOKEN_ADMIN_CORS_ORIGINS: "${OMNITOKEN_ADMIN_CORS_ORIGINS:-*}"
+      OMNITOKEN_ADMIN_CORS_METHODS: "${OMNITOKEN_ADMIN_CORS_METHODS:-GET,POST,PATCH,DELETE,OPTIONS}"
+    depends_on:
+      admin-password:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+
+  nginx:
+    image: nginx:1.27-alpine
+    environment:
+      DOMAIN: "${DOMAIN:-_}"
+      GATEWAY_PORT: "${GATEWAY_PORT:-8080}"
+      ADMIN_PORT: "${ADMIN_PORT:-8081}"
+      NGINX_HTTP_PORT: "${NGINX_HTTP_PORT:-80}"
+      NGINX_HTTPS_PORT: "${NGINX_HTTPS_PORT:-443}"
+      SSL_CERT_PATH: "${SSL_CERT_PATH:-}"
+      SSL_KEY_PATH: "${SSL_KEY_PATH:-}"
+    ports:
+      - "${NGINX_HTTP_PORT:-80}:${NGINX_HTTP_PORT:-80}"
+      - "${NGINX_HTTPS_PORT:-443}:${NGINX_HTTPS_PORT:-443}"
+    volumes:
+      - ./nginx/nginx.prod.conf.template:/etc/nginx/templates/nginx.prod.conf.template:ro
+      - ./nginx/ssl-disabled.pem:/etc/nginx/ssl/ssl-disabled.pem:ro
+      - "${SSL_CERT_PATH:-./nginx/ssl-disabled.pem}:/etc/nginx/ssl/fullchain.pem:ro"
+      - "${SSL_KEY_PATH:-./nginx/ssl-disabled.pem}:/etc/nginx/ssl/privkey.pem:ro"
+      - ../web:/usr/share/nginx/html/admin:ro
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        DOMAIN="$${DOMAIN:-_}"
+        LOCATIONS="$(cat <<'NGINX_LOCATIONS'
+        location = /healthz {
+            access_log off;
+            return 200 "ok\n";
+        }
+
+        location /v1/ {
+            proxy_pass http://omnitoken_gateway;
+            proxy_http_version 1.1;
+            proxy_buffering off;
+            proxy_cache off;
+            proxy_set_header Host $$host;
+            proxy_set_header Connection "";
+            proxy_set_header X-Real-IP $$remote_addr;
+            proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $$scheme;
+            proxy_read_timeout 300s;
+            proxy_send_timeout 300s;
+            chunked_transfer_encoding on;
+        }
+
+        location /api/ {
+            proxy_pass http://omnitoken_admin;
+            proxy_http_version 1.1;
+            proxy_set_header Host $$host;
+            proxy_set_header X-Real-IP $$remote_addr;
+            proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $$scheme;
+            proxy_read_timeout 60s;
+        }
+
+        location = /admin {
+            return 302 /admin/?admin=$$scheme://$$http_host;
+        }
+
+        location = /admin/ {
+            if ($$arg_admin = "") {
+                return 302 /admin/?admin=$$scheme://$$http_host;
+            }
+            try_files /admin/index.html =404;
+        }
+
+        location /admin/ {
+            try_files $$uri $$uri/ /admin/index.html;
+        }
+
+        location / {
+            return 302 /admin/?admin=$$scheme://$$http_host;
+        }
+        NGINX_LOCATIONS
+        )"
+
+        if [ -n "$${SSL_CERT_PATH}" ] || [ -n "$${SSL_KEY_PATH}" ]; then
+          if [ -z "$${SSL_CERT_PATH}" ] || [ -z "$${SSL_KEY_PATH}" ]; then
+            echo "SSL_CERT_PATH and SSL_KEY_PATH must be set together" >&2
+            exit 1
+          fi
+          OMNITOKEN_HTTP_CONTENT='return 301 https://$$host$$request_uri;'
+          OMNITOKEN_HTTPS_SERVER="server {
+            listen $${NGINX_HTTPS_PORT} ssl;
+            server_name $${DOMAIN};
+
+            ssl_certificate /etc/nginx/ssl/fullchain.pem;
+            ssl_certificate_key /etc/nginx/ssl/privkey.pem;
+            ssl_protocols TLSv1.2 TLSv1.3;
+            ssl_ciphers HIGH:!aNULL:!MD5;
+
+        $${LOCATIONS}
+        }"
+        else
+          OMNITOKEN_HTTP_CONTENT="$${LOCATIONS}"
+          OMNITOKEN_HTTPS_SERVER=""
+        fi
+
+        export DOMAIN OMNITOKEN_HTTP_CONTENT OMNITOKEN_HTTPS_SERVER
+        envsubst '$${DOMAIN} $${NGINX_HTTP_PORT} $${GATEWAY_PORT} $${ADMIN_PORT} $${OMNITOKEN_HTTP_CONTENT} $${OMNITOKEN_HTTPS_SERVER}' \
+          < /etc/nginx/templates/nginx.prod.conf.template > /etc/nginx/nginx.conf
+        nginx -t
+        exec nginx -g 'daemon off;'
+    depends_on:
+      gateway:
+        condition: service_started
+      admin:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:${NGINX_HTTP_PORT:-80}/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  postgres_data:
+  redis_data:
+  nats_data:
