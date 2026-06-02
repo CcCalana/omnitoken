@@ -2,215 +2,176 @@
 
 > **归档说明**:
 > - R-001 ~ R-007 → `docs/reviews/archive.md`
-> - R-006b-prop / R-006b / R-006c / R-006d → `docs/reviews/archive-2026-05-12.md`
+> - R-006b-prop ~ R-006d → `docs/reviews/archive-2026-05-12.md`
 > - R-008 ~ R-005b-fix (Phase 2-A 收官 + Phase 2-B 全程) → `docs/reviews/archive-2026-05-19.md`
 > - R-INT / R-041-prop ~ R-040 (v1 联调收官 + Phase 3-A Adapter 链路) → `docs/reviews/archive-2026-05-20.md`
+> - R-045-prop ~ R-UI-L1-THEME (Phase 3-A + v1 release) + R-AUDIT-USAGE-VIEW ~ R-CONC-CHECK (v1 门③ + 并发摸底 + 关键实施) → `docs/reviews/archive-2026-06-02.md`
 >
-> 本文件保留最近 review；老的归档到 docs/reviews/。
+> 本文件保留 vNext 路线（T-100 起）的 review + 未解决项摘要。
 
-## R-045-prop (T-045 PROPOSAL, commit `b61600a`)
+---
+## R-100 (T-100 实施, impl `8df224e` + status `2b44c9d`)
 
-**结论: `[+] Approved`** — 5/5 决策全部采纳，架构设计干净，未声明偏差为零。Codex 可开 T-045 实施。3 条实施期提醒（X-1/X-2/X-3）不阻塞 proposal 关门。
+**结论: `[+] Approved`** — M-36 约束全部落地。runner 对 PG 只做 SELECT，所有写操作走 admin API。RBAC skip 语义正确，账本闭环 + 归因验证路径完整。无 CRITICAL/HIGH。2 MEDIUM + 2 NIT 不阻塞。
 
 **正面信号**:
 
-1. ✅ **Decision 1 handler 分层设计精准**：`anthropic.MessagesHandler` 包裹 `usage.Middleware(proxy)`，用 transforming `ResponseWriter` 让 usage 捕获 OpenAI 字节、client 收到 Anthropic 字节。这个顺序避免了"usage 中间件看到 Anthropic 格式需要新 parser"的 fork，也避免了"转换器旁路 proxy 自己调 upstream"的 credential/retry 重复实现。一行代码不改 `internal/usage/parser.go`。
+1. ✅ **M-36 PG read-only 严格落地**：`verifyLedger` 和 `verifyAttributionSamples` 仅执行 SELECT，无 INSERT/UPDATE/DELETE。所有 mutation（create virtual key、set budget）走 admin API。`--database-url` flag description 明确标注 "read-only verification"。
 
-2. ✅ **Decision 5 content block index 状态机设计正确**：`next_index` + `open_block_kind` 二字段状态机推导 Anthropic block index（thinking→text 切换时 index 递增），不依赖 OpenAI `choices[].index`。这是 Anthropic SSE 规范的正确解读——Anthropic 的 `content_block.index` 是消息内 content block 的顺序号，跟 OpenAI choice index 不同源。
+2. ✅ **RBAC skip 语义干净**：viewer/member credentials 未提供时打印 `SKIP: ...` 并返回 nil，不 fail 整体 runner。`runRBACChecks` 接收 `out io.Writer` 把 SKIP 消息注入 runner 输出而不是 stderr，与 `main()` 的 reporting 流一致。
 
-3. ✅ **Decision 2 流式转换选实时逐 chunk**：拒绝 buffer-全流-再-emit，守住了既有 proxy 的 TTFB 行为。SSE frame 边界处理（"buffer incomplete SSE frames until blank-line frame boundary"）表明 Codex 理解了 `text/event-stream` 的成帧语义——data 行 + 空行 = 一个完整事件。
+3. ✅ **Budget0 用户全程验证链完整**：user01 设 budget=0 → `assertRequestResults` 断言所有 budget0 请求返回 402 → `verifyLedger` 显式跳过 budget0 用户（他们不会有 200 的 usage_events）。三段链路—设置→断言→排除—都是同一数据源（`prepared[i].Budget0`），无重复推导，无漏判。
 
-4. ✅ ** `snapshotRequestMetadata` 改为 context 注入**：Decision 4 选 context pre-injection，让 Anthropic converter 解析请求一次后把 model/stream/protocol 写入 ctx，替换 `r.Body` 为 OpenAI 格式。inner middleware 看到的 body 是 OpenAI 格式，`snapshotRequestMetadata` 零改动。附带 fallback 处理了 proxy rewrite 可能覆盖 model 的边界情况。
+4. ✅ **账本闭环验证扎实**：`verifyLedger` 比较 `cost_ledger.cost_usd`（系统写入）与从 `usage_token_breakdown` 按 `model_pricing_current` 计价反算的 derived cost，1% tolerance。同时统计 `MissingFields`（user_id / api_key_id / model_routed / upstream_credential_id 为空的行），两层断言——金额闭环 + 归因字段完整。
 
-5. ✅ **安全面自觉覆盖**：error mapping 显式说了"Do not expose upstream headers, credential ids, stack traces, request bodies, prompts, or API keys in error messages"；日志 WARN 只带 request id + choice count，不带 body；`tools` 被忽略时不 crash；这些都对齐 §十一安全基线。
+5. ✅ **归因采样有针对性**：`verifyAttributionSamples` 挑 3 个用户各取一条最新 200 事件，断言 `api_key_id` = 预期、`model_routed` 非空、`upstream_credential_id` 非空。不是泛泛的 `COUNT(*)`，是逐字段硬断言。
 
-6. ✅ **request conversion 边界处理务实**：`system` 数组 flatten 为单 system message、unsupported content block 安全降级（不崩、不漏）、`tools` 静默忽略（不拒请求）——都是 v1 正确取舍，不给 Claude Code 用户制造无谓的 400 错误。
+6. ✅ **e2e shell-out 设计干净**：`test/e2e/l2_test.go` 用 build tag `e2e` + `os/exec` 调 `go run ./cmd/e2e-runner`，env 全继承，缺 env 时 `t.Skip`。与既有 e2e 模式一致，零新依赖，零测试框架污染。
 
-7. ✅ **无新依赖**：pure stdlib + 既有代码，守住第八节技术栈约束。
-
-**X-1 (实施期提醒, 非阻塞) — `resolveVirtualModel` 读 Anthropic body 的兼容性**: proposal 里没展开，但 handler 顺序意味着 `resolveVirtualModel` 中间件先读到原始 Anthropic 请求体。当前 `resolveVirtualModel` 的逻辑是 `json.Unmarshal(body) → payload["model"]`。Anthropic 请求体中 `"model"` 也在顶层，所以**应该直接兼容**。实施时如果发现不兼容（例如 middleware 断言了其他 OpenAI 专属字段），修 `resolveVirtualModel` 不要改 proposal 方向——它本来就该只看 `model` 字段。
-
-**X-2 (实施期提醒, 非阻塞) — transforming writer 与 `captureResponseWriter` 的 Flush 传播**: 流式路径上，proxy 调用 `Flusher.Flush()` 把 SSE chunk 推给 client。`captureResponseWriter` 实现了 `Flusher`（`internal/usage/capture.go`），但 Anthropic transforming writer 也必须实现 `http.Flusher` 并正确传播 Flush 到 inner `captureResponseWriter` 和 outer real ResponseWriter。如果中间断了一环，Claude Code 会等到超时才看到第一个 token。实施时单测加一条 `io.Flusher` 接口断言。
-
-**X-3 (实施期提醒, 非阻塞) — `[DONE]` 后的 trailing data**: OpenAI SSE 以 `data: [DONE]` 结束。转换器 emit `message_stop` 后如果上游继续发 SSE 事件（非标准行为），当前状态机可能继续 emit Anthropic 事件。建议在 `[DONE]` 后设 `stream_ended = true` 并忽略后续 frame + WARN log，而不是继续转换。
-
-**Codex 下一步**: T-045 status 可切 `in_progress`。5 个 decision 已锁定；X-1/X-2/X-3 在 implementation review (R-045) 时核。注意：proposal 提到的 test plan 里 handler 测试验证 "usage records from OpenAI-format captured bytes" 是 AC 的关键证据，实施时确保这一条有显式断言。
+7. ✅ **go vet + unit test + build race 全绿**：`go vet ./cmd/e2e-runner/...` 无警告，4 条单测 PASS，`go build -race ./cmd/e2e-runner` 通过。
 
 ---
 
-## R-045 (T-045 实施, impl `d17a430` + status `fd35718`)
+**M-37 (MEDIUM) — verifyLedger model matching 三路 OR 可能在边界情形下双计**：
 
-**结论: `[+] Approved`** — 接受标准全达，proposal 5 个决策全部兑现，X-1/X-2/X-3 三提醒全部落地。无 CRITICAL/HIGH。2 MEDIUM + 3 NIT 不阻塞。**Phase 3-A "demoable moment" 达成**——Claude Code 可通过 OmniToken `/v1/messages` 调用任意 OpenAI-compatible 上游。
+`verifyLedger` 的 LEFT JOIN `model_catalog mc` ON 条件有三个 OR 分支（lines 499-504）：
+```
+(ue.model_actual <> '' AND mc.provider_model = ue.model_actual)
+OR (ue.model_routed <> '' AND mc.canonical_model = ue.model_routed)
+OR (ue.model_requested <> '' AND mc.canonical_model = ue.model_requested)
+```
+若 `model_actual` 匹配某行的 `provider_model` 且 `model_routed` 匹配另一行的 `canonical_model`（同为该 provider），则 usage_event 行与多个 model_catalog 行 JOIN，SUM 会把 pricing 乘 N 倍，derived cost 虚高 → `withinOnePercent` 误报 mismatch。`UNIQUE (canonical_model, provider)` 约束使此情形在实际数据上极难触发（`model_actual` 通常是 `deepseek-v4-flash` 这样的 provider model 名，不会同时是另一个 model 的 `canonical_model`），但 SQL 形状本身不防。**建议**：把 ON 改成 `COALESCE` 优先级链——先 `model_actual` + `provider_model`，再 `model_routed` + `canonical_model`，最后 `model_requested` + `canonical_model`——或加一层 `SELECT DISTINCT ON (ue.id)` 子查询保证每行 usage_event 只匹配一个定价。不阻塞——当前 seed data 下不会触发。
 
-**正面信号**:
+**M-38 (MEDIUM) — runRBACChecks member 分支缺审计日志校验**：
 
-1. ✅ **Proposal Decision 1 的 handler 分层完整兑现**：`resolveVirtualModel(anthropic.MessagesHandler(chatHandler))`，其中 `chatHandler = usage.Middleware(proxy)`。transforming ResponseWriter 让 usage 捕获 OpenAI 字节、client 收到 Anthropic 字节。`TestAnthropicHandlerNonStreamConvertsResponseAndUsageSeesOpenAI:121-122` 显式断言 `input.Captured` 含 `"choices"`（OpenAI 格式标记）且不含 `"type":"message"`（Anthropic 格式标记）——这是 proposal "usage 不改 parser" 的硬证据。
+viewer RBAC 检查在拿到 403 后调用 `verifyForbiddenAudit` 验证审计日志记录了 forbidden 尝试（lines 319-325），但 member RBAC 检查（lines 331-339）只断言 HTTP 403，没有紧随的审计日志查询。member 分支也应验证 `POST /api/admin/virtual-models` 的 403 被记入 `audit_logs`，与 viewer 分支对称。当前行为：member 403 后 runner 直接 return nil，若审计日志写入异步延迟或漏写，runner 不会发现。**建议**：加一条 `verifyForbiddenAudit` 调用，用 member 的 user ID（`userIDByEmail(prepared, cfg.MemberEmail)`）、resource_type=`"virtual_model"`、action=`"create_virtual_model"`（需确认 `internal/rbac/types.go` 中对应常量）。不阻塞——403 本身已被断言，审计漏写是低概率事件。
 
-2. ✅ **X-3 `[DONE]` trailing data 防护到位**：`anthropicStreamConverter.ended` 标志在 `[DONE]` 后设 true；`handleFrame:487-489` 对 `c.ended` 时后续帧只记 WARN 不 emit。`TestAnthropicStreamIgnoresTrailingDataAfterDone` 正面断言 "late" 不在输出中 + `message_stop` 仅一次。
+**N-35 (NIT) — `getenvInt` 零值语义隐藏**：`getenvInt` 在 `parsed == 0` 时返回 fallback（line 660），意味着显式设 `MAX_REQUESTS=0` 会静默用默认值 50。0 在本 runner 中本就会被 `validateConfig` 拒绝（`MaxRequests < 30`），所以无实际影响。若未来新增接受 0 的 flag（如 `duration=0` 表示不限时），这个行为会成为 surprise。当前不改。
 
-3. ✅ **X-2 Flush 传播完整**：`anthropicResponseWriter` 实现 `http.Flusher`（`Flush()` + `Unwrap()`）。测试 `TestAnthropicHandlerStreamConvertsSSEAndPreservesFlush:133-135` 在 inner handler 内断言 `w.(http.Flusher)` 非 nil，外部 `rec.Flushed` 为 true。
-
-4. ✅ **SSE 状态机 index 管理严格按 Decision 5**：`nextIndex` + `openKind` 二字段推导 block 边界——kind 切换时 close 旧 block → open 新 block（`nextIndex`）→ 递增。same-kind delta 复用当前 index。thinking→text 切换产生 index 0（thinking）+ index 1（text）。不依赖 OpenAI `choices[].index`。
-
-5. ✅ **`tools` 静默忽略不拒请求**：`anthropicToOpenAIRequest` 不把 `tools` 写入 output map，Claude Code 带 tools 配置的请求不会被 400。v1 正确取舍。
-
-6. ✅ **e2e 测试用 golden Anthropic fixture 打真上游**：`TestAnthropicMessagesHandlerE2E` 读 `testdata/golden/ark/anthropic_nonstream_default.json` 的 `_meta.request` 字段，走完整 proxy 管道打真 Ark，断言 `type: "message"` + `input_tokens + output_tokens > 0`。
-
-7. ✅ **零新依赖 + `internal/usage/` 零改动**：diff 涉及 4 个文件（cmd/gateway + 3 个 anthropic 文件）。go.mod 不变。
-
-8. ✅ **安全面自觉遵守 §十一**：`openAIErrorMessage` 只从 OpenAI error envelope 提取 `error.message`，不附 body/headers/stack traces。`copyAnthropicHeaders` 设 `X-Content-Type-Options: nosniff`。WARN log 只带 choice_count 等级别信息。`http.MaxBytesReader` 限制请求体。
-
-**M-34 (MEDIUM) — streaming path error 时 `finish()` header 守卫不对称**:
-
-非 stream 路径仅 `finish()` 中 `sentHeader` 守卫；stream 路径 `Write()` 中也设 `sentHeader`（`ensureStreamHeader`）。如果 `Write()` 被调用但 `shouldStream()` 为 false（例如上游返回 `Content-Type: text/event-stream` 但状态码 4xx），`Write()` buffer 数据但没设 `sentHeader`，`finish()` 非 stream 分支会尝试 `WriteHeader`。Go 标准库保证 WriteHeader 只生效一次（第二次静默忽略），所以**实际安全**。但逻辑 guard 不对称。建议统一为单一路径守卫。**不阻塞 v1**。
-
-**M-35 (MEDIUM) — non-stream upstream 4xx/5xx body 可能不是合法 JSON**:
-
-`openAIErrorMessage` 先尝试 JSON 解析 OpenAI error envelope，失败 fallback 到 `"upstream request failed"`。逻辑正确。但如果上游返回 502 且 body 是 HTML（nginx 错误页），client 看到 `"upstream request failed"` 无法区分"上游爆了"还是"gateway 自己的问题"。建议 v1.1 加 WARN log 记录 upstream status code。**不阻塞 v1**。
-
-**N-27 (NIT) — `max_tokens` 无 required 校验**：Anthropic API 要求必填，converter 用 `copyIfSet`（选填语义）。v1 目标 client（Claude Code）总是发，不触发。
-
-**N-28 (NIT) — e2e 只测非流式**：真 Ark streaming e2e 未覆盖。现有 mock + golden fixture 测试已覆盖流式路径，v1 够用。
-
-**N-29 (NIT) — `anthropicRequest.MaxTokens` 用 `any` 类型透传 json.Number**：为保精度，但与 `Stream bool` 不一致。无害，不修。
-
-**与 proposal X-1/X-2/X-3 闭环**:
-- X-1（`resolveVirtualModel` 兼容性）：测试验证通过——`resolveVirtualModel` 读 Anthropic body 的 `model` 字段（与 OpenAI 同位置），天然兼容。
-- X-2（Flush 传播）：`TestAnthropicHandlerStreamConvertsSSEAndPreservesFlush` 显式断言 `w.(http.Flusher)` 非 nil + `rec.Flushed` 为 true。
-- X-3（`[DONE]` trailing data）：`TestAnthropicStreamIgnoresTrailingDataAfterDone` 正面覆盖，断言 "late" 不出现在输出中。
-
-**覆盖率**: Codex 自报 `make test` / `make test-race` / `make lint` / proxy e2e 全绿。新增 ~720 行实现 + ~340 行测试，比例合理。
-
-**Codex 下一步**: T-045 status 可切 `done`。M-34/M-35/N-27~N-29 不开任务，下次相关改动顺手修。Phase 3-A 下一步：T-044 路由规则联动 或 T-046 CLI 收口。
+**N-36 (NIT) — `verifyForbiddenAudit` 硬编码 action 字符串**：`"update_quota"` 与 `internal/rbac/types.go:28` `ActionUpdateQuota` 常量值一致（已验证），但 runner 不 import internal 包，字符串重复是 tester-to-production coupling。若 renaming 常量，runner 在 e2e 跑时会率先暴露（审计日志 query 找不到对应 action → 测试失败），fail-safe 方向正确。不阻塞。
 
 ---
 
-## R-044 (T-044 实施, impl `8fb054e` + status `24f726e`)
+## R-QUOTA-CACHE-PROBE (T-QUOTA-CACHE-PROBE 实施, impl `94b4607` + status `1996684`)
 
-**结论: `[+] Approved`** — 接受标准全达，后端 API + CLI ensure + 前端 CRUD + RBAC + audit 全部闭环。无 CRITICAL/HIGH。3 NIT 不阻塞。**virtual_models 从"只读 seed SQL 表"升级为"admin UI + CLI 可管的动态路由规则"**。
+**结论: `[+] Approved`** — measurement-only 纪律严格遵守（零改动 `internal/` / `cmd/gateway` / `cmd/admin`），3 档并发 10/30/50 全部跑完 60s + 10s warmup，DB 采样每档 3 次，报告数据完整。核心结论明确：quota SQL 从 30c 开始成为延迟瓶颈，50c 仍 100% 2xx / 0 5xx。无 CRITICAL/HIGH。2 MEDIUM + 2 NIT 不阻塞。
 
 **正面信号**:
 
-1. ✅ **API 设计完整对标 T-016b-MIN credential CRUD**：`POST` create + `PATCH` update（含 status toggle），都用 `protectedWrite` + RBAC action + audit_logs。handler 结构（parse → validate → store call → audit before/after → JSON response）与 credential handler 一致。`TestCreateVirtualModelEndpointValidatesStoresAndAudits` 验证了 audit entry 含正确的 action / resource_type / resource_id。
+1. ✅ **Measurement-only 边界零越线**：diff 只在 `cmd/loadtest/`（+4 行 `heap_alloc` 指标 + `quota_probe.sh` 脚本 + README）+ `docs/release/`（报告）。`internal/` / `cmd/gateway` / `cmd/admin` 零改动。T-CONC-RERUN 建立的 discipline 第三次连续合规。
 
-2. ✅ **`parseUpdateVirtualModelRequest` 指针字段区分"未提供"和"设为空"**：`RealModel *string` / `Provider *string` / `Status *string` / `Description *string` —— `nil` = 不更新，非 nil = 更新为该值。避免了 JSON `omitempty` 的经典坑（`""` 既可能是"没传"也可能是"要清空"）。`hasNonEmpty` 守卫确保至少一个字段被实质性变更。
+2. ✅ **报告数据三档完整 + 退化曲线清晰**：10c → 402 RPS / P99 52ms / quota SQL mean 14ms；30c → 263 RPS / P99 257ms / quota SQL mean 87ms；50c → 199 RPS / P99 566ms / quota SQL mean 211ms。每档含 gateway summary + 3 次 DB sample + pg_stat_activity + docker stats 终态。数据密度够支撑后续 ADR 决策。
 
-3. ✅ **`POST ... ON CONFLICT (name) DO NOTHING RETURNING` + `sql.ErrNoRows` = 并发安全的幂等创建**：不用 `SELECT` + `INSERT` 两步（有 race），而是单 SQL `ON CONFLICT DO NOTHING` + `RETURNING`。`ErrNoRows` → conflict → 409。比 T-016b-MIN credential create 的 `SELECT` + `INSERT` 模式更安全。
+3. ✅ **报告 Methodology 段诚实披露 Docker 代理问题**：Docker Desktop 内部代理 `10.23.0.1:8080` 超时导致镜像拉取失败，最终 mockark 走 host 而非 compose `mock-ark` service。报告写了诊断过程 + 实际 workaround + "gateway still used the real auth/quota/usage/proxy middleware stack"——正面确认测量路径有效性未受损。
 
-4. ✅ **`UpdateVirtualModel` 返回 before/after 快照**：`getVirtualModel` → 应用 patch → `UPDATE ... RETURNING` → `updateVirtualModelResult{Before, After}`。handler 用 before/after 写 audit_logs，运维可追溯每次改了什么。
+4. ✅ **`runtime_heap_alloc_final_bytes` 低成本有用信号**：`printSummary` 末尾加 `runtime.ReadMemStats` + 一行输出，在 summary 已打印（所有请求结束）后调用，零测量干扰。3 档数据（2.3MB / 3.2MB / 1.8MB）无内存泄漏迹象。
 
-5. ✅ **`omnitoken-adopt --admin-url` 三种 agent 全接入**：claude-code / codex / opencode 三个 `runAdopt*` 函数都加了 `ensureVirtualModelIfRequested`，在写 config 文件之前先调 admin API。`TestRunCLIAdoptEnsuresVirtualModelBeforeWriting:74` 断言 `settings.json` 在 ensure 成功后才写入——确保"先保证路由存在，再写 agent 配置"的顺序。
+5. ✅ **probe 脚本自动化程度合理**：`quota_probe.sh` 91 行，一轮命令跑完 3 档 ×（warmup + measure + 3 DB sample + docker stats）。`CREATE EXTENSION IF NOT EXISTS pg_stat_statements` idempotent，`pg_stat_statements_reset()` 在 warmup 后清零确保测量窗口纯净。
 
-6. ✅ **`TestRunCLIAdoptEnsureMismatchExitsBeforeWriting` — 冲突不写盘**：existing model 的 provider/real_model 与 `--provider/--real-model` 不一致 → exit 1 + settings.json 不存在。这防止了"admin 改了 virtual model 映射，但 agent 配置还指向旧 model name"的静默不一致。
-
-7. ✅ **RBAC 两新 action 落地完整**：`ActionCreateVirtualModel` / `ActionUpdateVirtualModel` 加入 `AllActions` + `defaultPolicy`（admin=true, viewer/member=false）。`TestUpdateVirtualModelEndpointRejectsMissingInvalidAndViewer` 验证 viewer 被 403 + audit 记 forbidden。
-
-8. ✅ **前端 event delegation 干净**：`onTableClick` 用 `event.target.closest("[data-edit-virtual-model]")` 处理动态渲染的行按钮，不绑 N 个 listener。edit + toggle 两种 action 单 handler 处理。
-
-**N-35 (NIT) — PATCH 仅设 description 为空字符串时被拒绝**：`parseUpdateVirtualModelRequest` 中 `if body.Description != nil && value == ""` → `hasNonEmpty` 不设 true。如果请求体只有 `{"description": ""}`，validation 返回"at least one field is required"。这意味着用户无法单次 PATCH 仅清空 description——需附带另一个字段变更。实践中清空 description 通常伴随其他改动，不会触发。v1.1 可改为 description 单独算 `hasNonEmpty`。
-
-**N-36 (NIT) — admin client 每次 Ensure 都 GET 全量 virtual_models 列表**：`adminVirtualModelClient.find()` 调 `GET /api/admin/virtual-models` 拉全部列表再 O(n) 查找。v1 virtual_models 数量 < 20，完全可接受。v1.1 如果模型数增长，可改用 `GET /api/admin/virtual-models/{name}`（目前不存在这个端点）或加 query param filter。
-
-**N-37 (NIT) — `TestUpdateVirtualModelEndpointRejectsMissingInvalidAndViewer` 对 viewer 只测了 POST**：PATCH 走同 RBAC policy（`protectedWrite(rbac.ActionUpdateVirtualModel, ...)`），viewer 同样 403。加一条 PATCH + viewer 断言更完整。不阻塞。
-
-**Codex 下一步**: T-044 status 可切 `done`。N-35/N-36/N-37 不开任务。Phase 3-A 下一步：T-046 一键 onboard CLI 收口（依赖 T-044 + T-045 均 ✅，已解锁）。
+6. ✅ **go vet + 8/8 单测全绿**：`cmd/loadtest` 新增 `heap_alloc` 行测试断言已同步更新。
 
 ---
 
-## R-046 (T-046 实施, impl `00c9f4a` + status `9ed539e`)
+**M-39 (MEDIUM) — throughput 随并发升高而下降，报告未作为核心证据点名**：
 
-**结论: `[+] Approved`** — 接受标准全达，交互式 prompts + status + dry-run + restore 确认 + 错误 polish 全部落地。无 CRITICAL/HIGH。2 NIT 不阻塞。**Phase 3-A Agent 适配 Epic 7/7 收官**。
+数据中最强的瓶颈信号不是 P99 延迟上升，而是 **RPS 随并发升高而下降**：10c → 402 RPS，30c → 263 RPS（-35%），50c → 199 RPS（-50%）。这是典型的 "more concurrency = less throughput" 饱和模式——更多 goroutine 在 quota SQL 上排队，连接池竞争加剧，单位时间完成请求数反而减少。报告 Conclusion 段提到 "quota check is a latency bottleneck" 但没直接引用这个 throughput inversion 数据点。**建议**：在 Conclusion 或 V2 Candidates 前加一句 "throughput drops 50% from 10c to 50c while quota SQL mean grows 15×, confirming the quota path is the dominant serialisation point"。不阻塞——数据在表格里，读者可自行读出，只是报告作为 decision-support 文档应该把最关键的 evidence 直接点出来。
 
-**正面信号**:
+**M-40 (MEDIUM) — `quota_probe.sh` DB 采样间隔硬编码，不随 `MEASURE_DURATION` 自适应**：
 
-1. ✅ **交互式 prompts 设计克制且正确**：`collectAdoptInputs` 仅在 flag 缺失且 stdin 是 tty 时触发；非 tty（CI/脚本）缺 flag 直接报错。`inputTTY` 用 `os.Stdin.Stat()` + `ModeCharDevice`——不用 `golang.org/x/term`，零新依赖。model 已传 flag 时跳过 prompt；optional flag（admin-url/real-model/provider）依次 prompt 允许跳过。
+脚本 line 79-83 用固定 `sleep 15 / sleep 20 / sleep 20` 在 60s 窗口内取 3 个采样点。如果有人设 `MEASURE_DURATION=30s`，第三个采样会在 loadtest 结束后才执行（`pg_stat_statements` 已被 reset 或为空）。**建议**：把采样间隔计算为 `$((MEASURE_DURATION_SECONDS / 3))`，或至少在最前面校验 `MEASURE_DURATION` 必须 ≥ 60s。不阻塞——默认参数下行为完全正确，覆盖了 100% 的实际使用场景。
 
-2. ✅ **`status` 命令三 agent 全覆盖**：`readClaudeCodeStatus`（JSON env map）、`readCodexStatus`（TOML config + JSON auth）、`readOpenCodeStatus`（XDG JSON provider.models）——三种格式全解析。`parseSimpleTOMLValues` 轻量实现（split on `=` + strip quotes），不引入 BurntSushi/toml 依赖。未配置 agent 输出"未配置"。
+**N-37 (NIT) — `sample_db` 的 `pg_stat_statements` 查询 filter 与 quota SQL 形状耦合**：
 
-3. ✅ **`tokenPrefix` 安全展示**：status 输出 token 只显示前 8 字符 + `...`，不泄露完整 API key。匹配 AC"不展示完整 token"的安全要求。
+```sql
+WHERE query LIKE '%u.monthly_budget_cents%'
+  AND query LIKE '%LEFT JOIN usage_events%'
+```
 
-4. ✅ **`--dry-run` 三种 agent 全部接入**：dry-run 路径执行完整的 flag parsing + input collection + ensure model validation，但不写文件。`printDryRun` 输出"Would write settings to..."。与 `status` 互补——status 看现有状态，dry-run 看计划改动。
+依赖表别名 `u` 和 `LEFT JOIN` 关键字。若 `internal/quota/store_postgres.go` 重构 SQL（换 alias、换 JOIN 顺序），filter 静默返回 0 rows，报告 DB sample 段变空。对 measurement-only 脚本可接受——操作者会看到空表并排查。若后续将 probe 脚本固化为 CI job，建议改为更宽松的单条件 filter（只 match `monthly_budget_cents`）或在脚本注释里标明耦合点。
 
-5. ✅ **restore 确认 tty-gated**：`confirmRestore` 仅在 tty 时提示 `[y/N]`，非 tty 默认 yes（CI 不阻塞）。提示包含 agent 名称 + 文件路径列表，用户知道正在恢复什么。
-
-6. ✅ **`polishAdoptError` 中文 actionable 错误**：admin API 401 → "请确认 --token 是有效的 admin 角色虚拟 key"；gateway unreachable → "请检查 --admin-url 是否正确且 admin 服务已启动"；virtual model conflict → "请换用 --model 或在管理端修正路由规则"。原文错误信息保留在 wrapping error 中供调试。
-
-7. ✅ **输出统一 polish**：`printAdoptSummary` 统一三种 agent 的成功输出——`✓ <agent> configured` + config/gateway/model/backup 四行。restore 输出 `✓ 已恢复原始配置` + files + from。全体中文/英文混合风格一致。
-
-8. ✅ **既有 flag 零 breaking change**：`--gateway-url` / `--token` / `--model` / `--home` / `--admin-url` / `--real-model` / `--provider` / `--ensure-model` 全部保留原语义。仅新增 `--dry-run` 和 `status` 子命令。
-
-**N-38 (NIT) — `parseSimpleTOMLValues` 不处理含 `=` 的值**：用 `strings.Cut(line, "=")` 取第一个 `=` 分割。TOML 值中如果含 `=`（如 `base_url = "http://a?x=y"`），Cut 只取第一个 `=` 之前/之后，后续 `=` 留在 value 中。**实际上正确**——`"http://a?x=y"` 中 `=` 在引号内，`strings.Trim` 去引号后值完整。但如果有裸值含 `=`（如 `model = claude-sonnet-4-6` 中的 `-` 不是 `=`），目前不可触发。极边缘，不修。
-
-**N-39 (NIT) — `completeStatus` 的 `Configured` 判断三字段全非空即 true**：不区分"文件不存在"和"文件存在但字段缺失"——两者都返回 `Configured=false`。status 输出"未配置"而非"配置文件损坏"。对用户场景够用（没配 = 未配置）；v1.1 可区分这两个状态，加 `⚠ 配置文件存在但格式异常` 提示。
-
-**Phase 3-A 收官状态**:
-- T-041 ✅ Claude Code 配置写入
-- T-042 ✅ Codex 适配
-- T-043 ✅ OpenCode 适配
-- T-040 ✅ Registry + AgentConfig 抽象
-- T-045 ✅ Anthropic → OpenAI 协议转换
-- T-044 ✅ virtual_models CRUD + agent 配置同步
-- T-046 ✅ 一键 onboard CLI 收口
-
-**全部 7/7 done**。Phase 3-A Agent 适配 Epic 圆满收官。
-
-**Codex 下一步**: T-046 status 可切 `done`。下一步：用户决策走 vNext（T-100 e2e / T-QUOTA-CACHE-PROBE）或 T-UI-L1-THEME 前端视觉。
+**N-38 (NIT) — `docker stats` 硬编码容器名**：`omnitoken-gateway-1 omnitoken-postgres-1 omnitoken-admin-1` 是 default compose project name 的默认容器名。若用户用 `docker compose -p myproj`，容器名变成 `myproj-gateway-1` 等，`docker stats` 行静默失败（no such container）。建议用 `docker compose -f "$COMPOSE_FILE" ps -q` 动态解析容器 ID，或用 `--filter name=` 匹配。不阻塞——当前项目未使用自定义 project name。
 
 ---
 
-## R-DEPLOY (T-DEPLOY 实施, impl `31adccf` + status `0631652`)
+## R-T017b-prop (T-017b PROPOSAL, commit `c498850`)
 
-**结论: `[+] Approved`** — 接受标准全达。preflight + smoketest 两脚本稳健，4 条 runbook 偏差经 Claude 修复。无 CRITICAL/HIGH/NIT。**部署文件就绪，用户可执行实际部署**。
+**结论: `[+] Approved`** — 3/3 决策全部采纳，方向与任务体默认推荐一致。Proposal 关门，Codex 可开 T-017b 实施。1 NIT 留实施期注意。
+
+**Decision 1: Model Catalog Query → ACCEPT**
+
+推荐 interface-injected in-memory catalog lookup。`ModelCatalog` interface 含 `LookupProviderModel(ctx, provider, model) (ProviderModel, bool)`，注入 `ArkChatConfig`。Gateway 启动时从 `model_catalog` 表加载到内存。Guard 仅在 `credential.Provider != routedProvider` 时触发，same-provider 路径零改动。
+
+✅ 正确选择。理由充分：请求延迟平坦、测试确定性、proxy 不持 DB 连接、selector 排序不受影响。拒绝 inline DB lookup 的理由成立（storage concern 进 hot retry loop 是错误的耦合）。
+
+**Decision 2: Model Name Conversion Scope → ACCEPT**
+
+T-017b 仅做校验，不做 `payload["model"]` 改写。跨 provider fallback 仅当 fallback provider 有匹配 catalog row 时允许；不兼容则 skip；全部不兼容返回 400。
+
+✅ 正确的 scope 取舍。理由中的连锁影响（model_routed / model_actual / pricing / attribution）是精准的——name conversion 需要独立的 canonical-model equivalence 设计，不属于 T-017b。
+
+**Decision 3: Integration Mock Design → ACCEPT**
+
+推荐 `httptest.Server` in-process mock（DeepSeek-shaped + Ark-shaped），不走 `cmd/loadtest/mockark` 双实例。2 条测试：fallback 成功 + model-not-available skip。上游 call count 断言验证 incompatible provider 在 HTTP 发出前被 skip。
+
+✅ 比 mockark 双实例方案更优：零端口管理、零 Docker 依赖、零外部进程。`internal/proxy` 测试套件已有类似 mock 模式（`retry_test.go`），一致性好。
+
+**Observability Plan → ACCEPT**
+
+WARN log 7 字段 + 3 reason 值（`all_excluded` / `all_degraded` / `preferred_empty`）。Reason 准确性靠 selector 只读 diagnostics helper，不改选择算法。
 
 **正面信号**:
 
-1. ✅ **`deploy-check.sh` 7 项检查覆盖完整**：Docker 版本 + compose 可用性、端口 80/443 占用、`.env` 至少 1 把 DeepSeek key、master key 长度 ≥64 hex chars、SSL 证书文件存在、内存 ≥4GB、磁盘 ≥10GB。`version_ge` 用 `sort -V` 做语义化版本比较（不依赖 GNU sort 的 `-V` 标志在 macOS 也正常）。
+1. ✅ **3 决策全命中任务体默认推荐**：无试探性偏离，无过度设计。Codex 对 task spec 的阅读完整。
 
-2. ✅ **`deploy-smoke.sh` 独立可运行**：接受 `<SERVER-IP>` `<VIRTUAL-KEY>` 两个必选参数 + `--cacert` 可选。Anthropic 请求用 `x-api-key` header、OpenAI 请求用 `Authorization: Bearer` header——两条路径都验证。`require_json_field` 用 `jq -e` 表达式做结构化断言，不是 grep 字符串。
+2. ✅ **Retry loop 行为描述精确**：compatibility skip ≠ upstream failure，不调 `MarkDegraded`；重复选择防护（skip set 含 attempted + compatibility-skipped）；400 only after no compatible candidate remains。这段描述几乎可直接翻译成实现。
 
-3. ✅ **`env_value` 解析器处理 .env 注释 + 引号**：`awk` 跳过 `#` 开头的行，`gsub` 剥离单/双引号和首尾空格。比 naive `grep KEY .env` 安全得多。
+3. ✅ **`ProviderModel` struct 含 `CanonicalModel` + `ProviderModel` 双字段**：虽然 T-017b 只做校验，但 struct 已预留 v1.1 name conversion 所需数据。不越界但也不浪费。
 
-4. ✅ **Codex 发现并写入 4 条 runbook 偏差**——全部修复：
-  - master-key file 未挂载 → `docker-compose.server.yml` gateway + admin 加 volume mount（`:ro`），env 切到容器内路径 `/run/secrets/master-key`
-  - DB user 不匹配 → runbook 移除 `.env` 中的 DB/Redis/NATS 条目（compose 已硬编码），消除混淆源
-  - Codex `/v1` URL 重复 → runbook 移除 `--gateway-url` 末尾的 `/v1`（Codex adapter 自己追加）
-  - nginx -t 需证书 → runbook 加备注说明（先 prepare 证书再检查，或 compose up 后验证）
-
-5. ✅ **零 Go 代码 / zero regression**：未追踪的 `admin`/`gateway` 本地二进制未动。`make lint`+`make test` 全绿。
-
-6. ✅ **smoke 请求体最小化**：`max_tokens=16`，每条请求 < 20 tokens 成本，验证跑一次 < ¥0.01。
-
-**Codex 下一步**: T-DEPLOY status 可切 `done`。执行部署按 runbook 第 2-6 步由用户手动执行。
+4. ✅ **Selector boundary 尊重得当**："add only a read-only diagnostics helper on `credentials.Selector` if needed... must not alter positions, priorities, provider order, or degraded state."——对既有 selector 合约的边界理解准确。
 
 ---
 
-## R-UI-L1-THEME (T-UI-L1-THEME 实施, impl `8c8790c` + status `9514ac9`)
+**N-39 (NIT) — empty routed provider 边界未显式处理**：
 
-**结论: `[+] Approved`** — 接受标准全达。design tokens + dark theme + FOUC 防护 + Toast + Modal + 6 个 view 的 alert/confirm 替换全部落地。零新依赖，纯 vanilla JS。无 CRITICAL/HIGH。1 NIT 不阻塞。
+Decision 1 说 "guard applies only when credential.Provider differs from the routed provider." 但未讨论 `ProviderRoutedFromContext` 为空的情况。当请求不走 virtual model（legacy single-key 路径）时 routed provider = ""，credential.Provider 可能为 "ark"（normalized），比较 `"" != "ark"` → guard 触发 → 查 catalog → 可能误拒绝。建议实施时加一条：guard 在 `routedProvider == ""` 时也 skip（与 same-provider 同义——都是"没有跨 provider 意图"）。不影响 proposal 方向，实施期注意即可。
+
+---
+
+## R-T017b (T-017b 实施, impl `5fc1fdc` + status `3faba2a`)
+
+**结论: `[+] Approved`** — 3 块缺口全部落地。model_catalog 资格校验 + 跨 provider 结构化日志 + 4 条集成测试（覆盖 3 种 reason 值 + model-not-available 400 + pool empty 503）。N-39 已修复（empty routed provider 不触发 guard）。proxy coverage 87.0%（↑0.3%）。无 CRITICAL/HIGH/MEDIUM。1 NIT 不阻塞。
 
 **正面信号**:
 
-1. ✅ **Design tokens 体系完整**：36 个 `--color-*` + `--radius-*` + `--shadow-*` + `--topbar-height` + `--sidebar-width` + `--z-*`。既有 CSS 变量（`--bg`、`--surface` 等）改为别名引用 `var(--color-*)`，所有现有 class 零改动即可吃 tokens。metapi 命名风格清晰可见（`--color-primary-soft`、`--shadow-card` 等）。
+1. ✅ **N-39 落地精准**：`isCrossProviderFallback`（`proxy.go:391`）先检查 `routedProvider == ""` → 直接 `return false`。legacy single-key 路径 + Anthropic 路径 + 任何未设 provider 的请求都不会误触发 catalog guard。一行 fix，语义清晰。
 
-2. ✅ **Dark theme 覆盖完整**：`[data-theme="dark"]` 下覆写全部颜色变量 + shadow 适配（dark 下 shadow 更深/更大）。`--color-overlay` 从浅色 `rgba(15,23,42,0.42)` 变为深色 `rgba(2,6,23,0.68)`——细节到位。
+2. ✅ **`selectionLimit` 正确防无限循环**：`doWithRetries` 引入 `selectionLimit = maxAttempts + Len()`，`selections` 计数包含 compatibility-skipped credentials，`attempts` 只计实际发送的 upstream 请求。不兼容的跨 provider credential 被 skip 后计入 selections 但不计入 attempts → 不会永久循环。逻辑严密。
 
-3. ✅ **FOUC 防护教科书级实现**：`<head>` 内 inline `<script>` 在 `styles.css` 之前读 `localStorage` + `matchMedia("prefers-color-scheme: dark")`，直接设 `documentElement.dataset.theme`。CSS 加载时 theme 已确定，零闪烁。
+3. ✅ **`AvailabilityForProvider` 只读诊断设计干净**：`selector.go:107` 使用与 `NextForProvider` 相同的 `s.mu.Lock()`，但不改 positions/priorities/degraded。返回 `ProviderAvailability{ActiveHealthy, Excluded, Degraded, Available}` 四字段。单测覆盖双时间点（degraded 期内 + 过期后），验证 expiry 后 `Available` 正确恢复。
 
-4. ✅ **三态主题切换**：system / light / dark cycle。`omnitoken.theme` localStorage key。system 模式监听 `matchMedia` change 事件自动跟随。按钮含图标（◐/●/○）+ 文字标签同步更新。
+4. ✅ **3 种 reason 值全部有针对性测试**：
+   - `TestCrossProviderFallbackAllExcluded` → DeepSeek 429 → exclude → Ark 200 → assert `reason=all_excluded`
+   - `TestCrossProviderFallbackAllDegradedReason` → DeepSeek pre-degraded → Ark 200 → assert `reason=all_degraded`
+   - `TestCrossProviderFallbackPreferredEmptyReason` → 无 DeepSeek credential → Ark 200 → assert `reason=preferred_empty`
+   每条测试同时断言 WARN log 的 7 个字段完整，不只是 reason 字符串。
 
-5. ✅ **Toast 组件自包含**：`showToast(message, kind)` 四种 kind（info/success/warning/danger）。4s 自动消失、hover 暂停计时器、最多堆叠 3 条（溢出时 dismiss 最早的）。`<div aria-live="polite">` 容器。zero dependency。
+5. ✅ **`model-not-available` 400 测试硬断言 Ark call count = 0**：`TestCrossProviderFallbackModelNotAvailable` 用 `atomic.Int32` 计数，断言 Ark upstream 的 HTTP 请求数为 0——验证 incompatible provider 在 catalog lookup 阶段被 skip，不发 HTTP。这是 AC "不在 catalog 中，skip 该 credential 并继续尝试下一个" 的硬证据。
 
-6. ✅ **Modal 组件无依赖完整**：focus trap（Tab/Shift+Tab 在 modal 内循环）、ESC 关闭、背景点击关闭、`aria-modal="true"` + `role="dialog"` + `aria-labelledby`、关闭后 restore 之前的 focus。`confirmModal` 快捷方法（title + message + confirm/cancel）。全部 `document.createElement` API，零 innerHTML XSS 面。
+6. ✅ **`TestArkChatProxyReturnsPoolEmptyWhenSelectorHasNoHealthyCredentials`** 补了回归保护：所有 credentials disabled → 503 + `CodeUpstreamCredentialPoolEmpty`。虽然不是 T-017b 的核心场景，但 `doWithRetries` 重构后的 pool-empty 分支值得单独覆盖。
 
-7. ✅ **alert() / confirm() 全部替换**：credentials 的 disable confirm 走 `confirmModal`、overview/users/models 的 error 走 `setAlert`（inline alert banner）+ `showToast`。6 个 view 零 `alert()` / `confirm()` 调用。
+7. ✅ **`StaticModelCatalog` 设计简洁**：`\x00` 分隔符组合 key（providers/models 不含 null byte），`normalizeProvider` 与 selector 一致（空→"ark"），构造时只索引 `provider_model` 不索引 `canonical_model`（符合 Decision 2）。单测 `TestStaticModelCatalogLooksUpProviderModelOnly` 显式断言 canonical model 不匹配——hard guard 防止实施中不自觉做了 name conversion。
 
-8. ✅ **零新依赖、零构建工具**：纯 vanilla JS + CSS。`web/` 仍可 `python -m http.server 3000` 直接 serve。`web/styles.css` 增量改动（design tokens 追加 + dark 覆写 + toast/modal/theme styles），不是重写。
+8. ✅ **`requestModelInfo` 提取让 `rewriteRequest` 签名变化可管理**：`requested`（virtual model name）与 `routed`（resolved model name）分离，`fallbackReason` 和 `logCrossProviderFallback` 各自取用。`rewriteRequest` 返回 4-tuple 虽略宽但调用方只有 `ServeHTTP`，没有扩散。
 
-9. ✅ **go vet / test 零 regression**：纯前端改动，后端不碰。
+9. ✅ **Anthropic 路径零回归**：`rewriteRequest` 改动同时覆盖了 OpenAI 和 Anthropic 路径。`TestAnthropicToOpenAIRequestValidation` + `TestOpenAIToAnthropicMessageVariants` 新增 6 条 subtest 验证 Anthropic 请求解析和响应转换的边缘 case，确保 proxy 重构不影响 `/v1/messages`。
 
-**N-41 (NIT) — commit message 缺 MIT attribution**：AC 要求 "commit message 体里注明 Design tokens inspired by metapi (MIT) — github.com/cita-777/metapi"。当前 commit `8c8790c` 的 body 只有 `refs T-UI-L1-THEME.`。**建议**: 下次 chore commit（如修 CSS 细节）时在 body 补一行 attribution。不阻塞 approval——metapi is MIT licensed，attribution 是礼貌不是法律义务。
+10. ✅ **go vet + 全量测试 green**：`internal/proxy` 所有测试 PASS（含既有 retry/stream/anthropic 测试），`internal/credentials` 6/6 PASS，proxy coverage 87.0%（≥ 基线 86.7%）。
 
-**Codex 下一步**: T-UI-L1-THEME status 可切 `done`。
+---
+
+**N-40 (NIT) — `fallbackReason` 在 mixed state 下可能给出不精确的 reason**：
+
+当 preferred provider 有 ≥3 个 credentials，其中部分被 retry loop exclude、部分被 pre-degrade 时，`AvailabilityForProvider` 返回 `Available=0, Excluded>0, Degraded>0`。`fallbackReason` 的 switch 优先级为 `all_excluded`（Excluded == ActiveHealthy）→ `all_degraded`（Available==0 && Degraded>0）→ `preferred_empty`。若 `Excluded < ActiveHealthy`，`all_excluded` 不匹配，会返回 `all_degraded`——即使实际是 mixed（部分 excluded + 部分 degraded）。当前部署中每个 provider 只有 1-2 个 credentials（T-016 seed），mixed state 不会出现。建议后续加 `active_healthy=X excluded=Y degraded=Z` 到 log attrs（不代替 reason，作为补充），或把 mixed 情况归为 `reason=preferred_unavailable`。不阻塞——当前规模不会触发，且日志已有 credential_id 用于排查。
 
 ---
 
@@ -252,291 +213,77 @@ seed SQL 已有 1 admin + 1 viewer + 9 member，`GET /api/admin/users` 可发现
 
 ---
 
-**结论: `[+] Approved`** — 接受标准全达。5 条集成测试 + 4 条 e2e 测试覆盖 Claude Code（`x-api-key` + Anthropic）和 Codex（`Authorization: Bearer` + OpenAI）的完整 auth → middleware → proxy 链路。无 CRITICAL/HIGH。1 NIT 不阻塞。
+## R-T018 (T-018 实施, impl `b70794b`)
+
+**结论: `[+] Approved`** — 6/6 场景全部落地，443 行纯测试，零生产代码改动。覆盖 retry recovery + all-exhausted + cross-provider fault fallback + cross-provider exhaustion + degrade/restore 时序 + SSE mid-stream disconnect。3 条测试接入真 usage.Middleware 验证 attribution 正确性。无 CRITICAL/HIGH/MEDIUM/NIT。proxy coverage 87.6%（↑0.6%）。
 
 **正面信号**:
 
-1. ✅ **`newAgentSmokeMux` 走真实 `newMux`**——不是 hand-rolled handler chain。`protectGatewayRoute → enforceMonthlyBudget → resolveVirtualModel → anthropic.MessagesHandler → usage.Middleware → proxy` 全部在生产代码路径上。`agentSmokeResolver` 模拟 virtual model 解析、`fakeBudgetChecker` 模拟额度检查、mock upstream httptest.Server 返非流式 + 流式两路响应。
+1. ✅ **6 条场景全对应任务体 AC**：
 
-2. ✅ **5 条集成测试精准覆盖所有 AC**：
-   - `TestAgentSmokeClaudeCodeXAPIKey` — `x-api-key` + Anthropic body → 200 + `type:"message"` + usage record 含 `ModelRouted`
-   - `TestAgentSmokeCodexBearer` — `Authorization: Bearer` + OpenAI body → 200 + `choices[0].message.content` + usage
-   - `TestAgentSmokeInvalidXAPIKeyUsesAnthropicError` — 断言 `{"type":"error","error":{"type":"authentication_error"}}`（Anthropic 格式）
-   - `TestAgentSmokeInvalidBearerUsesOpenAIError` — 断言 `{"error":{"type":"authentication_error","code":"invalid_api_key"}}`（OpenAI 格式）
-   - `TestAgentSmokeMissingAuthHeaders` — 两个路径都 401，各自的 error 格式正确
+   | # | 测试 | AC | 关键断言 |
+   |---|---|---|---|
+   | 1 | `TestArkChatProxyRetryConnectionFailureThenRecordsWinningCredential` | Retry + 恢复 | usage attribution → winning credential ID + provider; retry log with `CodeUpstreamConnectionFailed` |
+   | 2 | `TestArkChatProxyAllCredentialsExhaustedReturns5xxAndNoUsageRecord` | 全部耗尽 | 3 calls (one per credential); 2 retry logs; final 502 + `CodeUpstream5xx`; upstream body NOT leaked; NO usage record |
+   | 3 | `TestArkChatProxyCrossProviderFaultFallbackRecordsArkCredential` | 跨 provider 故障 fallback | 2 DeepSeek retry logs + cross-provider fallback log; usage attribution → `provider=ark` + credential ID |
+   | 4 | `TestArkChatProxyCrossProviderAll5xxExhaustion` | 跨 provider 全部耗尽 | cross-provider fallback log; final 502; NO usage record; body not leaked |
+   | 5 | `TestArkChatProxyDegradeSkipsAndRestoresCredential` | Degrade + 恢复时序 | 4 `AvailabilityForProvider` 断言（initial→degraded→restored）；call counts A:1→1→2, B:0→2→2；no real sleep |
+   | 6 | `TestArkChatProxyDoesNotRetryAfterSSEChunkThenDisconnect` | Stream 中途断开 | `"first"` chunk received; `"second"` NOT in response; cred-B calls = 0; no retry log |
 
-3. ✅ **e2e 测试用 golden Anthropic fixture 打真上游**：`loadAnthropicFixtureRequest` 读 `testdata/golden/ark/anthropic_nonstream_default.json` 的 `_meta.request`，`stream` 参数动态覆写。4 个子测试覆盖 Claude Code 流式/非流式 + Codex 流式/非流式。`waitCount(t, 4)` 等全部 4 条 usage records 就绪后断言 `ModelRouted` + `TotalTokens` 非空。
+2. ✅ **Usage attribution 接入真 middleware**：场景 1/2/3/4 用 `usage.Middleware(recorder, ...)` 包裹 proxy，`retryUsageRecorder` channel 捕获 `RecordInput`。成功路径断言 `UpstreamCredentialID` / `Provider` / `APIKeyID`；失败路径 `assertNoRetryUsageInput` 断言无 usage record——AC"失败请求不产生错误归因"硬证据。
 
-4. ✅ **`MAX_REQUESTS` 成本硬上限**：`e2eMaxRequests` 默认 10，至少需要 4（4 个子测试各 1 请求）。`maxRequests < 4` 直接 `t.Skip`。4 请求 × max_tokens=32 ≈ ¥0.01 成本。
+3. ✅ **`TestArkChatProxyDegradeSkipsAndRestoresCredential` 全链路零 flake**：3 次请求（429 → degrade 期跳过 → degrade 过期恢复）用 `NewSelectorWithClock` + 手动推进 `now`，无 `time.Sleep`。`AvailabilityForProvider` 4 次断言验证 initial/degraded/restored 三态。
 
-5. ✅ **`agentSmokeUsageStore` 线程安全**：`sync.Mutex` + channel-based `ready`/`changed` 信号，支持并发子测试。`waitCount` 用 5s deadline 防 hanging。
+4. ✅ **`TestArkChatProxyDoesNotRetryAfterSSEChunkThenDisconnect` 补充 `TestArkChatProxyDoesNotRetryPartialFirstRead`**：后者覆盖 `n>0 && err!=nil`（partial first read），本测试覆盖 chunk 已 flush 到 client 后上游断连——两个 `final=true` 分支独立验证。
 
-6. ✅ **零 regression**：5 条集成测试 `go test -count=1` 全部 PASS，无 flake。
+5. ✅ **上游 body 防泄漏两条新断言**：场景 2/4 都验证 `"vendor body must not leak"` 不在响应体中。与既有 `TestLogCredentialRetryOmitsUpstreamBody` 形成三重保护。
 
-**N-40 (NIT) — e2e 仅支持 Ark 上游**：`newAgentSmokeE2EMux` 硬编码 `OMNITOKEN_ARK_API_KEY` + `config.DefaultArkOpenAIBaseURL`。用户当前 DeepSeek-only 部署会 `t.Skip`。建议后续加 `OMNITOKEN_DEEPSEEK_API_KEY` fallback，让 e2e 支持 DeepSeek 上游。**不阻塞 v1**——集成测试已覆盖全链路。
+6. ✅ **helper 设计干净可复用**：`requestSubject` / `waitRetryUsageInput` / `assertNoRetryUsageInput` 三个 helper + `retryUsageRecorder` + `retryUsageConfig` 可被后续 retry 测试复用。
 
-**Codex 下一步**: T-SMOKE-AGENT status 可切 `done`。
+7. ✅ **零生产改动 + go vet green + coverage ↑**：diff 仅 `retry_test.go`（+443 行）。proxy 87.6% > 基线 87.0%。
 
 ---
 
-## R-AUDIT-USAGE-VIEW (T-AUDIT-USAGE-VIEW 实施, impl `7b9b0653` + `57775cae` + status `8d1d78a4`)
+## R-T019 (T-019 实施, impl `8148f34`)
 
-**结论: `[~] Conditional Approve — 不关任务`** — 后端 endpoint + SQL 聚合 + fake-DB 单测 + 前端 tab/图表/表格全部按 AC 落地，**门 ③ 数据面打通**。但发现一条 **HIGH(语言一致性 + 范围外翻译)** 阻塞合并。修完 HIGH 后切到 Approve；M-33 / NIT 不阻塞。
-
-**正面信号**:
-1. ✅ **SQL 单测验"model_routed 不是 model_requested"**：`TestPostgresOverviewStoreLoadUserUsageMapsSQLResults` 用 `adminFakeSQLResponse` 三档 mock，断言 `queries[0].query` 含 `COALESCE(NULLIF(ue.model_routed, ''), 'unknown')` **且** 不含 `model_requested`。这是 AC "按 model_routed 聚合" 的硬断言,不是肉眼看 SQL。配套断言还覆盖 `EXTRACT(HOUR ... AT TIME ZONE 'UTC')` + `ORDER BY ... DESC LIMIT 50`,把任务体 Hints 里 3 个 SQL 形状全验过。
-2. ✅ **路径命名跟 hint**：`GET /api/admin/users/{id}/usage` 与既有 `/quota` 平行,没在 `/api/admin/usage/by-user/...` 引入新顶层资源。Codex 任务体内有备选,选了我推荐的形态。
-3. ✅ **3 SQL 全 parameterized + bounded**：user_id / since / until / top_n 全走 $1-$4;top_n max 50 在 `parseUserUsageFilters` 显式 clamp;since/until 强制 `until > since` 才接受;LEFT JOIN usage_token_breakdown 处理无 breakdown 的边缘事件。无 SQL 注入面,无未封顶 LIMIT。
-4. ✅ **前端 tab 切换不双取数**：`load(false)` 根据 `activeView` 路由到 `loadLogs` / `loadUsage`,各自走 `loadedLogs` / `loadedUsageUserID` 缓存。切回 logs 不重新打 admin API,符合"现有 audit 行为向后兼容"AC。
-5. ✅ **Docker-only verification 第三次合规**：commit message 三次 `docker compose run` (vet / test / `-cover ./cmd/admin`) + node DOM 两个 test 文件。memory `feedback_codex_docker_only_violations` 经 T-016b-MIN + T-MP-DEEPSEEK 两次 enforce 后已稳定。
-
-**H-8 (HIGH) — UI 语言一致性破坏 + 范围外翻译**: 
-
-- `web/index.html` 新增 audit 子面板的全部文案 + 现有 audit tab 标签都改成英文("Admin audit logs" / "User usage ledger" / "Apply" / "Clear" / "User" / "Since" / "Until" / "Top N" / "Model top-N" / "Hourly distribution" / "Recent calls" / "Waiting for user usage" 等)
-- `web/src/views/audit.js` 把**原有** zh-CN 字符串("正在加载审计日志" / "暂无审计日志" / "审计日志加载失败" / 错误 alert) 全改成英文
-- 配套 `audit.test.js` 把断言正则 `/正在加载审计日志/` 改成 `/Loading admin audit logs/` —— 测试改 OK,但说明 Codex 知道这是行为破坏改动
-
-对比基线:`overview.js` "正在加载实时用量数据..." / `users.js` "正在加载用户用量数据..." / `models.js` "无法加载模型用量" / `virtual_models.js` "加载失败" / `credentials.js` — **全 zh-CN**。`index.html` 现有侧栏 "组织消耗概览 / 用户额度分配 / 模型调用分析 / 虚拟模型映射 / 审计日志" 也全 zh-CN。Codex 改完之后,audit 是**唯一英文页面**,视觉风格不一致。
-
-任务体 AC 第 8 条 **"视觉上与现有 overview / users 视图风格一致"** —— 文案语言是风格的一部分。**修正动作**:
-- 把 `web/index.html` audit 子面板新增的英文 label/heading/placeholder 翻成 zh-CN
-- 把 `web/src/views/audit.js` 内被改的**原有**字符串还原回 zh-CN(`正在加载审计日志` / `暂无审计日志` / `审计日志加载失败` 等)
-- 新增 audit usage 视图的 loading/empty/error 全部走 zh-CN
-- 同步把 `audit.test.js` 断言正则改回 zh-CN 匹配
-- 单 fix commit;不要顺手再改任何其它东西
-
-**M-33 (MEDIUM) — tab role/aria-selected 不完整**: `<div role="tablist">` 容器有了,但内层 `<button class="audit-tab">` 缺 `role="tab"` / `aria-selected="true|false"` / `aria-controls="audit-logs-panel|audit-usage-panel"`,且子面板缺 `role="tabpanel"` / `aria-labelledby`。键盘+读屏用户切 tab 体验不完整。修 HIGH 时顺手加 5 个 attr。不阻塞,但 metadata 微小且与 T-UI-L1-THEME 无关,本任务内做完干净。
-
-**N-31 / N-32 / N-33 / N-34 (NIT)**:
-- **N-31 coverage 67.4% (< T-014 基线 72.0%)**: 新代码 ~280 行 backend + 4 个测试,自身覆盖率 OK;掉的是 `postgresOverviewStore.LoadUserUsage*` 三个 helper 的 query/scan/rows.Err 错误分支无 sqlmock。结构性下降,且新增的 mapper 测已经验主路径。**defensible**;v1.1 补 SQL 错误路径 mock 即可,不开任务。
-- **N-32 半小时时区舍入**: `audit.js:369` `Math.round(-getTimezoneOffset() / 60)` 在 India/Iran/Nepal 用户(+5:30 / +3:30 / +5:45)会按整数偏移,边界小时桶分配错位 1 小时。对 UTC/中国/美国用户正确。v1 用户群可接受,记录在案。
-- **N-33 "custom" period 半开窗**: `userUsageWindow` 在用户只填 `since` 时,`until = monthEnd`(可能未来时),name 仍标 "custom"。语义清晰但 UX 略奇怪;前端 period 没有可视化展示,**当前不影响**。
-- **N-34 viewer 跨用户读权限**: `protectedRead` 让 viewer 能读任意 `user_id` 的 usage(模型 top + 近 50 次 timestamp+model+tokens+status)。**v1 单组织 demo 内可接受**(与 `/api/admin/users` 已有的全用户列表一致);多租户拆分时与 `/quota` 一起需补 org scope check。
-
-**Codex 下一步**: 修 H-8 + 顺手做 M-33;一个 fix commit `fix: restore zh-CN audit copy + complete tab ARIA`,verification 行加跑 `node --test web/src/views/audit.test.js`。再贴回我做二审。N-31~N-34 不开任务,留 v1.1 评估时一并看。
-
-**Resolved**: `e9d878ab` — H-8 zh-CN 还原 + audit usage subview 全 zh-CN 翻译;M-33 tab/tabpanel ARIA 五项 attr 落地;backend 零改动。
----
-
-## R-016b-MIN (T-016b-MIN 实施, impl `4b3d6b32` + status `ac66a14a`)
-
-**结论: `[+] Approved`** — ADR 0005 接受标准全达，**v1 上线 ops UX gap 关闭**（加 key → 30s 自动生效，无需手动 restart gateway）。无 CRITICAL/HIGH；2 MEDIUM + 4 NIT 不阻塞，留 v1 上线后顺手。
+**结论: `[+] Approved`** — 后端 + 前端 + RBAC 全链路 788 行，6 条 handler 测试 + 3 条 store 测试覆盖 4 种状态码 × 3 种角色。admin 67.1%。无 CRITICAL/HIGH/MEDIUM/NIT。
 
 **正面信号**:
-1. ✅ **polling hot-reload e2e 真测闭环**：`TestCredentialPollingE2ERoutesNewCredential` 用真 PG + 真 envelope encrypt + 5ms tick + 等 selector 见到新 credential + proxy 真发请求 + 断言 usage_events 写新 provider+credential_id。这是接受标准 "polling 30s 内可被路由命中" 的硬证据，不是 mock 断言。
-2. ✅ **trust boundary docker-compose 注释化**：`deploy/docker-compose.yml` 在 gateway 与 admin 两处 master key env 上方加注释 "Gateway and admin must share the same master key so admin-created credentials can be decrypted by the gateway polling reloader" —— 运维改 yaml 时一眼看到约束，不只藏在 ops 文档里。ADR 0005 要求的 trust boundary 落地完整。
-3. ✅ **Selector.Replace 原子 + degraded 剪枝**：`internal/credentials/selector.go` `Replace([]Credential)` 走 mutex 之上原子 swap，配套 `pruneDegraded` 把已删 credentials 的 degraded 记录清掉避免 map 无限增长。selector_test.go +31 行单测覆盖 swap 期间 Next/MarkDegraded 行为。
-4. ✅ **Docker-only verification 10 条全合规**：commit message 含 vet / test / e2e tags / `migrate down -steps 1 && migrate up` 双向 / seed / credential-seed / 前端文件 grep smoke / `docker compose build`。零 Windows host 调用。memory `feedback_codex_docker_only_violations` 第二次任务连续合规。
-5. ✅ **前端 UX 加分**：`web/src/views/credentials.js` provider dropdown 切换时自动填 default base_url（ark → Ark URL；deepseek → DeepSeek URL）。spec 未要求但 Codex 主动加，减少运维抄链接的错误面。
 
-**M-31 (MEDIUM) — polling goroutine 不挂 shutdown ctx**: `cmd/gateway/main.go` 调用 `startCredentialPolling(context.Background(), ...)`，与 HTTP server 的 graceful shutdown ctx 解耦。`docker compose down` 时若 polling 正在 `store.Load(ctx)` 中，DB 连接不会被 cancel 立即归还，靠 Go runtime 进程退出强清。**v1 单实例 + docker stop grace 10s 实际不会出问题**，但 v1.1 多实例 / 长 graceful 窗口时会有 DB 连接残留。建议下次相关 commit 顺手把 polling ctx 接到 main 的 shutdown ctx（1-2 行）。
+1. ✅ **API 设计完整对标既有 credential CRUD 模式**：`POST /api/admin/users` → `protectedWrite(ActionCreateUser)` → `parseCreateUserRequest`（email 用 `net/mail.ParseAddress` RFC 5322 校验）→ `store.CreateUser`（事务内 INSERT users + role_assignments）→ `audit.SetResource` after → `201 Created`。error 分支覆盖 400/403/409/500 四种状态。
 
-**M-32 (MEDIUM) — admin POST 每请求重建 PostgresStore**: `cmd/admin/main.go` `CreateCredential` 内 `credentials.NewPostgresStore(s.db, s.envelope).Create(...)` 每次都 new 一个 store 实例。无资源泄漏（store 不持 conn），但浪费分配且与 `LoadCredentials` 直接用 `s.db` 不一致。**建议**：把 `*credentials.PostgresStore` 缓存到 `postgresOverviewStore` 字段，构造时一次性建好。不阻塞。
+2. ✅ **RBAC 三处同步完整**：`internal/rbac/types.go` 新增 `ActionCreateUser` + `AllActions` 注册；`internal/rbac/policy.go` `defaultPolicy` admin=true / member=false / viewer=false；`engine_test.go` `TestAuthorizeRoleActionMatrix` 三角色全断言。无遗漏。
 
-**N-27 / N-28 / N-29 / N-30 (NIT)**:
-- N-27: polling 用全量 reload 而非 `updated_at > last_seen` 增量。v1 规模可忽略 DB 压力，但与我接受标准里 "按 updated_at 增量" 字面不同。Codex 选简单的全量，正确取舍。文档化即可。
-- N-28: Disable handler idempotent 需要确认 SQL：已 disabled 行重 PATCH 是 200 还是 404？UPDATE...RETURNING 在 NOT FOUND 时无行返回 → 404；命中行（无论 active/disabled）→ 200。本地 e2e 没专门测重 disable，下次顺手补一条断言。
-- N-29: polling 无 jitter，v1 单实例无影响；v1.1 多实例时多 gateway 并发 reload 会同时打 DB，加 `time.Duration(rand.Int63n(int64(interval/10)))` 即可，留 v1.1。
-- N-30: 前端 137 行纯 vanilla JS，无 JS 单测（与现有 web/ 惯例一致）。verification 只 grep `credentials.js` 是否被引用，没跑浏览器层断言。v1 上线前建议你自测一次"加 key → 30s 后真实生效"路径（手动跑 docker compose up + 网页操作）。
+3. ✅ **事务性创建 + 幂等防重**：`CreateUser` 内 `db.BeginTx` → `INSERT INTO users ... ON CONFLICT (organization_id, email) DO NOTHING RETURNING`（`ErrNoRows` → `errAdminUserExists` → 409）→ `INSERT INTO role_assignments ... RETURNING role_id` → `tx.Commit()`。`committed` flag + `defer` rollback 保证失败时清理。模式与 T-044 `ON CONFLICT DO NOTHING` 一致。
 
-**与 ADR 0005 / v1 上线就绪状态**:
-- v1 §零A 三角全部✅：性价比资源（T-016 + T-MP-DEEPSEEK）/ 权限额度（T-005a/T-015）/ 安全审计（T-013/T-014）
-- v1 上线 ops UX gap 关闭（T-016b-MIN）
-- H-7 PG saturation 留 vNext T-QUOTA-CACHE-PROBE 观察项
-- Codex 实测连续 2 任务 Docker-only 合规，速度杠杆 5+6 生效
+4. ✅ **`defaultOrganizationID` fallback 务实**：当 `params.OrganizationID == uuid.Nil`（auth subject 无 org）时，`SELECT id FROM organizations ORDER BY created_at LIMIT 1` 取最早 org。与 seed SQL 中单 org 部署对齐。`errAdminOrganizationNotFound` 区分"DB 无 org"和"真正的 DB 错误"。
 
-**Codex 下一步**: T-016b-MIN status 可置 `done`。M-31 / M-32 / 4 NIT 不开任务，下次相关 chore commit 顺手收。
+5. ✅ **Password 安全三处到位**：(a) `crypt($4, gen_salt('bf'))` 在 SQL 内完成，不经过 Go 内存；(b) `userAuditView` 仅输出 email/display_name/role/user_id/org_id，不包含 password；(c) `TestCreateUserEndpointCreatesAndAudits` 显式断言 `if _, leaked := after["password"]; leaked { t.Fatalf(...) }`——password 不漏到 audit log。
 
----
+6. ✅ **6 条 handler 测试覆盖完整状态矩阵**：
+   - `TestCreateUserEndpointCreatesAndAudits` — 201 + audit after snapshot（含断言 password 不在 audit 中）
+   - `TestCreateUserEndpointDeniesNonAdminAndAudits` — viewer/member → 403 + audit forbidden + store 未被调用
+   - `TestCreateUserEndpointRejectsInvalidInput` — 400 + `invalid_user` error code
+   - `TestCreateUserEndpointReturnsConflictForDuplicate` — 409 + `user_exists`
 
-## R-MP-DEEPSEEK (T-MP-DEEPSEEK 实施, impl `026f90ca` + status `f7738f58`)
+7. ✅ **3 条 store 测试覆盖 SQL 形状**：
+   - `TestPostgresOverviewStoreCreateUserInsertsUserRoleAndHash` — 断言 `INSERT INTO users` 含 `password_hash` / `crypt($4, gen_salt('bf'))` / `ON CONFLICT`；`INSERT INTO role_assignments` 含 `FROM roles r` / `RETURNING role_id`
+   - `TestPostgresOverviewStoreCreateUserUsesDefaultOrganization` — nil OrganizationID → 3 条 query (org lookup + user insert + role assign)
+   - `TestPostgresOverviewStoreCreateUserDuplicate` — 空 row → `errAdminUserExists`
 
-**结论: `[+] Approved`** — ADR 0004 接受标准全达，**v1 §零A 第 1 条"性价比资源"硬门槛过线**（30 conc / 100.0% / 767/767 / 0 switches / cost ≪ ¥1）。无 CRITICAL/HIGH；2 MEDIUM + 3 NIT 不阻塞。**T-CONC-RERUN H-6 二审同步关闭**（>80% 用 multi-provider 形态达成，路径从 Ark 单 provider 转向 ADR 0004）。
+8. ✅ **前端 UX 完整闭环**：
+   - "新建用户"按钮仅在 admin 角色可见（`syncRoleControls` → `nodes.open.hidden = getRole() !== "admin"`）
+   - Modal form 四字段：邮箱（`type="email"`）、显示名、角色 dropdown（member/viewer/admin）、初始密码（`type="password" autocomplete="new-password"`）
+   - 创建成功 → 自动弹出 "生成 Key" 面板 → 调 `POST /api/admin/dev/virtual-keys` → 展示 full key + prefix + "请立即复制此 Key，关闭后不可再次查看" 安全提示
+   - 复制按钮 `navigator.clipboard.writeText` + `execCommand('copy')` fallback + `showToast("Key 已复制")`
+   - users 列表每行加 "生成 Key" 按钮（`data-action="generate-key"`），点击进入 key 生成 flow
+   - users.test.js 新增断言：admin 角色看到 `data-action="generate-key"` + `edit-quota`；viewer 角色两者均不可见
 
-**正面信号**:
-1. ✅ **接受标准 #5 单次过门槛**：30 conc 直接跑出 100.0% / 24.5 RPS，不需要降档到 10/5 conc。v1 上线档位 = 30 conc / 100.0%，§零A 第 1 条验收实证一拍即合。从 T-CONC-CHECK 17.1% → Ark rerun 43.0% → 现在 100.0% 三层对照完整写进 release 文档。
-2. ✅ **跨 provider 归因链贯通设计**：`internal/proxy/proxy.go:312-315` `nextCredential` 用 `ProviderRoutedFromContext` 走 `NextForProvider`；`internal/usage/middleware.go:54` 用 `UpstreamProviderFromContext`（proxy 在拿到 credential 后才 set）填 `usage_events.provider`，覆盖了"routed-from 是 deepseek 但实际 fallback 到 ark"的归因正确性。配套 `TestMiddlewareUsesUpstreamProviderFromContext` 正面断言。
-3. ✅ **`shouldDisableThinking` provider-gated**：`internal/proxy/proxy.go:223-226` `thinking: disabled` 只对 ark 或 empty provider 注入，DeepSeek 请求体不带 Ark 专属字段。避开"DeepSeek 400 unknown field"这一类 v1.1 才会显形的 bug。
-4. ✅ **Docker-only 自报严格合规**：commit message verification 行列 8 条全 `docker compose run`，零 Windows host 调用。memory `feedback_codex_docker_only_violations` 首次 enforce 后即合规，**继续保持这套首行硬约束**。
-5. ✅ **Migration 000013 down 真测过**：commit message verification 含 `migrate down -steps 1 && migrate up` 双向跑通，且 down 完整覆盖 DROP COLUMN + DELETE pricing + DELETE catalog + ALTER COLUMN DROP DEFAULT。
+9. ✅ **CSS 增量干净**：`.view-actions` 水平排列 action buttons、`.key-result-panel` grid 布局、`.security-note` warning 配色、`.key-code` monospace 代码块、`.key-actions` space-between 排列。响应式断点统一收窄为 `flex-direction: column`。
 
-**M-29 (MEDIUM) — DeepSeek pricing metadata 自相矛盾**: `migrations/000013_*.up.sql:50-66` `model_pricing.source_url = 'demo-placeholder:not-real-deepseek-pricing'`，但 `input_rate_usd = 0.14` / `output_rate_usd = 0.28` **是 DeepSeek 真实 list 价**（¥1/M ≈ $0.14, ¥2/M ≈ $0.28）。"placeholder" 标签 + 真实数值会让 v1 上线后 cost reporting 系统不确定是否信。建议改 source_url 为 `https://api-docs.deepseek.com/zh-cn/quick_start/pricing` 或把 rates 改成明显占位（0.001/0.002）。**不阻塞 v1**，但请下次 chore commit 顺手修。
+10. ✅ **`adminFakeTx` 补齐 fake driver 事务支持**：`adminFakeConn.BeginTx` → `adminFakeTx{Commit/Rollback}`。不阻塞既有测试（fake driver 的 QueryContext 在事务内仍返回 `adminFakeRows`），`CreateUser` 的事务路径可被单测覆盖。
 
-**M-30 (MEDIUM) — 跨 provider fallback 静默 404 风险（v1.1 范畴）**: 当所有 DeepSeek credentials degraded、selector fallback 到 Ark 时，gateway 把 `model=deepseek-v4-flash` 发给 Ark → Ark 返 404 → 4xx 不重试，client 看到 404。**failure 模式正确但 ops 难解读**（"DeepSeek 都挂了" vs "Ark 没这个模型" 长一样）。v1 上线不阻塞（rare 场景），但 v1.1 cost-aware routing 时建议加：(a) selector 在跨 provider fallback 时 emit 结构化日志 `cross_provider_fallback provider=ark routed_model=deepseek-v4-flash`；或 (b) `model_catalog` 查 entitlement 先验，没有就 skip 该 provider。
-
-**N-24 (NIT)**: `.codex/tmp/` 目录存在但 `.codex` 未进 `.gitignore`。Codex 本次按 spec 删了 probe / loadtest 脚本，但未来 Codex 忘删会污染 `git status`。下次顺手加一行 `/.codex/` 到 `.gitignore`，不另开 commit。
-
-**N-25 (NIT)**: `ALTER COLUMN base_url SET DEFAULT ''` 让 `NOT NULL` 列变得"空串可入"，新增 row 漏填 base_url 会静默成空串（而不是 INSERT 报错）。Codex 是为兼容已有空串行才加的 default，可理解。v1.1 可考虑改成 `CHECK (base_url <> '')` 防御性约束。
-
-**N-26 (NIT)**: `internal/usage/middleware.go:54` `firstNonEmpty(UpstreamProviderFromContext, ProviderRoutedFromContext, cfg.Provider)` 三 source fallback chain 只测了第一层（upstream provider set 的 case）。第二/三层未直接覆盖单测；不阻塞，下次顺手补 `TestMiddlewareFallsBackToRoutedProvider`。
-
-**与 R-CONC-RERUN H-6 / H-7 联动**:
-- **H-6 二审关闭**：`>80% 成功率`硬门槛在 multi-provider 形态下达成 (100.0%)。T-CONC-RERUN status 可置 `done`。
-- **H-7 (PG saturation) 保持 vNext 观察项 T-QUOTA-CACHE-PROBE**：本次 30 conc / 24.5 RPS 远低于 mock 50 conc 撞墙点 (210 RPS)，PG 没饱和，符合"v1 不卡并发下限"决策。
-
-**Codex 下一步**: T-MP-DEEPSEEK status 可置 `done`；T-CONC-RERUN H-6 二审一并签。M-29 / N-24 / N-25 / N-26 不开任务，下次相关 commit 顺手修。M-30 留到 v1.1 cost-aware routing epic 处理。
-
----
-
-## R-CONC-RERUN (T-CONC-RERUN 实施, impl `abc98a05` + status `4f371b4d`)
-
-**结论: `[~] Conditional Approve — 不关任务`** — mock baseline 全部到位、报告产出 + V2 candidates 落地、measurement-only 边界完全遵守（无 `internal/*` / `cmd/gateway` / `cmd/admin` 代码修改、无新依赖）。但**真 Ark 多 key 池验证（接受标准 #2）未跑**——这是 T-CONC-RERUN 的关键交付，不能因 mock 一半合格就关任务。**status:review 保持，不进 done**；user 配齐 3 把 Ark seed key + master key env 后由 Codex 跑 30×30 真测，结果补进 `docs/release/v1-concurrency-rerun-2026-05-22.md` 的 True Ark Rerun 段，**Result 行追加同一 commit 引用**，再二次 review。无 CRITICAL。
-
-**正面信号**:
-1. ✅ Declared deviation 处理范式正确：本可凑合用单 fallback key 跑一档画个数字交差，Codex 选了"拒跑 + 列 5 步前置条件 + 解释为什么单 key 跑会重蹈 T-CONC-CHECK 形状不能验证 T-016"——R-CONC-CHECK 是同性质 measurement-only，这一脉的诚实性继承到位。
-2. ✅ M-26 完整落地：报告 methodology 段第 24-27 行复述了我在 propose 评审里的 master-key-file 不变性要求，并显式说"`OMNITOKEN_MASTER_KEY_FILE`/`OMNITOKEN_MASTER_KEY` identical to the T-016 seed key. Otherwise existing encrypted Ark credentials cannot be decrypted"——避免后续真 Ark rerun 时密文解不开的坑。
-3. ✅ Mock-ark binary scope discipline 优秀：`cmd/loadtest/mockark/main.go` 135 行纯 std-lib、no third-party dep（`git diff go.mod` 空）、distroless `USER 65532:65632` non-root、显式拒 `stream:true` 返 `invalid_request` —— 杜绝 mock 误覆盖 SSE 路径制造假成功率；`Authorization` 必带 `Bearer ` 前缀，gateway 漏带 auth 头时 mock 会 401，不会被 gateway 内部 401 假装成 200 通过。
-4. ✅ Loadtest duration mode 加得干净：`cfg.duration > 0` 时短路 `MAX_REQUESTS` 总量校验（`main.go:154`），request-mode 老用法零回归（`TestRunSendsRequestsAndChecksOverview` 仍是 6 请求形状）；新 `TestRunDurationStopsAtMaxRequests` 显式断言"duration + maxRequests 同时存在时，issued cap 在 maxRequests"，正面验证了任务体 "real Ark `MAX_REQUESTS=900` 必须封顶" 的语义。
-5. ✅ pg_stat_statements 数据三档完整给出 `monthlyBudgetStatusSQL` calls/mean/max（170ms→391ms→464ms），直接是 T-QUOTA-CACHE-PROBE baseline 输入；Decision 4 选(a) 启 preload + `CREATE EXTENSION IF NOT EXISTS` 走通，PG container recreate 但保留 named volume 没掉数据。
-
-**H-6 (HIGH) — 真 Ark 验证未做，是任务体 #2 接受标准核心未达成**: 任务体 line 201 "真 Ark 多 key 池验证 ... 目标：成功率 > 80%（vs T-CONC-CHECK 17.1%），证明 T-016 切池机制把单 key rate limit 转成池级 rate limit" —— 此条只 mock 不算数。T-016 e2e (`credential_pool_e2e_test.go:198`) 已经在功能层证三把 key 都进了 `usage_events`，但**并发态下的"成功率提升曲线"**仍空白。**不阻塞** T-CONC-DSN / mock rerun 合并，但 **阻塞** T-CONC-RERUN 任务关闭，也阻塞 v1 §零A第1条"性价比资源"验收最后一笔签字。请 user 在本地 `.env` 补三件：`OMNITOKEN_MASTER_KEY_FILE`（与 T-016 seed 同一把）、`OMNITOKEN_ARK_KEYS_1/2/3`（三把真 Ark coding plan key），然后 Codex 复跑 `30 conc × 30s` + `MAX_REQUESTS=900` 并把数据补进同一份 release 文档的 "True Ark Rerun" 段——**不另开 commit 写新报告**，保持 release 文档单点真相。
-
-**H-7 (HIGH) — PG quota path saturation 比 V2 candidate 量级更高**: Mock 三档结果对照任务体 line 200 mock 门槛（`5xx ≤ 0.1% 且 P99 ≤ 100ms`）：
-
-| Profile | 5xx 占比 | P99 | 达成 mock 门槛 |
-| ---: | ---: | ---: | --- |
-| 50 conc | 0.07% ✓ | 639ms ✗ | 部分（5xx 过线，P99 超 6.4×） |
-| 100 conc | 42.7% ✗ | 1.052s ✗ | 否 |
-| 200 conc | 59.1% ✗ | 1.496s ✗ | 否 |
-
-即便 mock 端 < 1ms 响应、永不 429，gateway 自身在 100 conc 就被 PG 连接池 `pq: sorry, too many clients already` 击穿——这是**不依赖 Ark 的纯内部瓶颈**。`monthlyBudgetStatusSQL` 在 100 conc 已经平均 391ms（贡献绝大部分延迟）。任务体允许"未达则在报告里点明 follow-up"，所以本任务 review 不阻塞。
-
-**Decision 2026-05-23 (用户拍)**: v1 验收**不卡并发下限**（"上线优先"），只卡成功率 >80%。H-7 因此从"v1.0 ship 前决策点"**降级回 vNext 观察项 T-QUOTA-CACHE-PROBE**（任务名不变）；v1 上线报告里只需如实记录"v1 多 provider rerun 宣告档位 = N conc / X% 成功率"作为 §零A 第 1 条验收实证，PG 饱和上限作为 V2 V1.1 优化项。ADR 0004 已落实并发档位可降的接受标准（T-MP-DEEPSEEK 5 conc 兜底）。
-
-**M-27 (MEDIUM) — V2 candidate #3 表述误导**: 报告 V2 candidates 第 3 条 "the selector exhausts priority 1 before lower-priority fallback rows" 读起来像 selector bug，但按 ADR 0003 §Decision **priority-based fallback（429 触发切换）是 v1 设计**，mock 永不返 429 → priority 1 不轮换是 measurement-mode artifact 而不是 production defect。T-016 e2e (`credential_pool_e2e_test.go`) 在真 Ark 下三把 key 都出现已经反证。建议报告 V2 candidate #3 改写为："Mock observation: priority-based fallback (ADR 0003) means non-429 traffic concentrates on priority 1; this is expected by design. Round-robin or weighted variant is a v1.1+ topic, not a v1 defect." —— 顺手改，不开 commit。
-
-**M-28 (MEDIUM) — Mock 假 credential 清理证据缺失**: 报告 line 20-21 说 "Mock credential seed used a deterministic non-secret dev master key and three fake mock keys. These rows were removed after the mock run." 但没写**清理用的 SQL/命令**。`upstream_credentials` 表里残留 3 行假密文（dev master key 加密的 mock-ark fake key）是审计风险——v1.1 admin UI 上线后运维可能误以为真 Ark key。请在 release 文档附一句清理动作，例如 `DELETE FROM upstream_credentials WHERE provider IN ('mock-ark')` 之类的具体语句 + 跑完后的 `SELECT COUNT(*) FROM upstream_credentials WHERE provider != 'ark'` = 0 证据。
-
-**N-21 (NIT)**: `postgresURLWithApplicationName` 在 `cmd/admin/main.go:263-278` 和 `cmd/gateway/main.go:96-111` 是**逐字逐行**两份相同实现 (18 行 × 2)。T-CONC-DSN 任务体 scope 明确"不动 internal/db 接口"所以这次按 scope 拒抽到 internal 内是对的判断；v1.1 整理 `internal/dbutil`（或类似）时合并，不要现在拆。
-
-**N-22 (NIT)**: `postgresURLWithApplicationName` 没处理"DSN 已含 `application_name=X`"的情况——会变成两个 `application_name=` 参数。lib/pq 行为是后者覆盖前者（语义正确），但日志/`pg_stat_activity` 调试时会困惑。建议加一个 `strings.Contains(dsn, "application_name=")` 短路 fast-path，下次顺手。
-
-**与 R-CONC-RERUN-prop 闭环**:
-- Decision 1 (mock 形式) → mockark binary + Dockerfile.mockark + compose service `mock-ark` 三件齐 ✓
-- Decision 2 (并发档位) → 50/100/200 各 60s + 10s warmup 实际由 loadtest duration mode 跑通；500-spike 未做（如 propose 所拍）✓
-- Decision 3 (DSN 前置) → 独立 commit 9b44f98b 在 abc98a05 之前 ✓
-- Decision 4 (pg_stat_statements) → preload 启用 + 抓到 monthlyBudgetStatusSQL 数据 ✓
-- Decision 5 (报告位置) → 新 release 文档 v1-concurrency-rerun-2026-05-22.md ✓
-- N-19 (MAX_REQUESTS=900 具体数字) → 报告 line 22 "Planned paid Ark budget: `MAX_REQUESTS=900` for `30 x 30s`" 写进了 methodology ✓
-- N-20 (mockark docker build 路径) → `deploy/Dockerfile.mockark` 独立文件 ✓
-
----
-
-## R-CONC-DSN (T-CONC-DSN 实施, impl `9b44f98b` + status `5954afeb`)
-
-**结论: `[+] Approved`** — R-CONC-RERUN-prop Decision 3 批准的"前置 < 1h DSN 改动"严格落地。Scope 严守：gateway/admin DSN 拼 `application_name=` + `cmd/loadtest/README.md` 采样 SQL，无 internal/db 接口变化，无新依赖。`go vet` / `go test` 自报全绿。无 HIGH/CRITICAL；2 NIT 见 R-CONC-RERUN 条目（同一函数 N-21 / N-22，避免重复）。
-
-**正面信号**:
-1. ✅ Scope 严守 propose ack 边界：propose review 写明"仅追加 `application_name=` 与 README 采样 SQL，不动 dsn 解析逻辑、不改 internal/db 接口"——9b44f98b diff 完全匹配，没夹带任何重构或别的小修小补。
-2. ✅ `postgresURLWithApplicationName` 同时支持两种 DSN 形式：URL 形式 `postgres://...?sslmode=disable` 走 `?` / `&` 拼接，keyword 形式 `host=... dbname=...` 走空格拼接（`cmd/gateway/main.go:107-110`）；测试 `TestPostgresURLWithApplicationNameKeywordDSN` 独立覆盖了 keyword DSN 分支，避免 lib/pq 用户在 keyword DSN 配置下 silent fall through 到原始字符串。
-3. ✅ 采样 SQL 直接写进 `cmd/loadtest/README.md`（4 行查询、按 `application_name` + `state` 分组），R-CONC-RERUN 的 DB 观察段拿来即用，证明这份 DSN 改动确实有下游消费——不是空翻新 DSN 字段。
-4. ✅ Result 行格式正确：`5954afeb` 状态更新指向 `9b44f98b` 实施 commit + "all green, no deviation"，符合 CLAUDE.md §3.1 "完成后修改 status:todo → status:review，并在条目末尾追加 **Result**: PR/commit hash + 自测说明"。
-
----
-
-## R-CONC-RERUN-prop (T-CONC-RERUN PROPOSAL, commit `759458a0`)
-
-**结论: `[+] Approved`** — 5/5 决策直接答了 propose 问题，全部采纳，Codex 可开 T-CONC-RERUN 实施。Decision 3 的"前置 T-CONC-DSN 需 reviewer ack"在此明确批准（见下）。1 MEDIUM + 2 NIT 是实施期细节，不阻塞 propose 关门。
-
-**正面信号**:
-1. ✅ Decision 3 主动暴露 trade-off："this is a code change outside the measurement-only task, so it needs explicit review acknowledgement"——精准识别这是 propose 阶段唯一一个越出 measurement-only 边界的决策点，并把它单独拎出来要 ack，而不是默默吞下。**正式批准**：T-CONC-DSN 前置可做，但必须 (a) 是独立 commit、独立 Result 条目，**不并入 T-CONC-RERUN commit**；(b) 仅追加 `application_name=omnitoken-gateway` / `application_name=omnitoken-admin` 与 `cmd/loadtest/README.md` 采样 SQL，**不动 dsn 解析逻辑、不改 internal/db 接口**；(c) 跑通 `go vet` + `go test ./...` 后才能进 T-CONC-RERUN 跑测。
-2. ✅ Decision 2 主动拒绝 500-spike 给出 "acceptance gate asks for a stable curve, spike would blur startup surge / gateway headroom / quota SQL / client saturation" —— 是 v1 收官的正确取舍（先拿可信曲线再谈极限），把 500-spike 推到 V2 candidates 是体面的延迟做法。
-3. ✅ Decision 1 scope guardrail 写得非常显式："mock exists only for measurement. It must not change `internal/*`, `cmd/gateway`, or `cmd/admin`, and it must not become production routing code." —— 把 measurement-only 边界从任务体抄进 propose，避免后续诱惑越线。
-4. ✅ Decision 5 拒绝追加到 T-CONC-CHECK 报告的理由 "splitting the files keeps the comparison explicit and avoids rewriting the evidence trail behind R-CONC-CHECK" —— 把 R-CONC-CHECK 的证据链当不可变 history snapshot 处理，符合 review log 一旦签 approve 不回改的范式。
-5. ✅ Decision 4 operational note 没回避难处："enabling the extension requires a Postgres restart and may require recreating the local compose volume if preload state is stale. The report should state the exact reset/restart path used." —— Codex 显式认到了 PG preload 修改的运维代价，让 reviewer 看到 trade-off 而不是只看到选项。
-
-**M-26 (MEDIUM)**: Decision 4 提到 "recreating the local compose volume" 但没说**重建 volume 会清空已 seed 的 3 把 Ark credential**。如果跑测前真的需要 recreate `postgres_data` volume，必须按 `migrate → seed → credential-seed → gateway restart` 顺序重做，且 `OMNITOKEN_MASTER_KEY_FILE` 必须与 T-016 seed 时是同一把（master key 改了，原密文解不开）。建议 propose 实施时在报告 "methodology / setup" 段写明这一前置检查（一行即可：是否 reuse 现有 volume / 若 recreate 则记录重新 seed 的命令序列与 master key file path 不变性证明），避免事后报告里出现"3 把 key 只看到 1 把出现在 usage_events"这种被 reseed 顺序错误污染的数据。
-
-**N-19 (NIT)**: Decision 2 真 Ark 一档 "30 concurrency x 30s with MAX_REQUESTS capped to the observed request budget" —— 实施时请把"observed request budget"在报告 methodology 段写成具体数字（例如 `MAX_REQUESTS=900`），而不是留作 ambient 描述，让后续 V2 candidate 与 T-QUOTA-CACHE-PROBE 复算成本时可以直接读出。
-
-**N-20 (NIT)**: Decision 1 说 mock-ark 是 "small standard-library Go binary under `cmd/loadtest/mockark`"，但没说 docker-compose 怎么 build 它——当前 `deploy/docker-compose.yml` 没有 `Dockerfile.mockark`，gateway/admin/migrate 各有独立 Dockerfile。实施时请 propose 一句"复用 omnitoken-gateway:local 多 stage build target / 新增 Dockerfile.mockark / 直接 image: golang:alpine + command 跑 go run"中的哪个方案，避免 R-CONC-RERUN 时再争。任务体本来就把 `deploy/docker-compose.yml` 列为允许改动范围，这只是路径选择不是范围扩张。
-
-**与 R-CONC-CHECK / R-EXT-2026-05-21 闭环**:
-- H-3 (DSN application_name 失效) 通过本轮前置 T-CONC-DSN 直接清账，R-CONC-CHECK 报告的 caveat 不再继续传。
-- H-4 (单 key 17.1% 成功率) 通过 Decision 2 真 Ark 30×30 多 key 池档位回答，**目标 >80%** 与 R-CONC-CHECK 对照（T-016 实施已经在 e2e 测了三把 key 均出现，本轮是并发态二次确认）。
-- T-QUOTA-CACHE-PROBE 的 baseline 输入靠 Decision 4 的 pg_stat_statements + Decision 2 的 mock 高并发档共同给——拿到 mean/max 数值即可立任务，不在本任务做优化。
-- 外部专家 R-EXT #1 (quota SQL 推测 CRITICAL) 经本轮真测后才能决定升级 / 维持 vNext 观察。
-
-**Codex 下一步**: T-CONC-RERUN 可开实施，5 个 propose 决策点视为已锁。T-CONC-DSN 走独立 commit 在前；M-26 / N-19 / N-20 在 implementation review (R-CONC-RERUN) 时核。
-
----
-
-## R-016 (T-016 实施, impl `c6ee841d` + e2e `8544ce82` + status `9a219c2a`)
-
-**结论: `[+] Approved`** — T-016 接受标准 12/12 全部达成，R-016-prop 留的 4 条债（H-5/M-24/M-25/N-15）+ R-EXT-2026-05-21 折进来的 T-NIT-SSE-CLOSE 全部落地且都有显式断言，无 CRITICAL/HIGH/MEDIUM。3 NIT 不阻塞。v1 最关键的"性价比资源 = 多 upstream key 池"角到位，§零A 第 1 条落地完成。
-
-**正面信号**:
-1. ✅ **R-016-prop H-5 教科书级实现**：`copyStreamingResponse:384-386` 在 `n>0` 时 `result.final = true`，`doWithRetries:278` 重试条件包含 `!result.final` —— n>0 即标 final, 无论是否伴 err 都不切。`retry_test.go:97-126 TestArkChatProxyDoesNotRetryPartialFirstRead` 用 mock 返回 `(5 bytes, io.ErrUnexpectedEOF)` 正面断言 `transport.calls == 1`、`body == "part\n"`，三个 assertion 全部命中 R-016-prop H-5 的原文要求。
-2. ✅ **T-NIT-SSE-CLOSE 三分支全对称**：`readWithIdle` pre-flight ctx.Done (`proxy.go:433-436`) / 阻塞中 ctx.Done (`456-458`) / timer 触发 (`459-462`) 三个退出分支统一 `_ = body.Close()`。两条 goroutine 回归测试 (`retry_test.go:128-184`) 用 `runtime.NumGoroutine() <= before+2` 在 100ms 内回归基线 —— 完整对齐 T-NIT-SSE-CLOSE 接受标准。
-3. ✅ **M-24 / M-25 ops 文档极简但精确**：`docs/operations/master-key-rotation.md` 20 行覆盖两个核心问题——v1 不 unlink/zeroize 取舍 + 4 步 production rotation 流程 + startup-only reload 模型；`deploy/docker-compose.yml` 在 `credential-seed` 与 `gateway` 两处加注释强调"restart gateway after seed change"，运维不会踩坑。
-4. ✅ **N-15 双重防漏 Ark body**：`logCredentialRetry` 只输出 `credential_id/attempt/code/upstream_status`，不附响应体；`TestLogCredentialRetryOmitsUpstreamBody` 直接断言 `not Contains("quota_owner")`；`TestArkChatProxyRetries429WithNextCredential` 在 mock 上游 429 body 里塞 `{"quota_owner":"must-not-leak"}` 后再断言响应体不漏 —— log 路径 + client 响应路径都被锁死。
-5. ✅ **`WithUpstreamCredentialRecorder` 的指针式设计**：`httpx/virtual_model.go:36-63` 用 mutex 包裹可变 id 解决 "ctx 不可变 vs retry 后归因要更新" 的痛点，proxy retry 切换时 `SetUpstreamCredentialID` 改指针指向值，middleware 收尾读到最终成功的 credential id — 归因到"成功 credential"是正确的语义（429 失败 credential 走 WARN log 而非 usage_events）。`credential_pool_e2e_test.go:198` 用真 DB 聚合 `upstream_credential_id` 验三把 key 全部出现，端到端断言。
-
-**T-CONC-COST-ATTR 合并完成**:
-- migration `000012_upstream_credentials_v1.up.sql:32-33` 把 `usage_events.model_routed text NOT NULL DEFAULT ''` 合并到 T-016 同一 migration，无新增 0013（达成 R-016-prop 实现 notes 要求）。
-- `cmd/admin/main.go:695/819/831` 三处 SQL 一并切 `COALESCE(NULLIF(ue.model_routed, ''), NULLIF(ue.model_requested, ''), 'unknown')`；`cmd/admin/main_test.go:715/921` 测试断言同步更新。
-- `cmd/gateway/main.go:273-278` Decision 1（ctx key 新增 `WithModelRouted` 不动 `WithVirtualModel` 语义）落实，虚拟路径写 `RealModel` / 非虚拟路径写 `modelRequested`，符合 T-CONC-COST-ATTR propose 决策 1 推荐方向。
-- **T-CONC-COST-ATTR 任务体可关，无单独实施 commit 必要**。建议 TASKS.md 把它合到 T-016 done 速查表，状态标 ✅。
-
-**N-16 (NIT)**: `internal/credentials/store_postgres.go:135` `loadCredentialsSQL` 硬编码 `WHERE provider = 'ark'` 是 v1 范围正确取舍（任务体明确"多 provider 推 v1.1"），但没注释。多 provider 启动时容易当成 bug 排查很久。可加一行注释 `-- v1: ark-only; expand here for multi-provider`。
-
-**N-17 (NIT)**: `cmd/gateway/main.go:107-110` 当 master key 加载失败但 `cfg.Ark.Enabled()` 时静默 fallback 到 `OMNITOKEN_ARK_API_KEY` 单 key 路径，log level 是 Warn。这在生产环境是合理的 degraded mode，但日志中没说明 "for which reason"（key file missing vs hex decode failed vs invalid length）。可把 LoadMasterKey 的 err 也带进 Warn (现有 line 111 已带，line 108 没带)，让运维一眼分清是哪种失败。
-
-**N-18 (观察, 不立任务)**: usage 归因到"最终成功 credential"是正确语义，但运维想知道"哪把 key 触发 429"只能看 WARN log（grep）。如果 v1.1 admin UI 引入"按 credential 健康度排序"视图，可考虑加 `usage_events.upstream_credential_attempts jsonb` 或独立 `credential_retry_events` 表。**纯设计选项，不预判 v1.1 路线**。
-
-**与 R-EXT-2026-05-21 闭环**: 外部专家 #2（SSE goroutine 泄漏 OOM CRITICAL）被 R-EXT 降级为 NIT 后通过 T-NIT-SSE-CLOSE 完成兜底；专家 #3（单 key 17.1% 成功率）通过本 T-016 完整解决；专家 #4（model_routed 归因）通过 T-CONC-COST-ATTR 合入解决；专家 #6（KMS 主密钥）的 v1 部分通过 Decision 1 file-first + ops 文档解决，KMS 留 vNext。本轮路线判断（"3 命中已跟踪 / 1 NIT / 1 推测降级 / 1 读错代码"）经实测验证全部到位。
-
----
-
-## R-016-prop (T-016 PROPOSAL, commit `fd9ce8d8`)
-
-**结论: `[+] Approved`** — 5/5 决策直接答了 propose 问题，方向全部采纳。Codex 可开 T-016 实施。1 HIGH + 2 MEDIUM + 1 NIT 是实施期的细节边界，不阻塞 propose 关门。
-
-**正面信号**:
-1. ✅ Decision 4 主动核了现有 proxy 行为并据实写进 PROPOSAL：`current proxy already delays downstream header write until after the first SSE read succeeds`。核对 `internal/proxy/proxy.go:293→301-303` 属实（`readWithIdle` 先读，`n>0 && err==nil` 才 `WriteHeader`）。这意味着 T-016 SSE 重试状态机改动量比预期小，retry 包在 read-buffer-first 这段之前/中即可。
-2. ✅ Decision 1 给的 "file-first + env-fallback" 直接命中我 propose 的 docker secret 方向，同时保留 env 给单测/local smoke，没多写 KMS 范围。`reads once at startup, validates length, keeps only the decoded bytes in memory` + "logs/error 不打路径内容/key value/前缀"两层 guardrail 到位。
-3. ✅ Decision 2 显式拒绝 SIGHUP 给出 "Linux-centric / Windows dev host 难测" 理由，与 AGENTS.md §3.3a 测试环境约束一致；admin CRUD UI / SIGHUP / PG NOTIFY 全部清晰推到 v1.1，不在 T-016 范围越权。
-4. ✅ Decision 3 分层做得干净：hot-path 内存 degradation（30s TTL, WARN log + credential_id only）vs DB `status` / `health_state`（operator-controlled, persisted）。拒绝指数退避给出 "2-3 keys, 过度 quarantine 风险" 理由，是 v1 规模下的正确取舍。
-5. ✅ 实现 notes 主动提 "T-016 + T-CONC-COST-ATTR 合并 migration"（任务体接受标准早有要求，证明 Codex 真读了）+ "expose deterministic clock in tests so 30s degradation can be asserted without sleeps"（工程素养，避免单测 flake）。
-
-**H-5 (HIGH, 实施期边界)**: Decision 4 SSE retry 状态机没明确 **partial-first-read 情形**——即首次 `readWithIdle` 返回 `n>0 && err != nil`（拿到部分字节但同时报错）。按 `proxy.go:294` 现有判断 `if err != nil && n == 0` 才回错，n>0 即使 err != nil 也会继续走 line 301-303 写 header + 发 partial bytes 给客户端。这种情况下**不能切 credential**（已经动到客户端），属于 PROPOSAL 第 5 步 "once any chunk written, never switch" 的隐含分支。实施 retry 状态机时必须显式：**n>0 即标 final，无论是否伴随 err**。retry_test.go 加一条断言：mock upstream 首 read 返回 `(5_bytes, io.ErrUnexpectedEOF)` → 不切，发出 partial bytes，标 final 返回。
-
-**M-24 (MEDIUM)**: Decision 1 没说 "读完 master key file 后是否 unlink/zeroize 进程内存"。v1 不强求 unlink（docker secret 是只读 tmpfs 挂载，重启还要读，主动 unlink 反而坏运维），但要在 **`docs/operations/master-key-rotation.md`**（任务体已要求新增）写明 v1 取舍："依赖 docker secret 只读挂载 + 进程内存生命周期即可，不主动 unlink；rotation 走 secret 重挂 + gateway restart"。这一句不展开 KMS 是合理的，但必须写。
-
-**M-25 (MEDIUM)**: Decision 2 "startup load into memory, restart-based reload" 意味着 ops 流程是 "seed/migration 添加新 credential → restart gateway 才生效"。要在 **`deploy/docker-compose.yml` 注释 + `docs/operations/master-key-rotation.md` 或单独的 credential ops 文档**写明这一点，避免运维以为改了 DB 就生效。
-
-**N-15 (NIT)**: Decision 3 WARN log 写 "credential id only"，但要在实现时核对：429 切换路径的日志/error envelope **不附带 Ark 上游响应 body**（Ark 429 body 可能含运维联系信息，偶发包含 quota_owner 等可识别字段；与 §十一安全基线一致，不漏到客户端）。
-
-**与外部专家分析（R-EXT-2026-05-21）的交叉**:
-- Decision 1 直接对应外部专家 #6（KMS / docker secret 优于裸 env），结论一致。
-- Decision 4 SSE retry 边界对应外部专家在 #3 提的 "流式失败重试要在第一 chunk 之前完成"，结论一致。
-- 外部专家 #2（SSE goroutine 泄漏 OOM）已在 R-EXT-2026-05-21 降级为 NIT，对应 **T-NIT-SSE-CLOSE 顺带项**（在我刚加进 T-016 任务体的接受标准里，Codex 写 PROPOSAL 时还看不到）。Codex 在实施 T-016 proxy retry 改动时一起做：补 `case <-ctx.Done():` 分支 `_ = body.Close()`，加一条 goroutine 回归断言。
-
-**Codex 下一步**: T-016 可开实施。propose 关门，5 个 propose 决策点视为已锁定；H-5 / M-24 / M-25 / N-15 在 implementation review (R-016) 时核。注意：T-016 任务体在 propose 之后追加了 **T-NIT-SSE-CLOSE** 顺带项（见 TASKS.md 接受标准），是 R-EXT-2026-05-21 外部专家分析触发的，一起做即可。
-
----
-
-## R-EXT-2026-05-21 外部专家分析核验（analysis_results.md, Gemini brain）
-
-**结论: `[+] 6 条诊断 → 3 命中已跟踪 / 1 NIT 顺带做 / 1 推测降为观察项 / 1 读错代码`**。专家给的优先级表与我们的 v1 路线**不冲突也不需要调整 ETA**。已在 TASKS.md 新增 1 条观察任务 + 1 条 T-016 顺带 NIT。
-
-**正面信号**:
-1. ✅ M-23 model_routed 成本归因脱节 — 与 R-CONC-CHECK M-23 一致，方向校准了。
-2. ✅ H-3 DSN application_name 失效 — 与 R-CONC-CHECK H-3 一致。
-3. ✅ T-016 单 key 17.1% 成功率问题诊断与 ADR 0003 一致，且补提了"SSE 首 chunk 之前完成重试"细节（T-016 propose 决策点 4 已覆盖）。
-
-**核验记录（专家 6 条 vs 实际代码/数据）**:
-
-| # | 专家声称 | 核验 | 结论 |
-|---|---|---|---|
-| 1 | quota SQL 双 LEFT JOIN 在 1000 RPS 下 PG CPU 100% → CRITICAL | SQL 现状属实（`internal/quota/store_postgres.go:48`），但 R-CONC-CHECK 50×50 实测 gateway **0 panic / 0 5xx**，瓶颈是 Ark 429 不是 PG。1000 RPS 是推测 | 降为 vNext 观察项 **T-QUOTA-CACHE-PROBE**（先量再优化） |
-| 2 | SSE `readWithIdle` ctx.Done 分支未关 body → goroutine 泄漏 OOM CRITICAL | 读错代码：外层有 `defer resp.Body.Close()` (`proxy.go:175`)；`resultc` 是 buffered size 1 (`proxy.go:356`)；net/http transport 在 ctx 取消时也会关 body。压测 2500 请求 0 OOM | 降为 NIT，作为 **T-016 顺带项**：补 `case <-ctx.Done():` 分支显式 `body.Close()` 做对称清理 |
-| 3 | 单 key 429 占 82.9% | 与 R-CONC-CHECK H-4 一致 | 已在 T-016 in-progress |
-| 4 | model_actual 污染成本归因 | 与 R-CONC-CHECK M-23 一致 | 已在 T-CONC-COST-ATTR todo |
-| 5 | DSN 无 application_name | 与 R-CONC-CHECK H-3 一致 | 已在 vNext T-CONC-DSN |
-| 6 | 主密钥 env 变量泄漏风险 | 与 T-016 propose 决策点 1 一致（env vs docker secret file） | 已在 T-016 propose 待 Codex 拍板 |
-
-**N-14 (NIT)**: 专家在 #1 给出的 Redis + Lua 原子扣减方案细节是有价值的设计参考，但**违反"底座先做最简"原则**。如果未来 T-QUOTA-CACHE-PROBE 量出 PG 真是瓶颈，把这段方案搬进对应 ADR 即可，**当前不立 ADR**。
+11. ✅ **go vet + 全量测试 green + coverage 67.1%**。
 
 ---
 
@@ -556,21 +303,3 @@ seed SQL 已有 1 admin + 1 viewer + 9 member，`GET /api/admin/users` 可发现
 
 ---
 
-## R-CONC-CHECK (T-CONC-CHECK 实施, 报告 `04fff8a7`, status `c6c4262f`)
-
-**结论: `[+] Approved with follow-ups`** — 任务形式上完成：报告交付 + V2 candidates 主动列 3 条 + 严格"不修代码"。但**baseline 数据不完整**且**抓到底座成本归因隐患**。T-CONC-CHECK 本身可关；需起 3 个 follow-up（M-23 / H-3 / H-4），其中 M-23 阻塞 Phase 3-A 商业化场景，建议先开。
-
-**正面信号**:
-1. ✅ Codex 严格守"只测量不修"边界：所有发现写进报告 §V2 Candidate Fixes，未单边改 DSN / 加索引 / 调连接池 —— 任务体接受标准末条达成。
-2. ✅ Preflight 设计严谨：跑前先打 1 发 chat-fast 看实际下游模型，**抓出了 `virtual_models` 表 vs `usage.model_actual` 的不一致**（实质是 Ark backend 模型名披露，gateway 转发逻辑经 `cmd/gateway/main.go:235` + `internal/usage/parser.go:38,41` 证实正确）；同时跑前清零 demo admin 的 monthly budget，避免 quota 抑制 mask 上游真实行为，实验设计强。
-3. ✅ Gateway 自身韧性: 50 并发 × 50 真 chat 跑下来 **0 panic / 0 5xx / 0 timeout / 0 client error**，428 成功请求 P95 1.798s / P99 2.415s（含 Ark 上游往返）—— `internal/proxy` SSE 反代 + budget/auth/audit 中间件全链路在压力下没出 race / 没崩。
-4. ✅ 报告透明披露所有偏差：vegeta 不可用 → 临时 Go driver（已标出）/ DB sampling filter 失效（peak=0）→ 主动说明"not proof of zero connections"；healthz 实际 996.2 RPS vs 配置 1000 RPS 也照实记。无"成功率掩饰"的迹象。
-5. ✅ V2 candidate fixes 三条都精准对症：upstream-aware load profile（解 H-4）/ DSN `application_name` 显式设置（解 H-3）/ loadtest summary 加 429 计数（提升可观测性）—— 不是泛泛的"以后再说"，是可直接立任务的清单。
-
-**M-23 (MEDIUM, 升级建议)**: `model_actual = deepseek-v4-pro` ≠ gateway 重写后 `kimi-k2.6` —— 经查 `cmd/gateway/main.go:235` (`payload["model"] = res.RealModel`) + `internal/usage/parser.go:38` (`ModelActual = response.Model`)，**gateway 转发逻辑正确**，这是 Ark 上游响应里自报的 backend 模型名（与 memory `project_omnitoken_ark_coding_plan` 中"5 模型共用一把 key"的设计契合）。**但**：`cmd/admin/main.go:667/791/803` admin overview 全部按 `model_actual` 聚合成本/请求数 → 用户问"我用了多少 kimi-k2.6"会被答"deepseek-v4-pro"。**这是 OmniToken 底座"性价比资源"角的成本归因路径污染**。建议起 **T-CONC-COST-ATTR**：(a) 复现 Ark 行为并补 ADR 记录预期；(b) `usage_records` 加 `model_routed`（gateway 转发出的模型名，从 `httpx.WithVirtualModel` ctx 取）作为归因 ground truth；(c) admin overview 默认按 `model_routed` 聚合，`model_actual` 保留供审计。**建议 Phase 3-A 之前做**。
-
-**H-3 (HIGH)**: 任务体接受标准第 3 项"DB 连接峰值"形式上未达成（filter `application_name LIKE 'omnitoken%'` peak=0），Codex 已透明说明。建议起 **T-CONC-DSN**：在 `cmd/gateway/main.go` / `cmd/admin/main.go` 的 DSN 构造处显式拼 `application_name=omnitoken-gateway` / `application_name=omnitoken-admin`，并在 `cmd/loadtest/README.md` 把采样 SQL 一并写好。**不阻塞 Phase 3-A**，但底座可观测性短板要补，建议穿插做。
-
-**H-4 (HIGH)**: 2500 真跑 83% 是 Ark 429 → **v1 真实并发上限 baseline 实际上没拿到**。任务体目标"测 v1 真实并发上限"被 Ark rate limit 吃了。Codex 结论"primary bottleneck is Ark upstream rate limiting"诚实，但用户层面"v1 上线后能扛多少 RPS"这个问题没答案。建议起 **T-CONC-RERUN**：(a) mock upstream 跑 50 并发 / 100 并发 / 200 并发 各 1 分钟，量 gateway 真实承载；(b) 真 Ark 跑低 RPS 长时间（如 3 RPS × 600s = 1800 请求，成本约 9 RMB），定位 Ark 429 阈值。**Phase 3-A 启动不强依赖此数**（Agent 适配是离线配置写入，不打 Ark）—— 可推到 v1 真实流量进来前做。
-
-**N-13 (NIT)**: 报告第 30-36 行解释 `model_actual = deepseek-v4-pro` 那一段语义偏弱（"routing target evidence is the virtual_models row"），未点透"这是 Ark backend 模型名披露"。可在后续报告版本加一句"Ark coding plan 5 模型 backend 推理可能共用 —— 这不是 gateway bug"。

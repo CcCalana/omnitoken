@@ -47,12 +47,29 @@
 | `docs/references/agent-adapter/agent-adapter-projects-reference.md` | tingly-box 等参考项目分析 |
 | `docs/references/agent-adapter/tingly-box-architecture-reference.md` | tingly-box 架构速查 |
 
-## 历史归档 (docs/archive/)
+## 评审归档 (docs/reviews/)
 
-| 目录 | 内容 | 何时查阅 |
+| 文件 | 内容 | 何时查阅 |
 |---|---|---|
-| `docs/archive/proposals/` | 16 个已完成任务的设计提案 | 回溯某任务的原始设计讨论 |
-| `docs/archive/reviews/` | 4 个历史 review 归档 | 查旧 review 结论 |
-| `docs/archive/releases/` | 5 个 v1 release 报告 + 并发摸底报告 | 查 v1 压测数据 |
+| `docs/reviews/archive.md` | R-001 ~ R-007 (Phase 0/1) | 最早期的 review |
+| `docs/reviews/archive-2026-05-12.md` | R-006b-prop ~ R-006d (Demo-Ready) | Phase 1 收尾 |
+| `docs/reviews/archive-2026-05-19.md` | R-008 ~ R-005b-fix (Phase 2-A + 2-B) | Phase 2 底座三角 |
+| `docs/reviews/archive-2026-05-20.md` | R-INT ~ R-040 (v1 联调 + Phase 3-A Adapter) | v1 release + Agent 适配 |
+| `docs/reviews/archive-2026-06-02.md` | R-045-prop ~ R-CONC-CHECK (Phase 3-A + v1 关键实施 + 并发摸底) | Phase 3-A + v1 并发/多 provider/credential |
+| `REVIEW.md` (根目录) | vNext 路线 review (R-100 起) + 未解决项摘要 | 当前活跃 review |
+
+## 任务归档 (docs/tasks/)
+
+| 文件 | 内容 |
+|---|---|
+| `docs/tasks/archive-2026-06-02.md` | Phase 3-A / v1 release / v1 关键实施 / vNext 已完成任务体 |
+| `TASKS.md` (根目录) | CHANGELOG + 速查表 + vNext 活跃任务体 |
+
+## 发布报告 (docs/release/ + docs/archive/releases/)
+
+| 文件 | 内容 |
+|---|---|
+| `docs/release/v1-quota-baseline-2026-06.md` | T-QUOTA-CACHE-PROBE PG 额度查询性能基线 |
+| `docs/archive/releases/` | v1 release 报告 + 并发摸底报告 |
 
 > 归档文档均为冻结历史记录，日常不读。git log 可追溯，archive 只是就近备查。
