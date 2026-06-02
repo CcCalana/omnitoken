@@ -269,7 +269,11 @@ services:
       admin:
         condition: service_started
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:${NGINX_HTTP_PORT:-80}/healthz"]
+      test:
+        [
+          "CMD-SHELL",
+          "if [ -n \"$${SSL_CERT_PATH}\" ] || [ -n \"$${SSL_KEY_PATH}\" ]; then wget --no-check-certificate -q -O - https://127.0.0.1:$${NGINX_HTTPS_PORT:-443}/healthz; else wget -q -O - http://127.0.0.1:$${NGINX_HTTP_PORT:-80}/healthz; fi"
+        ]
       interval: 5s
       timeout: 3s
       retries: 20
