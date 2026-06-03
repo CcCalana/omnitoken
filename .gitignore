@@ -21,7 +21,6 @@ docs/archive/
 cmd/e2e-runner/
 cmd/loadtest/
 test/e2e/
-testdata/golden/
 scripts/e2e_verify.py
 scripts/run_e2e.py
 
