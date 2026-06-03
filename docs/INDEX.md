@@ -6,23 +6,11 @@
 
 | 文件 | 用途 |
 |---|---|
-| `CLAUDE.md` | Claude 工作守则，含角色边界、任务格式、评审标准（本地开发用） |
-| `AGENTS.md` | Codex 工作守则，实施铁律、测试义务、commit 规范（本地开发用） |
 | `README.md` / `README.zh-CN.md` | 公开仓库首页（中英双版） |
 | `THIRD_PARTY_LICENSES.md` | 第三方依赖许可证台账 |
 | `Makefile` | 开发命令入口（up / test / lint / docker-build 等） |
 
-> `TASKS.md`、`REVIEW.md`、`规划.md`、`docs/reviews/`、`docs/tasks/`、`docs/proposals/` 为内部协作文档，不在公开仓库中。
-
-## 架构决策记录 (docs/adr/)
-
-| 编号 | 主题 | 状态 |
-|---|---|---|
-| ADR 0001 | 技术栈定版 Go 1.23 / PG 16 / Redis 7 / NATS | 活跃 |
-| ADR 0002 | 单仓库布局 (monorepo) | 活跃 |
-| ADR 0003 | 多 key 池优先级与 v1 拉回决定 | 活跃（T-016 来源） |
-| ADR 0004 | Multi-provider 池 v1（DeepSeek 接入） | 活跃（T-MP-DEEPSEEK 来源） |
-| ADR 0005 | Admin 凭据 CRUD (Min) + 热加载 | 活跃（T-016b-MIN 来源） |
+> 内部协作文档（`CLAUDE.md`、`AGENTS.md`、`TASKS.md`、`REVIEW.md`、`规划.md`、`docs/adr/`、`docs/reviews/`、`docs/tasks/`、`docs/proposals/`）仅存于本地工作树，不在公开仓库中。
 
 ## 运维与操作 (docs/operations/ + docs/runbooks/)
 

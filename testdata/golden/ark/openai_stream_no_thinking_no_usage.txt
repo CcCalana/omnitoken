@@ -1,9 +1,0 @@
-_meta: captured 2026-05-11T01:53:19Z, elapsed 1790ms, model alias ark-code-latest -> glm-5.1
-_meta: request body = {"model":"ark-code-latest","messages":[{"role":"user","content":"Output the single word: pong. No reasoning."}],"stream":true,"max_tokens":200,"thinking":{"type":"disabled"}}
-_meta: demonstrates that without stream_options.include_usage the upstream NEVER emits usage; gateway must inject it.
-
-data: {"choices":[{"delta":{"content":"pong","role":"assistant"},"index":0}],"created":1778464399,"id":"02177846439797655eca07af4019b515b4a7e2058cdd0672547a9","model":"glm-5.1","service_tier":"default","object":"chat.completion.chunk","usage":null}
-
-data: {"choices":[{"delta":{"content":"","role":"assistant"},"finish_reason":"stop","index":0}],"created":1778464399,"id":"02177846439797655eca07af4019b515b4a7e2058cdd0672547a9","model":"glm-5.1","service_tier":"default","object":"chat.completion.chunk","usage":null}
-
-data: [DONE]

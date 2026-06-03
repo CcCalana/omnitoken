@@ -8,10 +8,22 @@ gateway
 # Internal planning docs (not for public repo)
 TASKS.md
 REVIEW.md
+CLAUDE.md
 AGENTS.md
+规划.md
 docs/reviews/
 docs/tasks/
 docs/proposals/
+docs/adr/
+docs/archive/
+
+# Internal test tooling (not for public repo)
+cmd/e2e-runner/
+cmd/loadtest/
+test/e2e/
+testdata/golden/
+scripts/e2e_verify.py
+scripts/run_e2e.py
 
 # Local env
 .env
