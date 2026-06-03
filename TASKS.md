@@ -53,7 +53,8 @@
 | 06-02 | **T-019 任务体下发**。admin 用户创建 API + 前端新建用户 modal + virtual key 生成/展示/复制。propose 跳过 |
 | 06-02 | **T-019 impl (`8148f34`) → R-T019 Approved**。788 行全栈：POST /api/admin/users + RBAC + 事务创建 + 前端 modal + Key 展示/复制。6 handler + 3 store 测试。admin 67.1%。零 issue |
 | 06-02 | **T-020 任务体下发**。一键部署 compose：~10 service + nginx 模板化 + SSL 可选 + .env 驱动 + 零命令行操作。propose 跳过 |
-| 06-02 | **T-020 impl (`433c7b1`) → 退回重验**。compose + nginx template + .env.example 已写好，但 `docker compose up` 未实际跑通（Docker 代理阻断）。需 Docker 环境验证全部 service healthy + admin 登录 + gateway 转发 |
+| 06-02 | **T-020 impl (`433c7b1`) → 退回重验**。compose + nginx template + .env.example 已写好，但 `docker compose up` 未实际跑通。需 Docker 环境验证 |
+| 06-03 | **T-020 v2 (`aacce11`) → R-T020 Approved**。nginx root + SSL healthcheck 修复 + N-42 关闭。Docker AC 5/5 实测通过。全部 10 AC 达成 |
 
 ## 已完成任务速查 (详见 git log)
 
@@ -295,16 +296,9 @@ Result: `8148f34` — cmd/admin 67.1% (HEAD baseline 66.4%); create-user + key h
 
 ---
 
-## T-020 一键部署 Compose [phase:deploy] [owner:codex] [status:review] [started:2026-06-02 11:01 CST]
+## T-020 一键部署 Compose [phase:deploy] [owner:codex] [status:done] [started:2026-06-02 11:01 CST]
 
-Result: `433c7b1` — compose + nginx template + .env.example + admin-password init delivered; compose config valid, Go tests green. **⚠ Docker compose up 未实际跑通**（Docker Desktop 代理阻断镜像拉取），需退回重验。
-
-**验证缺口**（必须 Docker 实测）:
-- [x] `docker compose -f docker-compose.prod.yml up -d` 全部 service healthy
-- [x] `curl http://localhost/healthz` → 200
-- [x] 浏览器登录 `admin@democorp.local` / `ADMIN_INITIAL_PASSWORD` → 成功
-- [x] Users tab 新建用户 → 生成 Key → `curl` 调 gateway → 200
-- [x] SSL 配了证书路径时 HTTPS 可用
+Result: `aacce11` — v2: nginx root + SSL healthcheck fix + N-42 closed. Docker AC 5/5 passed. All 10 ACs met. `f4c1b18` status.
 
 **目标**: 用户只需编辑 `.env` 填入上游 key → `docker compose up -d` → 打开浏览器访问 admin → **所有后续操作在网页完成**（创建用户、生成 key、管理 credentials、看审计日志）。不碰命令行、不碰 SQL、不写 nginx config。
 
@@ -377,16 +371,16 @@ SSL_KEY_PATH=                    # /path/to/privkey.pem
 ```
 
 **接受标准**:
-- [ ] `cp .env.example .env` + 填 3 个必填值 + `docker compose -f docker-compose.prod.yml up -d` 即可启动
-- [ ] 所有 service healthy（`docker compose -f docker-compose.prod.yml ps`）
-- [ ] 浏览器访问 admin → 登录页 → 用 `admin@democorp.local` / `ADMIN_INITIAL_PASSWORD` 登录成功
-- [ ] Users tab → 新建用户 → 生成 Key → 复制成功
-- [ ] 用生成的 virtual key 调 gateway → 200 响应
-- [ ] SSL 可选：配了 `SSL_CERT_PATH`/`SSL_KEY_PATH` 则 nginx 走 HTTPS + HTTP→HTTPS redirect；不配则纯 HTTP
-- [ ] DOMAIN 可选：配了则 nginx `server_name` 用该域名；不配则 `server_name _`
-- [ ] nginx 配置由 env var 驱动：不产生用户需手动编辑的 nginx conf 文件
-- [ ] README.md 快速部署段 ≤ 10 行
-- [ ] `docker compose down -v` 清理所有数据
+- [x] `cp .env.example .env` + 填 3 个必填值 + `docker compose -f docker-compose.prod.yml up -d` 即可启动
+- [x] 所有 service healthy（`docker compose -f docker-compose.prod.yml ps`）
+- [x] 浏览器访问 admin → 登录页 → 用 `admin@democorp.local` / `ADMIN_INITIAL_PASSWORD` 登录成功
+- [x] Users tab → 新建用户 → 生成 Key → 复制成功
+- [x] 用生成的 virtual key 调 gateway → 200 响应
+- [x] SSL 可选：配了 `SSL_CERT_PATH`/`SSL_KEY_PATH` 则 nginx 走 HTTPS + HTTP→HTTPS redirect；不配则纯 HTTP
+- [x] DOMAIN 可选：配了则 nginx `server_name` 用该域名；不配则 `server_name _`
+- [x] nginx 配置由 env var 驱动：不产生用户需手动编辑的 nginx conf 文件
+- [x] README.md 快速部署段 ≤ 10 行
+- [x] `docker compose down -v` 清理所有数据
 
 **不在范围**:
 - ❌ 多实例/高可用

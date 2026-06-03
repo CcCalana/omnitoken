@@ -57,7 +57,7 @@
       </button>
       <button class="nav-link" type="button" data-tab="credentials">
         <span class="nav-icon" aria-hidden="true">K</span>
-        <span>Upstream Credentials</span>
+        <span>上游凭据管理</span>
       </button>
       <button class="nav-link" type="button" data-tab="audit">
         <span class="nav-icon" aria-hidden="true">◇</span>
@@ -292,8 +292,8 @@
 
     <section id="view-credentials" class="view">
       <div class="view-intro">
-        <p>Provider keys are stored encrypted. Additions and disables are picked up by gateway polling.</p>
-        <button class="primary-button" type="button" data-action="open-credential-modal">Add</button>
+        <p>上游凭据加密存储，新建和禁用操作会被 Gateway 自动热加载。</p>
+        <button class="primary-button" type="button" data-action="open-credential-modal">新建</button>
       </div>
       <div id="credentials-alert" class="alert is-hidden"></div>
 
@@ -302,8 +302,8 @@
           <table class="audit-table">
             <thead>
               <tr>
-                <th>Provider / Alias</th>
-                <th>Priority</th>
+                <th>Provider / 别名</th>
+                <th>优先级</th>
                 <th>Base URL</th>
                 <th>Status</th>
                 <th>Health</th>
@@ -311,7 +311,7 @@
               </tr>
             </thead>
             <tbody id="credentials-table-body">
-              <tr><td colspan="6" class="table-state">Waiting for credentials</td></tr>
+              <tr><td colspan="6" class="table-state">等待加载凭据</td></tr>
             </tbody>
           </table>
         </div>
@@ -320,8 +320,8 @@
       <div id="credential-modal" class="modal-backdrop is-hidden" role="dialog" aria-modal="true" aria-labelledby="credential-modal-title">
         <form id="credential-form" class="modal-panel">
           <div class="panel-header">
-            <h2 id="credential-modal-title">Add Credential</h2>
-            <button class="ghost-button" type="button" data-action="close-credential-modal">Close</button>
+            <h2 id="credential-modal-title">新建凭据</h2>
+            <button class="ghost-button" type="button" data-action="close-credential-modal">关闭</button>
           </div>
           <div class="form-grid">
             <label>
@@ -332,11 +332,11 @@
               </select>
             </label>
             <label>
-              <span>Alias</span>
+              <span>别名</span>
               <input id="credential-alias" type="text" required>
             </label>
             <label>
-              <span>Priority</span>
+              <span>优先级</span>
               <input id="credential-priority" type="number" min="1" value="1" required>
             </label>
             <label>
@@ -344,13 +344,13 @@
               <input id="credential-base-url" type="url" value="https://api.deepseek.com/v1" required>
             </label>
             <label class="form-field-wide">
-              <span>Key</span>
+              <span>密钥</span>
               <input id="credential-key" type="password" autocomplete="off" required>
             </label>
           </div>
           <div class="modal-actions">
             <button class="secondary-button" type="button" data-action="close-credential-modal">Cancel</button>
-            <button class="primary-button" type="submit">Add</button>
+            <button class="primary-button" type="submit">新建</button>
           </div>
         </form>
       </div>

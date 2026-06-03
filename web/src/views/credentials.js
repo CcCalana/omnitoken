@@ -53,13 +53,13 @@ function createCredentialsView(api) {
       showReloadBanner();
       await load(true);
     } catch (error) {
-      setAlert(nodes.alert, "error", `Create failed (${error.code || error.message}).`);
+      setAlert(nodes.alert, "error", `创建失败 (${error.code || error.message}).`);
     }
   }
 
   function renderRows(credentials) {
     if (!credentials.length) {
-      nodes.body.innerHTML = '<tr><td colspan="6" class="table-state">No upstream credentials</td></tr>';
+      nodes.body.innerHTML = '<tr><td colspan="6" class="table-state">暂无上游凭据</td></tr>';
       return;
     }
     nodes.body.innerHTML = credentials.map((item) => {
@@ -77,7 +77,7 @@ function createCredentialsView(api) {
           <td><span class="${statusClass}">${escapeHTML(item.status || "--")}</span></td>
           <td>${escapeHTML(item.health_state || "--")}</td>
           <td class="align-right">
-            <button class="ghost-mini-button mini-button" type="button" data-disable-credential="${escapeHTML(item.id)}" ${isActive ? "" : "disabled"}>Disable</button>
+            <button class="ghost-mini-button mini-button" type="button" data-disable-credential="${escapeHTML(item.id)}" ${isActive ? "" : "disabled"}>禁用</button>
           </td>
         </tr>
       `;
@@ -86,17 +86,17 @@ function createCredentialsView(api) {
 
   async function load(force = false) {
     if (loaded && !force) return;
-    setAlert(nodes.alert, "loading", "Loading upstream credentials...");
-    nodes.body.innerHTML = '<tr><td colspan="6" class="table-state">Loading upstream credentials</td></tr>';
+    setAlert(nodes.alert, "loading", "正在加载上游凭据...");
+    nodes.body.innerHTML = '<tr><td colspan="6" class="table-state">正在加载上游凭据</td></tr>';
     try {
       const response = await api.getCredentials();
       const credentials = Array.isArray(response?.credentials) ? response.credentials : [];
       loaded = true;
-      setAlert(nodes.alert, credentials.length ? "" : "empty", credentials.length ? "" : "No upstream credentials.");
+      setAlert(nodes.alert, credentials.length ? "" : "empty", credentials.length ? "" : "暂无上游凭据.");
       renderRows(credentials);
     } catch (error) {
-      setAlert(nodes.alert, "error", `Unable to load credentials (${error.code || error.message}).`);
-      nodes.body.innerHTML = '<tr><td colspan="6" class="table-state">Credential load failed</td></tr>';
+      setAlert(nodes.alert, "error", `无法加载凭据 (${error.code || error.message}).`);
+      nodes.body.innerHTML = '<tr><td colspan="6" class="table-state">凭据加载失败</td></tr>';
     }
   }
 
@@ -115,7 +115,7 @@ function createCredentialsView(api) {
     if (typeof showToast === "function") {
       showToast("已写入数据库。Gateway 会在 30 秒内重新加载 credential pool。", "success");
     } else {
-      setAlert(nodes.alert, "loading", "Written to DB. Gateway will reload the credential pool within 30s; restart gateway for immediate effect.");
+      setAlert(nodes.alert, "loading", "凭据已写入数据库，Gateway 将在 30 秒内热加载生效");
     }
   }
 
@@ -127,16 +127,16 @@ function createCredentialsView(api) {
         showReloadBanner();
         await load(true);
       } catch (error) {
-        setAlert(nodes.alert, "error", `Disable failed (${error.code || error.message}).`);
+        setAlert(nodes.alert, "error", `禁用失败 (${error.code || error.message}).`);
       } finally {
         button.disabled = false;
       }
     };
     if (typeof confirmModal === "function") {
       confirmModal({
-        title: "Disable credential",
-        message: "Disable this upstream credential?",
-        confirmLabel: "Disable",
+        title: "禁用凭据",
+        message: "确定禁用该上游凭据？",
+        confirmLabel: "禁用",
         onConfirm: run,
       });
       return;

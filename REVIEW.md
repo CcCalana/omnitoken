@@ -287,9 +287,39 @@ seed SQL 已有 1 admin + 1 viewer + 9 member，`GET /api/admin/users` 可发现
 
 ---
 
-## R-T020 (T-020 实施, impl `433c7b1`)
+## R-T020 (T-020 实施, impl `aacce11` + status `f4c1b18`)
 
-**结论: `[~] Conditional — 不关任务`** — compose + nginx template + .env.example + admin-password init 交付正确，compose config valid，Go 测试 green。但 **`docker compose up` 未实际跑通**（Docker Desktop 代理阻断镜像拉取），无法确认 service 启动、admin 登录、gateway 转发在真实 Docker 环境中正常。退回重验。2 NIT 不阻塞。
+**结论: `[+] Approved`** — Docker AC 5/5 实测通过。v2 修了 nginx `root` 路径 + SSL-aware healthcheck + N-42 comment。全部 10 条接受标准达成。无 CRITICAL/HIGH/MEDIUM。1 NIT 不阻塞（N-41 envsubst 依赖未显式安装，留观察）。
+
+**v2 修复（`aacce11`）**:
+
+1. ✅ **nginx `root /usr/share/nginx/html`**：v1 缺此行导致 admin 静态文件 404。nginx:alpine 默认 root 是 `/usr/share/nginx/html`，但 explicit 声明防止未来镜像变更。
+
+2. ✅ **SSL-aware healthcheck**：v1 healthcheck 固定 `wget http://...`，HTTPS-only 模式会失败。v2 改为 `if [ -n "${SSL_CERT_PATH}" ]; then wget --no-check-certificate https://...; else wget http://...; fi`。
+
+3. ✅ **N-42 关闭**：`nginx.prod.conf.template` 加注释 `# Variables: ${DOMAIN} etc. are substituted by envsubst in compose command. $host $uri are nginx builtins.`
+
+**Docker 实测 5/5**:
+- `docker compose up -d` → 全部 service healthy
+- `curl /healthz` → 200
+- admin 登录 → 200 JWT
+- 新建用户 → 生成 Key → gateway 转发 200
+- `docker compose down -v` 清理确认
+
+**接受标准对照**:
+
+| # | AC | 状态 |
+|---|---|---|
+| 1 | `cp .env.example .env` + 填 3 值 + `up -d` 启动 | ✅ |
+| 2 | 全部 service healthy | ✅ |
+| 3 | admin 登录成功 | ✅ |
+| 4 | Users tab 新建用户 → 生成 Key → 复制 | ✅ |
+| 5 | virtual key 调 gateway → 200 | ✅ |
+| 6 | SSL 可选（配了走 HTTPS，不配纯 HTTP） | ✅ |
+| 7 | DOMAIN 可选 | ✅ |
+| 8 | nginx 配置 env var 驱动，无需手动编辑 | ✅ |
+| 9 | README ≤ 10 行 | ✅ (8 行含 header) |
+| 10 | `docker compose down -v` 清理 | ✅ |
 
 **正面信号**:
 
