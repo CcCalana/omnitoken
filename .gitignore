@@ -5,6 +5,14 @@ coverage.out
 admin
 gateway
 
+# Internal planning docs (not for public repo)
+TASKS.md
+REVIEW.md
+AGENTS.md
+docs/reviews/
+docs/tasks/
+docs/proposals/
+
 # Local env
 .env
 .env.*

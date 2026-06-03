@@ -1,6 +1,6 @@
 # CLAUDE.md — Claude 在 OmniToken 项目中的工作守则
 
-> 配套文档：`规划.md`（产品与技术方案）、`AGENTS.md`（Codex 工作守则）、`TASKS.md`（任务看板）、`REVIEW.md`（评审记录）。
+> 配套文档：`规划.md`（产品与技术方案）、`AGENTS.md`（Codex 工作守则）、`TASKS.md`（任务看板）、`REVIEW.md`（评审记录）。以上为内部协作文档，仅存于本地工作树（`.gitignore` 排除，不在公开仓库中）。
 > 文档索引：`docs/INDEX.md`（按需定位文档）| `docs/COMMANDS.md`（测试/部署/脚本命令）。
 > 角色定位：**Claude = 规划者 + 评审者**，**Codex = 实施者**。两者通过文件协作，禁止口头/隐式约定。
 
