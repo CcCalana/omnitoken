@@ -85,112 +85,27 @@ flowchart LR
 
 ## 部署
 
-### 1. 生成主密钥
+### 一键启动（Compose）
 
-```bash
-openssl rand -hex 32 > .omnitoken-master-key
-```
+1. `cd deploy && cp .env.example .env`
+2. 填写 `OMNITOKEN_MASTER_KEY`、至少一把上游 key、`ADMIN_INITIAL_PASSWORD`
+3. 可选：设置 `DOMAIN`、`SSL_CERT_PATH`、`SSL_KEY_PATH`
+4. `docker compose -f docker-compose.prod.yml up -d`
+5. 打开 `http://localhost/admin` 或 `https://<DOMAIN>/admin`
+6. 使用 `admin@democorp.local` 登录，然后在网页中创建用户和下发 Key
 
-Bash / Linux / macOS：
+> **所有后续操作在网页完成** —— 创建用户、生成 Key、管理上游凭据、查看审计日志，不需要命令行。
 
-```bash
-chmod 600 .omnitoken-master-key
-export OMNITOKEN_MASTER_KEY_FILE="$(pwd)/.omnitoken-master-key"
-```
-
-PowerShell：
-
-```powershell
-$env:OMNITOKEN_MASTER_KEY_FILE = "$PWD\.omnitoken-master-key"
-```
-
-gateway 与 admin 必须共享同一把密钥；轮换密钥需要重新加密所有已存凭证，详见
-[`docs/operations/master-key-rotation.md`](docs/operations/master-key-rotation.md)。
-
-### 2. 创建 `.env`
-
-```bash
-cp .env.example .env
-```
-
-PowerShell：
-
-```powershell
-Copy-Item .env.example .env
-```
-
-至少填写：
-
-```dotenv
-OMNITOKEN_MASTER_KEY_FILE=/absolute/path/to/.omnitoken-master-key
-OMNITOKEN_ADMIN_SESSION_TTL=24h
-OMNITOKEN_ADMIN_CORS_ORIGINS=http://localhost:3000
-
-# 至少配置一家 provider，两家可共存
-OMNITOKEN_ARK_API_KEY=<your-volcano-ark-key>
-OMNITOKEN_DEEPSEEK_KEYS_1=<your-deepseek-key>
-```
-
-`.env` 已被 gitignore。`OMNITOKEN_ADMIN_BOOTSTRAP_TOKEN` 留空 —— admin 登录走
-session endpoint。
-
-### 3. 启动栈
-
-```bash
-make up
-```
-
-Windows fallback：
-
-```powershell
-.\scripts\dev.ps1 up
-```
-
-该命令会构建 gateway/admin/migrate 镜像，启动 Postgres/Redis/NATS，执行数据库
-迁移，seed demo 组织与角色，从 `.env` seed 上游凭证，并暴露：
-
-| 服务 | 地址 |
-| --- | --- |
-| Gateway | `http://localhost:8080` |
-| Admin API | `http://localhost:8081` |
-| Postgres | `localhost:15432` |
-| Redis | `localhost:16379` |
-| NATS | `localhost:14222` |
-
-健康检查：
-
-```bash
-curl http://localhost:8080/healthz
-curl http://localhost:8081/healthz
-```
-
-### 4. 打开 web 控制台
-
-```bash
-cd web && python -m http.server 3000
-```
-
-打开：
-
-```text
-http://localhost:3000/?admin=http://localhost:8081
-```
-
-使用 seed 中的账号登录：
-
-| 角色 | 邮箱 | 密码 |
-| --- | --- | --- |
-| Admin | `admin@democorp.local` | `password` |
-| Viewer | `user01@democorp.local` | `password` |
+`.env.example` 中各变量说明见文件内注释。启动后可用 `curl http://localhost/healthz` 验证。
 
 控制台包含以下视图：
 
-- **Overview** —— 月度 tokens、预估成本、活跃用户、趋势、模型占比。
-- **Users** —— 按用户展示 token 用量与月度配额编辑（admin）。
-- **Models** —— prompt/completion 拆分、成本、调用次数。
-- **Virtual Models** —— 虚拟别名与真实 provider 模型映射。
-- **Upstream Credentials** —— 新增/禁用上游凭证（admin）。
-- **Audit** —— admin 登录与写操作流水。
+- **组织消耗概览** —— 月度 tokens、预估成本、活跃用户、趋势、模型占比。
+- **用户额度分配** —— 按用户展示用量、月度配额编辑、新建用户、生成并下发 Key。
+- **模型调用分析** —— prompt/completion 拆分、成本、调用次数。
+- **虚拟模型映射** —— 虚拟别名与真实 provider 模型映射。
+- **上游凭据管理** —— 新增/禁用上游 API key（加密存储，Gateway 30s 热加载）。
+- **审计日志** —— 管理操作流水 + 用户使用流水双面板。
 
 ## 使用
 
