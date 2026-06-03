@@ -287,6 +287,44 @@ seed SQL 已有 1 admin + 1 viewer + 9 member，`GET /api/admin/users` 可发现
 
 ---
 
+## R-T020 (T-020 实施, impl `433c7b1`)
+
+**结论: `[~] Conditional — 不关任务`** — compose + nginx template + .env.example + admin-password init 交付正确，compose config valid，Go 测试 green。但 **`docker compose up` 未实际跑通**（Docker Desktop 代理阻断镜像拉取），无法确认 service 启动、admin 登录、gateway 转发在真实 Docker 环境中正常。退回重验。2 NIT 不阻塞。
+
+**正面信号**:
+
+1. ✅ **10 service 最小化设计精准**：postgres → migrate → seed → admin-password → credential-seed → redis/nats → gateway/admin → nginx。依赖链有序（`depends_on` + `condition: service_healthy/completed_successfully`），无冗余服务（vs dev 的 mock-ark + test）。
+
+2. ✅ **admin-password 注入安全**：`003_admin_password.sql` 用 psql `:'password'` 变量语法（非 shell 拼接），含双重校验——`length(:'password') > 0` + `COUNT(*) = 1` after UPDATE。compose 中 `:?` parameter expansion 在 shell 层先校验非空。三处防护：shell → psql `\if` → SQL RETURNING check。
+
+3. ✅ **nginx 配置完全 env var 驱动**：`nginx.prod.conf.template` 含 `${DOMAIN}` / `${GATEWAY_PORT}` / `${ADMIN_PORT}` / `${NGINX_HTTP_PORT}` 占位符，compose 命令中 `envsubst` 替换。SSL 检测逻辑在 shell 中完成——`[ -n "${SSL_CERT_PATH}" ]` → 生成 HTTPS server block + HTTP→HTTPS redirect；否则纯 HTTP。用户不写一行 nginx conf。
+
+4. ✅ **`ssl-disabled.pem` placeholder 方案干净**：Docker volume mount 不支持条件挂载，placeholder 文件解决"SSL 未配时 mount source 不存在"的问题。该文件仅用于满足 mount 语法，实际 TLS 路径仅在有 `SSL_CERT_PATH`/`SSL_KEY_PATH` 时启用。文件内容明确标注用途，避免误解。
+
+5. ✅ **SSE 代理配置正确**：`proxy_buffering off; proxy_cache off; proxy_read_timeout 300s; chunked_transfer_encoding on;`——四件套确保 streaming 响应不被 nginx 缓冲或超时截断。`/v1/` 前缀覆盖 chat/completions 和 messages 端点。
+
+6. ✅ **admin 路由重定向设计**：`/admin` → 302 附加 `?admin=<scheme>://<host>` 参数，`/admin/` 检查该参数存在才 serve index.html。这解决了 admin web console 需要知道自身 base URL 的问题——frontend JS 从 URL param 提取 admin API 地址。
+
+7. ✅ **`.env.example` 结构清晰**：42 行分 6 组（Security / Upstream Keys / Admin / Domain+Ports / SSL / Optional tuning），每组含注释说明。必填项（MASTER_KEY / upstream key / ADMIN_INITIAL_PASSWORD）无默认值，强制用户填写。
+
+8. ✅ **README.md 快速部署 ≤ 10 行**：6 步从 `cp .env.example` 到 "Sign in as admin"。每步 ≤ 一行。
+
+9. ✅ **compose config 无语法错误 + Go tests 全绿**。
+
+---
+
+**N-41 (NIT) — nginx 命令中 `envsubst` 依赖 nginx:alpine 自带，未显式安装**：
+
+`nginx:1.27-alpine` 镜像的 `envsubst` 来自 `gettext` 包。该包在 nginx 官方 Alpine 镜像中预装（官方 Dockerfile 文档使用 `envsubst` 作为推荐模板方案），所以当前可用。但如果未来切到 `nginx:1.27`（Debian slim 无 gettext），或切到自定义 nginx 镜像，compose 会在 `envsubst` 行失败。建议在 compose nginx 命令前加 `apk add --no-cache gettext 2>/dev/null || true` 作为安全网，或直接在 Dockerfile.nginx 中 `RUN apk add gettext`。不阻塞——当前镜像实测可用。
+
+**N-42 (NIT) — compose 中 nginx 命令的双层 `$$` 转义隐晦**：
+
+compose 命令中大量使用 `$$` 来逃逸 Docker Compose 的变量处理（如 `$$host` → nginx 最终看到 `$host`）。这是正确的——但 LOCATIONS 嵌入在 YAML 字符串中，双重转义逻辑（Docker Compose → Shell → envsubst）对后续维护者不够直白。建议在 `nginx.prod.conf.template` 顶部加一行注释说明变量替换管线：`# Variables: ${DOMAIN} etc. are substituted by envsubst in compose command. $host $uri are nginx builtins.`。不阻塞——配置已通过 compose config 验证和健康检查。
+
+Resolved: `aacce11` — Docker AC 5/5 verified; admin SPA root and SSL healthcheck fixed; N-42 comment landed; lint/test green.
+
+---
+
 ## 未解决项摘要（从所有 review 累积）
 
 | ID | 来源 | 严重度 | 描述 | 状态 |
@@ -302,4 +340,3 @@ seed SQL 已有 1 admin + 1 viewer + 9 member，`GET /api/admin/users` 可发现
 | M-23 | R-CONC-CHECK | MEDIUM | admin overview 按 `model_actual` 聚合 → Ark backend 名污染成本归因 | ✅ 并入 T-016 (`c6ee841d`) |
 
 ---
-

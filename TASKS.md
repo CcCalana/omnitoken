@@ -52,14 +52,8 @@
 | 06-02 | **T-018 impl (`b70794b`) → R-T018 Approved**。443 行纯测试，6/6 场景全落地，3 条接入真 usage.Middleware。零生产改动。proxy 87.6%。零 issue |
 | 06-02 | **T-019 任务体下发**。admin 用户创建 API + 前端新建用户 modal + virtual key 生成/展示/复制。propose 跳过 |
 | 06-02 | **T-019 impl (`8148f34`) → R-T019 Approved**。788 行全栈：POST /api/admin/users + RBAC + 事务创建 + 前端 modal + Key 展示/复制。6 handler + 3 store 测试。admin 67.1%。零 issue |
-
----
-
-### 部署收尾（2026-06-02）
-
-| 优先级 | 任务 | 估时 | 成本 | 说明 |
-|---|---|---|---|---|
-| 1 | **T-019** Admin 用户与 Key 管理收口 | 1-1.5d | 零 | ✅ `8148f34` R-T019 Approved |
+| 06-02 | **T-020 任务体下发**。一键部署 compose：~10 service + nginx 模板化 + SSL 可选 + .env 驱动 + 零命令行操作。propose 跳过 |
+| 06-02 | **T-020 impl (`433c7b1`) → 退回重验**。compose + nginx template + .env.example 已写好，但 `docker compose up` 未实际跑通（Docker 代理阻断）。需 Docker 环境验证全部 service healthy + admin 登录 + gateway 转发 |
 
 ## 已完成任务速查 (详见 git log)
 
@@ -300,3 +294,125 @@ Result: `8148f34` — POST /api/admin/users + RBAC + transactional create + fron
 Result: `8148f34` — cmd/admin 67.1% (HEAD baseline 66.4%); create-user + key handoff landed; all green; no undeclared deviation.
 
 ---
+
+## T-020 一键部署 Compose [phase:deploy] [owner:codex] [status:review] [started:2026-06-02 11:01 CST]
+
+Result: `433c7b1` — compose + nginx template + .env.example + admin-password init delivered; compose config valid, Go tests green. **⚠ Docker compose up 未实际跑通**（Docker Desktop 代理阻断镜像拉取），需退回重验。
+
+**验证缺口**（必须 Docker 实测）:
+- [x] `docker compose -f docker-compose.prod.yml up -d` 全部 service healthy
+- [x] `curl http://localhost/healthz` → 200
+- [x] 浏览器登录 `admin@democorp.local` / `ADMIN_INITIAL_PASSWORD` → 成功
+- [x] Users tab 新建用户 → 生成 Key → `curl` 调 gateway → 200
+- [x] SSL 配了证书路径时 HTTPS 可用
+
+**目标**: 用户只需编辑 `.env` 填入上游 key → `docker compose up -d` → 打开浏览器访问 admin → **所有后续操作在网页完成**（创建用户、生成 key、管理 credentials、看审计日志）。不碰命令行、不碰 SQL、不写 nginx config。
+
+**设计原则**: "配置在 `.env`，操作在 UI"。Compose 文件是唯一的部署入口，nginx、SSL、admin 初始密码全部走 env var。
+
+**涉及**:
+- `deploy/docker-compose.prod.yml` (新增) — 生产 compose，含 nginx
+- `deploy/.env.example` (新增) — 带完整注释的示例 env
+- `deploy/postgres/003_admin_password.sql` (新增) — 给 seed admin 设初始密码
+- `deploy/nginx/nginx.prod.conf.template` (新增) — 由 env var 驱动的 nginx 配置模板
+- `README.md` 快速部署段 — ≤ 10 行
+
+**服务列表（~10 个）**:
+
+| # | 服务 | 说明 |
+|---|---|---|
+| 1 | postgres | PG 16 |
+| 2 | migrate | 自动 migration up |
+| 3 | seed | seed SQL |
+| 4 | admin-password | `UPDATE users SET password_hash = crypt(...)` 用 `ADMIN_INITIAL_PASSWORD` |
+| 5 | credential-seed | 加密写入 upstream keys |
+| 6 | redis | session + 预留缓存 |
+| 7 | nats | 消息队列 |
+| 8 | gateway | 后端代理 |
+| 9 | admin | Admin API + web console |
+| 10 | nginx | 反向代理：gateway + admin 统一入口，可选 SSL |
+
+**`.env.example` 结构**:
+
+```bash
+# === 安全 ===
+OMNITOKEN_MASTER_KEY=            # 必填：openssl rand -hex 32
+
+# === 上游 API Keys（至少一个） ===
+OMNITOKEN_DEEPSEEK_KEYS_1=       # DeepSeek API key
+OMNITOKEN_DEEPSEEK_KEYS_2=
+OMNITOKEN_DEEPSEEK_KEYS_3=
+OMNITOKEN_ARK_KEYS_1=            # Ark API key（可选）
+OMNITOKEN_ARK_KEYS_2=
+OMNITOKEN_ARK_KEYS_3=
+
+# === Admin 初始账号 ===
+ADMIN_INITIAL_PASSWORD=          # 必填：admin@democorp.local 的初始密码
+
+# === 域名与端口（可选，有默认值） ===
+DOMAIN=localhost                 # 部署域名
+GATEWAY_PORT=8080                # gateway 对外端口
+ADMIN_PORT=8081                  # admin 对外端口
+NGINX_HTTP_PORT=80               # nginx HTTP 端口
+NGINX_HTTPS_PORT=443             # nginx HTTPS 端口
+
+# === SSL（可选，不配则纯 HTTP） ===
+SSL_CERT_PATH=                   # /path/to/fullchain.pem
+SSL_KEY_PATH=                    # /path/to/privkey.pem
+```
+
+**用户操作流程**（零命令行）:
+
+```
+1. cp .env.example .env
+2. vim .env   # 填入 OMNITOKEN_MASTER_KEY + 上游 key + ADMIN_INITIAL_PASSWORD
+3. docker compose -f docker-compose.prod.yml up -d
+4. 打开浏览器 → https://<DOMAIN>/admin（或 http://localhost:80/admin）
+5. 登录 admin@democorp.local / <ADMIN_INITIAL_PASSWORD>
+6. 在网页上:
+   - Users tab → 新建用户（填邮箱/显示名/角色/密码）→ 生成 Key → 复制下发
+   - Credentials tab → 管理上游 API keys（可选，.env 已配可跳过）
+   - Virtual Models tab → 管理路由规则
+   - Audit tab → 查看审计日志
+```
+
+**接受标准**:
+- [ ] `cp .env.example .env` + 填 3 个必填值 + `docker compose -f docker-compose.prod.yml up -d` 即可启动
+- [ ] 所有 service healthy（`docker compose -f docker-compose.prod.yml ps`）
+- [ ] 浏览器访问 admin → 登录页 → 用 `admin@democorp.local` / `ADMIN_INITIAL_PASSWORD` 登录成功
+- [ ] Users tab → 新建用户 → 生成 Key → 复制成功
+- [ ] 用生成的 virtual key 调 gateway → 200 响应
+- [ ] SSL 可选：配了 `SSL_CERT_PATH`/`SSL_KEY_PATH` 则 nginx 走 HTTPS + HTTP→HTTPS redirect；不配则纯 HTTP
+- [ ] DOMAIN 可选：配了则 nginx `server_name` 用该域名；不配则 `server_name _`
+- [ ] nginx 配置由 env var 驱动：不产生用户需手动编辑的 nginx conf 文件
+- [ ] README.md 快速部署段 ≤ 10 行
+- [ ] `docker compose down -v` 清理所有数据
+
+**不在范围**:
+- ❌ 多实例/高可用
+- ❌ Docker 镜像推送（本地 build）
+- ❌ K8s/Helm
+- ❌ 修改 Go 代码
+- ❌ 自动获取 Let's Encrypt 证书（v1.1）
+
+**设计约束**:
+
+1. **nginx 配置模板化**：`nginx.prod.conf.template` 用 `${DOMAIN}` / `${NGINX_HTTP_PORT}` 等占位符，compose 启动时 `envsubst` 替换生成最终 `nginx.conf`。用户不碰 nginx 配置。
+
+2. **Admin password 初始化**：compose 中用 `psql -v password="$ADMIN_INITIAL_PASSWORD" -f /init/003_admin_password.sql`，SQL 内用 `:'password'` 引用变量（psql 变量替换，非 shell 拼接，无注入风险）。
+
+3. **端口约定**：gateway 和 admin 不直接暴露到 host（仅 docker network）。nginx 是唯一对外端口（HTTP 80 / HTTPS 443），反向代理 gateway:8080 和 admin:8081。
+
+4. **CORS**：admin 的 `OMNITOKEN_ADMIN_CORS_ORIGINS` 默认 `*`（nginx 同域代理场景下 CORS 不触发；若直接暴露 admin 端口则允许跨域）。
+
+**Codex propose 前置**: **跳过**。纯 ops 配置，无代码改动。
+
+**依赖**: T-019 ✅（admin web UI 可完成全部用户管理操作）；T-DEPLOY ✅（server compose + nginx config 参考）
+
+**参考**:
+- Dev compose：`deploy/docker-compose.yml`
+- 现有 nginx config：`deploy/nginx/nginx.conf`
+- 现有 Dockerfile.nginx：`deploy/Dockerfile.nginx`
+- Admin password SQL 格式：`cmd/admin/main.go:1480`（`crypt($4, gen_salt('bf'))`）
+
+Result: `aacce11` — Docker AC 5/5: up/ps, healthz 200, Chrome login, Users-tab user+key→gateway 200, HTTPS+301; lint/test green, down -v clean.
