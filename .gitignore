@@ -16,6 +16,7 @@ docs/tasks/
 docs/proposals/
 docs/adr/
 docs/archive/
+测试前端.html
 
 # Internal test tooling (not for public repo)
 cmd/e2e-runner/
@@ -23,6 +24,8 @@ cmd/loadtest/
 test/e2e/
 scripts/e2e_verify.py
 scripts/run_e2e.py
+scripts/v1_integration.py
+scripts/dev.ps1
 
 # Local env
 .env
