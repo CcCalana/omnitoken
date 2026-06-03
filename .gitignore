@@ -2,6 +2,8 @@
 bin/
 dist/
 coverage.out
+admin
+gateway
 
 # Local env
 .env
