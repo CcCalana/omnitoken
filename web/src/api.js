@@ -38,6 +38,10 @@ class APIError extends Error {
 }
 
 function createAdminAPI(baseURL = resolveAdminBaseURL()) {
+  if (isDemoMode()) {
+    return createDemoAPI();
+  }
+
   const base = trimTrailingSlash(baseURL);
   return {
     baseURL: base,
@@ -83,6 +87,71 @@ function createAdminAPI(baseURL = resolveAdminBaseURL()) {
       localStorage.removeItem("omnitokenAdminToken");
       window.location.reload();
     },
+  };
+}
+
+function isDemoMode() {
+  try {
+    return Boolean(window.__OMNITOKEN_DEMO__) || new URLSearchParams(window.location.search).get("demo") === "1";
+  } catch (_) {
+    return false;
+  }
+}
+
+function createDemoAPI() {
+  return {
+    baseURL: "demo://omnitoken",
+    isDemo: true,
+    getOverview: async () => demoOverview(),
+    getUsers: async () => ({ users: [] }),
+    createUser: async () => Promise.reject(new APIError("demo_mode_readonly", 400, "demo_mode_readonly")),
+    getModels: async () => ({ models: [] }),
+    getMe: async () => ({ role: "admin" }),
+    getVirtualModels: async () => ({ virtual_models: [] }),
+    createVirtualModel: async () => Promise.reject(new APIError("demo_mode_readonly", 400, "demo_mode_readonly")),
+    updateVirtualModel: async () => Promise.reject(new APIError("demo_mode_readonly", 400, "demo_mode_readonly")),
+    getCredentials: async () => ({ credentials: [] }),
+    getAuditLogs: async () => ({ logs: [] }),
+    getUserUsage: async () => ({ usage: [] }),
+    createCredential: async () => Promise.reject(new APIError("demo_mode_readonly", 400, "demo_mode_readonly")),
+    disableCredential: async () => Promise.reject(new APIError("demo_mode_readonly", 400, "demo_mode_readonly")),
+    createVirtualKey: async () => Promise.reject(new APIError("demo_mode_readonly", 400, "demo_mode_readonly")),
+    updateUserQuota: async () => Promise.reject(new APIError("demo_mode_readonly", 400, "demo_mode_readonly")),
+    logout: async () => {
+      localStorage.removeItem("omnitokenAdminToken");
+      window.location.reload();
+    },
+  };
+}
+
+function demoOverview() {
+  const trend = Array.from({ length: 30 }, (_, index) => {
+    const day = index + 1;
+    const baseline = 2_600_000 + Math.sin(index / 3) * 900_000 + index * 140_000;
+    const spike = index === 23 ? 6_100_000 : 0;
+    const tokens = Math.max(0, Math.round(baseline + spike));
+    return {
+      date: `2026-06-${String(day).padStart(2, "0")}`,
+      tokens,
+      cost_usd: Number(((tokens / 1_000_000) * (3.8 + (index % 5) * 0.12)).toFixed(2)),
+    };
+  });
+
+  return {
+    period: "2026-06",
+    total_tokens: 184250000,
+    estimated_cost_usd: 923.48,
+    active_users: 128,
+    quota_warning_users: 7,
+    trend,
+    model_usage: [
+      { model: "gpt-4.1", tokens: 72000000, cost_usd: 446.2, share: 0.391 },
+      { model: "gpt-4.1-mini", tokens: 43800000, cost_usd: 88.7, share: 0.238 },
+      { model: "claude-3.7-sonnet", tokens: 32900000, cost_usd: 266.4, share: 0.178 },
+      { model: "deepseek-v3", tokens: 21400000, cost_usd: 57.9, share: 0.116 },
+      { model: "doubao-seed-1.6", tokens: 10150000, cost_usd: 37.3, share: 0.055 },
+      { model: "embedding-3-large", tokens: 4000000, cost_usd: 26.98, share: 0.022 },
+    ],
   };
 }
 

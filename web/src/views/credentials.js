@@ -18,17 +18,20 @@ function createCredentialsView(api) {
     key: document.getElementById("credential-key"),
   };
 
+  const PROVIDER_BASE_URLS = {
+    ark: "https://ark.cn-beijing.volces.com/api/coding/v3",
+    deepseek: "https://api.deepseek.com/v1",
+  };
+  function applyProviderBaseURL() {
+    if (!nodes.provider || !nodes.baseURL) return;
+    nodes.baseURL.value = PROVIDER_BASE_URLS[nodes.provider.value] || PROVIDER_BASE_URLS.deepseek;
+  }
+
   nodes.open?.addEventListener("click", openModal);
   document.querySelectorAll('[data-action="close-credential-modal"]').forEach((button) => {
     button.addEventListener("click", closeModal);
   });
-  nodes.provider?.addEventListener("change", () => {
-    if (nodes.provider.value === "ark") {
-      nodes.baseURL.value = "https://ark.cn-beijing.volces.com/api/coding/v3";
-    } else {
-      nodes.baseURL.value = "https://api.deepseek.com/v1";
-    }
-  });
+  nodes.provider?.addEventListener("change", applyProviderBaseURL);
   nodes.form?.addEventListener("submit", submitCredential);
   nodes.body?.addEventListener("click", async (event) => {
     const button = event.target.closest?.("[data-disable-credential]");
@@ -102,13 +105,14 @@ function createCredentialsView(api) {
 
   function openModal() {
     nodes.modal?.classList.remove("is-hidden");
+    applyProviderBaseURL();
     nodes.alias?.focus();
   }
 
   function closeModal() {
     nodes.modal?.classList.add("is-hidden");
     nodes.form?.reset();
-    if (nodes.baseURL) nodes.baseURL.value = "https://api.deepseek.com/v1";
+    applyProviderBaseURL();
   }
 
   function showReloadBanner() {

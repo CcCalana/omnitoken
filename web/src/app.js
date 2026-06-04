@@ -19,32 +19,32 @@ const views = {
 
 const titles = {
   overview: {
-    title: "Organization Overview",
-    subtitle: "Live gateway requests, token consumption, and cost ledger signals.",
+    title: "组织消耗概览",
+    subtitle: "查看本月成本、Token 趋势、模型消耗和额度风险。",
   },
   users: {
-    title: "Users And Budgets",
-    subtitle: "Review user usage and manage monthly budgets when your role allows it.",
+    title: "用户额度分配",
+    subtitle: "查看用户消耗，并在权限允许时管理月度预算。",
   },
   models: {
-    title: "Model Usage",
-    subtitle: "Tokens, cost, and call counts grouped by actual upstream model.",
+    title: "模型调用分析",
+    subtitle: "按真实上游模型查看 Token、成本和调用次数。",
   },
   virtualModels: {
-    title: "Virtual Models",
-    subtitle: "Gateway routing aliases mapped to real Ark model identifiers.",
+    title: "虚拟模型映射",
+    subtitle: "管理网关路由别名与真实模型标识的映射关系。",
   },
   credentials: {
-    title: "Upstream Credentials",
-    subtitle: "Add or disable provider keys; the gateway reloads the pool on its polling interval.",
+    title: "上游凭据管理",
+    subtitle: "新增或停用 provider key，网关会按轮询周期重载凭据池。",
   },
   audit: {
-    title: "Audit Logs",
-    subtitle: "Trace admin actions by actor, resource, status, and time window.",
+    title: "审计日志",
+    subtitle: "按操作者、资源、状态和时间窗口追踪管理动作。",
   },
   login: {
-    title: "Sign In",
-    subtitle: "Use a seeded local admin or viewer account.",
+    title: "管理员登录",
+    subtitle: "使用本地初始化的 admin 或 viewer 账号。",
   },
 };
 
@@ -79,7 +79,7 @@ init();
 async function init() {
   applyTheme();
   const urlParams = new URLSearchParams(window.location.search);
-  if (!localStorage.getItem("omnitokenAdminToken") && !urlParams.get("token")) {
+  if (!api.isDemo && !localStorage.getItem("omnitokenAdminToken") && !urlParams.get("token")) {
     window.dispatchEvent(new Event("omnitoken:unauthorized"));
     return;
   }

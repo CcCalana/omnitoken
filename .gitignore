@@ -49,5 +49,8 @@ Thumbs.db
 tmp/
 data/
 
+# Frontend transfer artifacts (leader hands off web/ as a zip)
+web.zip
+
 # Codex local Go cache (use `go env GOCACHE` defaults instead)
 tmp-go-cache/
