@@ -1,3 +1,35 @@
+@font-face {
+  font-family: "Smiley Sans";
+  src: url("./assets/fonts/smiley-sans-display-subset.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Hanken Grotesk";
+  src: url("./assets/fonts/hanken-grotesk-variable.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Noto Sans SC";
+  src: url("./assets/fonts/noto-sans-sc-console-subset.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  src: url("./assets/fonts/geist-mono-variable.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
 :root {
   --color-bg: #f6f8fb;
   --color-surface: #ffffff;
@@ -40,6 +72,9 @@
   --z-topbar: 10;
   --z-toast: 40;
   --z-modal: 50;
+  --font-display: "Smiley Sans", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-ui: "Hanken Grotesk", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "Geist Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 
   --bg: var(--color-bg);
   --surface: var(--color-surface);
@@ -111,14 +146,56 @@ body {
   overflow: hidden;
   color: var(--text);
   background: var(--bg);
-  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--font-ui);
   letter-spacing: 0;
 }
 
 button,
 input,
+select,
+textarea,
 table {
   font: inherit;
+}
+
+code,
+kbd,
+pre,
+samp,
+.font-mono,
+.key-code,
+.mono-cell,
+input[type="number"] {
+  font-family: var(--font-mono);
+}
+
+th,
+td,
+.ledger-primary strong,
+.ledger-breakdown strong,
+.compact-metric-card strong,
+.metric-card strong,
+.model-rank-label span,
+.model-rank-value,
+.period-chip strong,
+.quota-caption,
+.aggregate-row strong,
+.key-code,
+.mono-cell,
+.audit-json-grid pre {
+  font-variant-numeric: tabular-nums;
+}
+
+.ledger-primary strong,
+.ledger-breakdown strong,
+.compact-metric-card strong,
+.metric-card strong,
+.model-rank-label span,
+.model-rank-value,
+.period-chip strong,
+.quota-caption,
+.aggregate-row strong {
+  font-family: var(--font-mono);
 }
 
 button {
@@ -1238,7 +1315,6 @@ tbody tr:hover {
   border-radius: var(--radius);
   background: var(--color-code-bg);
   color: var(--color-code-text);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 12px;
   line-height: 1.6;
 }
@@ -1251,7 +1327,6 @@ tbody tr:hover {
 }
 
 .mono-cell {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 12px;
   word-break: break-all;
 }
