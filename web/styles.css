@@ -76,6 +76,7 @@
   --app-grain-size: auto;
   --topbar-height: 72px;
   --sidebar-width: 256px;
+  --content-max: 1600px;
   --z-topbar: 10;
   --z-toast: 40;
   --z-modal: 50;
@@ -374,6 +375,16 @@ button {
   backdrop-filter: blur(10px);
 }
 
+.topbar-inner {
+  width: 100%;
+  max-width: var(--content-max);
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
 .topbar h1 {
   margin: 0;
   color: var(--text);
@@ -485,7 +496,7 @@ button {
 
 .view {
   display: none;
-  width: min(100%, 1280px);
+  width: min(100%, var(--content-max));
   margin: 0 auto;
   padding: 30px 32px 48px;
 }
@@ -1906,5 +1917,12 @@ tbody tr:hover {
   .ledger-primary::after {
     transform: scaleX(1);
     opacity: 1;
+  }
+}
+
+/* Ultra-wide (4K / 1440p+): widen the centered column so sides don't feel empty */
+@media (min-width: 1920px) {
+  :root {
+    --content-max: 1840px;
   }
 }
