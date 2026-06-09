@@ -16,6 +16,7 @@ function createOverviewView(api) {
   let shareChart = null;
   let trendMode = "tokens";
   let overview = normalizeOverview(null);
+  let metricsAnimated = false;
 
   const nodes = {
     alert: document.getElementById("overview-alert"),
@@ -141,11 +142,12 @@ function createOverviewView(api) {
   function render(data) {
     overview = normalizeOverview(data);
     const stats = deriveStats(overview);
+    const animateMetrics = !metricsAnimated && stats.hasAnyUsage && !prefersReducedMotion();
 
     nodes.period.textContent = formatPeriod(overview.period);
-    nodes.totalTokens.textContent = formatTokens(overview.total_tokens);
-    nodes.estimatedCost.textContent = formatUSD(overview.estimated_cost_usd);
-    nodes.averageDailyTokens.textContent = formatTokens(stats.averageDailyTokens);
+    setMetric(nodes.totalTokens, overview.total_tokens, formatTokens, animateMetrics);
+    setMetric(nodes.estimatedCost, overview.estimated_cost_usd, formatUSD, animateMetrics);
+    setMetric(nodes.averageDailyTokens, stats.averageDailyTokens, formatTokens, animateMetrics);
     nodes.peakDay.textContent = stats.peak
       ? `${formatTrendLabel(stats.peak.date)} · ${formatTokens(stats.peak.tokens)}`
       : "--";
@@ -177,6 +179,8 @@ function createOverviewView(api) {
     } else {
       setAlert(nodes.alert, "", "");
     }
+
+    if (stats.hasAnyUsage) metricsAnimated = true;
   }
 
   function renderTrendSummary(stats) {
@@ -470,6 +474,37 @@ function normalizeModelUsage(raw) {
 function formatPercent(value) {
   const percent = Number(value) || 0;
   return `${percent.toFixed(percent >= 10 ? 0 : 1)}%`;
+}
+
+function prefersReducedMotion() {
+  return typeof window.matchMedia === "function"
+    && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+// Count-up on the hero ledger numbers; re-runs the formatter each frame so
+// "$0 → $1,234" reads as a meter settling. Falls back to a direct set when
+// animation is disabled (reduced-motion, no rAF, zero/first-empty value).
+function setMetric(el, value, formatter, animate) {
+  if (!el) return;
+  const to = Number(value) || 0;
+  if (!animate || to <= 0 || typeof requestAnimationFrame !== "function") {
+    el.textContent = formatter(value);
+    return;
+  }
+  const duration = 680;
+  let startTs = null;
+  function frame(ts) {
+    if (startTs === null) startTs = ts;
+    const p = Math.min(1, (ts - startTs) / duration);
+    const eased = 1 - Math.pow(1 - p, 3);
+    el.textContent = formatter(to * eased);
+    if (p < 1) {
+      requestAnimationFrame(frame);
+    } else {
+      el.textContent = formatter(value);
+    }
+  }
+  requestAnimationFrame(frame);
 }
 
 function chartColors() {

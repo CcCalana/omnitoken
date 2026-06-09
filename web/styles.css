@@ -276,6 +276,7 @@ button {
 }
 
 .nav-link {
+  position: relative;
   width: 100%;
   min-height: 42px;
   display: flex;
@@ -300,6 +301,19 @@ button {
 .nav-link.is-active {
   background: var(--surface-accent);
   color: var(--accent-strong);
+}
+
+/* P3 — instrument-rail active tick */
+.nav-link.is-active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 3px;
+  height: 18px;
+  transform: translateY(-50%);
+  border-radius: 0 3px 3px 0;
+  background: var(--signal);
 }
 
 .nav-icon {
@@ -693,9 +707,28 @@ button {
 }
 
 .ledger-primary {
+  position: relative;
   display: grid;
   gap: 8px;
   margin-bottom: 26px;
+}
+
+/* P3 — meter sweep: a 1px signal line draws in under the hero ledger number */
+.ledger-primary::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: -10px;
+  width: 100%;
+  height: 1px;
+  transform-origin: left center;
+  background: linear-gradient(90deg, var(--signal) 0%, var(--signal) 38%, transparent 100%);
+  animation: ledger-sweep 900ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes ledger-sweep {
+  from { transform: scaleX(0); opacity: 0; }
+  to { transform: scaleX(1); opacity: 1; }
 }
 
 .ledger-primary span,
@@ -1155,6 +1188,7 @@ td {
 
 tbody tr:hover {
   background: var(--color-surface-muted);
+  box-shadow: inset 2px 0 0 var(--signal);
 }
 
 .align-right {
@@ -1865,7 +1899,12 @@ tbody tr:hover {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .view.is-active {
+  .view.is-active,
+  .ledger-primary::after {
     animation: none;
+  }
+  .ledger-primary::after {
+    transform: scaleX(1);
+    opacity: 1;
   }
 }
