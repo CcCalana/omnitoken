@@ -38,21 +38,21 @@
   --color-surface-accent: #e6f5f2;
   --color-text: #111827;
   --color-muted: #526171;
-  --color-subtle: #7b8794;
-  --color-border: #d9e2ec;
-  --color-border-soft: #edf2f7;
+  --color-subtle: #657280;
+  --color-border: #c7d2dc;
+  --color-border-soft: #e5ebf0;
   --color-primary: #0f766e;
   --color-primary-strong: #0b5f59;
   --color-primary-soft: #dff7f1;
-  --color-info: #2563eb;
-  --color-info-soft: #eaf1ff;
-  --color-success: #059669;
-  --color-success-soft: #ecfdf5;
-  --color-warning: #b7791f;
-  --color-warning-soft: #fff7df;
-  --color-danger: #e11d48;
+  --color-info: #2458a6;
+  --color-info-soft: #edf3ff;
+  --color-success: var(--color-primary);
+  --color-success-soft: var(--color-primary-soft);
+  --color-warning: #9a6700;
+  --color-warning-soft: #fff4d6;
+  --color-danger: #be123c;
   --color-danger-soft: #fff1f2;
-  --color-danger-border: #fecdd3;
+  --color-danger-border: #fda4af;
   --color-inverse: #ffffff;
   --color-code-bg: #0f172a;
   --color-code-text: #e2e8f0;
@@ -63,10 +63,16 @@
   --radius-md: 8px;
   --radius-lg: 10px;
   --radius-xl: 14px;
-  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.035);
   --shadow-md: 0 8px 18px rgba(15, 23, 42, 0.06);
   --shadow-lg: 0 24px 64px rgba(15, 23, 42, 0.18);
-  --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-card: 0 1px 1px rgba(15, 23, 42, 0.025);
+  --rule: #8896a2;
+  --signal: var(--color-primary);
+  --app-grain:
+    repeating-linear-gradient(0deg, rgba(15, 23, 42, 0.012) 0 1px, transparent 1px 5px),
+    repeating-linear-gradient(115deg, rgba(15, 23, 42, 0.006) 0 1px, transparent 1px 13px);
+  --app-grain-size: auto;
   --topbar-height: 72px;
   --sidebar-width: 256px;
   --z-topbar: 10;
@@ -74,7 +80,7 @@
   --z-modal: 50;
   --font-display: "Smiley Sans", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
   --font-ui: "Hanken Grotesk", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
-  --font-mono: "Geist Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --font-mono: "Geist Mono", "SFMono-Regular", Consolas, "Liberation Mono", "PingFang SC", "Microsoft YaHei", monospace;
 
   --bg: var(--color-bg);
   --surface: var(--color-surface);
@@ -104,15 +110,15 @@
   --color-text: #e7edf3;
   --color-muted: #a7b3bf;
   --color-subtle: #7f8b98;
-  --color-border: #263542;
-  --color-border-soft: #1c2a35;
+  --color-border: #344653;
+  --color-border-soft: #22313c;
   --color-primary: #2dd4bf;
   --color-primary-strong: #5eead4;
   --color-primary-soft: rgba(20, 184, 166, 0.16);
-  --color-info: #38bdf8;
-  --color-info-soft: rgba(14, 165, 233, 0.16);
-  --color-success: #34d399;
-  --color-success-soft: rgba(16, 185, 129, 0.16);
+  --color-info: #60a5fa;
+  --color-info-soft: rgba(37, 99, 235, 0.18);
+  --color-success: var(--color-primary);
+  --color-success-soft: var(--color-primary-soft);
   --color-warning: #fbbf24;
   --color-warning-soft: rgba(245, 158, 11, 0.16);
   --color-danger: #fb7185;
@@ -124,10 +130,13 @@
   --color-overlay: rgba(2, 6, 23, 0.68);
   --color-topbar: rgba(17, 24, 39, 0.94);
   --color-empty-overlay: rgba(17, 24, 39, 0.84);
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.22);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.16);
   --shadow-md: 0 12px 28px rgba(0, 0, 0, 0.28);
   --shadow-lg: 0 24px 64px rgba(0, 0, 0, 0.42);
-  --shadow-card: 0 16px 36px rgba(0, 0, 0, 0.28);
+  --shadow-card: 0 1px 1px rgba(0, 0, 0, 0.18);
+  --rule: #596b77;
+  --app-grain: radial-gradient(circle, rgba(94, 234, 212, 0.08) 0 0.55px, transparent 0.65px);
+  --app-grain-size: 12px 12px;
 }
 
 * {
@@ -145,7 +154,9 @@ body {
   display: flex;
   overflow: hidden;
   color: var(--text);
-  background: var(--bg);
+  background-color: var(--bg);
+  background-image: var(--app-grain);
+  background-size: var(--app-grain-size);
   font-family: var(--font-ui);
   letter-spacing: 0;
 }
@@ -232,8 +243,9 @@ button {
 }
 
 .brand-title {
+  font-family: var(--font-display);
   font-size: 18px;
-  font-weight: 800;
+  font-weight: 400;
   color: var(--accent);
   line-height: 1.1;
 }
@@ -338,7 +350,9 @@ button {
 .topbar h1 {
   margin: 0;
   color: var(--text);
+  font-family: var(--font-display);
   font-size: 22px;
+  font-weight: 400;
   line-height: 1.2;
 }
 
@@ -518,10 +532,10 @@ button {
 
 .overview-ledger-panel,
 .compact-metric-card {
-  border: 1px solid var(--border);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-lg);
   background: var(--surface);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-card);
 }
 
 .overview-ledger-panel {
@@ -858,7 +872,7 @@ button {
 .model-rank-fill {
   height: 100%;
   border-radius: inherit;
-  background: var(--color-primary);
+  background: var(--signal);
 }
 
 .kpi-grid {
@@ -871,10 +885,10 @@ button {
 .metric-card,
 .panel,
 .insight-panel {
-  border: 1px solid var(--border-soft);
+  border: 1px solid var(--rule);
   border-radius: var(--radius);
   background: var(--surface);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-card);
 }
 
 .metric-card {
@@ -960,7 +974,9 @@ button {
   border-radius: var(--radius);
   background: var(--color-empty-overlay);
   color: var(--muted);
+  font-family: var(--font-display);
   font-size: 14px;
+  font-weight: 400;
 }
 
 .empty-overlay.is-hidden {
@@ -1014,6 +1030,8 @@ tbody tr:hover {
 .table-state {
   height: 96px;
   color: var(--muted);
+  font-family: var(--font-display);
+  font-weight: 400;
   text-align: center;
 }
 
@@ -1077,7 +1095,7 @@ tbody tr:hover {
   height: 100%;
   width: 0;
   border-radius: inherit;
-  background: var(--accent);
+  background: var(--signal);
 }
 
 .progress-fill-warning {
@@ -1164,7 +1182,7 @@ tbody tr:hover {
   border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--surface);
-  box-shadow: var(--shadow);
+  box-shadow: none;
 }
 
 .audit-tab {
@@ -1264,7 +1282,7 @@ tbody tr:hover {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-lg);
 }
 
 .modal-actions {
