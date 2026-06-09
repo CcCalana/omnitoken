@@ -62,7 +62,7 @@ function createCredentialsView(api) {
 
   function renderRows(credentials) {
     if (!credentials.length) {
-      nodes.body.innerHTML = '<tr><td colspan="6" class="table-state">暂无上游凭据</td></tr>';
+      nodes.body.innerHTML = '<tr><td colspan="6" class="table-state table-state-illustrated empty-state-access">暂无上游凭据</td></tr>';
       return;
     }
     nodes.body.innerHTML = credentials.map((item) => {

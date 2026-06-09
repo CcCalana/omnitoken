@@ -1,5 +1,5 @@
 (function () {
-const { showAlert } = window.OmniTokenUtils;
+const { setAlert } = window.OmniTokenUtils;
 
 function createLoginView(api) {
   let isLoaded = false;
@@ -13,7 +13,7 @@ function createLoginView(api) {
       const password = document.getElementById("login-password").value;
 
       if (!email || !password) {
-        showAlert(alertContainer, "请输入邮箱和密码", "error");
+        setAlert(alertContainer, "error", "请输入邮箱和密码");
         return;
       }
 
@@ -40,7 +40,7 @@ function createLoginView(api) {
         // Reload app state to switch out of login view
         window.location.reload();
       } catch (err) {
-        showAlert(alertContainer, `登录失败: ${err.message}`, "error");
+        setAlert(alertContainer, "error", `登录失败: ${err.message}`);
       } finally {
         btn.textContent = originalText;
         btn.disabled = false;
@@ -50,7 +50,7 @@ function createLoginView(api) {
 
   async function load(force = false) {
     if (isLoaded && !force) return;
-    showAlert(alertContainer, "");
+    setAlert(alertContainer, "", "");
     isLoaded = true;
   }
 

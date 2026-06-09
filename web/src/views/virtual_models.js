@@ -48,7 +48,7 @@ function createVirtualModelsView(api) {
 
   function render(items) {
     if (!items.length) {
-      nodes.body.innerHTML = `<tr><td colspan="6" class="table-state">暂无映射记录</td></tr>`;
+      nodes.body.innerHTML = `<tr><td colspan="6" class="table-state table-state-illustrated empty-state-routing-audit">暂无映射记录</td></tr>`;
       return;
     }
 

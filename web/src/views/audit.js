@@ -91,7 +91,7 @@ function createAuditView(api) {
 
   function renderRows() {
     if (!logs.length) {
-      nodes.body.innerHTML = '<tr><td colspan="5" class="table-state">暂无审计日志</td></tr>';
+      nodes.body.innerHTML = '<tr><td colspan="5" class="table-state table-state-illustrated empty-state-routing-audit">暂无审计日志</td></tr>';
       return;
     }
 

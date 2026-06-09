@@ -54,7 +54,7 @@ function createUsersView(api, options = {}) {
   function renderRows() {
     syncRoleControls();
     if (!users.length) {
-      nodes.body.innerHTML = '<tr><td colspan="6" class="table-state">暂无用户用量数据</td></tr>';
+      nodes.body.innerHTML = '<tr><td colspan="6" class="table-state table-state-illustrated empty-state-access">暂无用户用量数据</td></tr>';
       return;
     }
 

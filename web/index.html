@@ -90,23 +90,28 @@
     </header>
 
     <section id="view-login" class="view">
-      <article class="panel" style="max-width: 400px; margin: 40px auto;">
-        <div class="panel-header">
-          <h2>管理员登录</h2>
+      <div class="login-layout">
+        <div class="login-hero" aria-hidden="true">
+          <div class="login-hero-art"></div>
         </div>
-        <div id="login-alert" class="alert is-hidden"></div>
-        <form id="login-form" style="display: flex; flex-direction: column; gap: 16px;">
-          <label>
-            <span>邮箱</span>
-            <input id="login-email" type="email" placeholder="admin@democorp.local" required style="width: 100%; margin-top: 4px;">
-          </label>
-          <label>
-            <span>密码</span>
-            <input id="login-password" type="password" required style="width: 100%; margin-top: 4px;">
-          </label>
-          <button type="submit" class="primary-button" style="margin-top: 8px;">登录</button>
-        </form>
-      </article>
+        <article class="panel login-panel">
+          <div class="panel-header">
+            <h2>管理员登录</h2>
+          </div>
+          <div id="login-alert" class="alert is-hidden"></div>
+          <form id="login-form" class="login-form">
+            <label>
+              <span>邮箱</span>
+              <input id="login-email" type="email" placeholder="admin@democorp.local" required>
+            </label>
+            <label>
+              <span>密码</span>
+              <input id="login-password" type="password" required>
+            </label>
+            <button type="submit" class="primary-button">登录</button>
+          </form>
+        </article>
+      </div>
     </section>
 
     <section id="view-overview" class="view is-active">
@@ -114,6 +119,7 @@
 
       <div class="overview-hero-grid">
         <article class="overview-ledger-panel">
+          <span class="overview-ledger-watermark" aria-hidden="true"></span>
           <div class="overview-panel-top">
             <div>
               <p class="section-label">本月账本</p>
@@ -177,7 +183,7 @@
           </div>
           <div class="chart-box">
             <canvas id="trend-chart"></canvas>
-            <div id="trend-empty" class="empty-overlay is-hidden">暂无数据</div>
+            <div id="trend-empty" class="empty-overlay empty-state empty-state-analytics is-hidden">暂无数据</div>
           </div>
         </article>
 
@@ -197,7 +203,7 @@
             </div>
             <div class="chart-box chart-box-compact">
               <canvas id="model-share-chart"></canvas>
-              <div id="model-share-empty" class="empty-overlay is-hidden">暂无数据</div>
+              <div id="model-share-empty" class="empty-overlay empty-state empty-state-analytics is-hidden">暂无数据</div>
             </div>
           </article>
         </aside>
@@ -260,7 +266,7 @@
         </div>
         <div class="chart-box chart-box-tall">
           <canvas id="models-bar-chart"></canvas>
-          <div id="models-empty" class="empty-overlay is-hidden">暂无数据</div>
+          <div id="models-empty" class="empty-overlay empty-state empty-state-analytics is-hidden">暂无数据</div>
         </div>
       </article>
 
@@ -528,7 +534,7 @@
             </div>
             <div class="chart-box audit-hourly-chart">
               <canvas id="audit-usage-hourly-chart"></canvas>
-              <div id="audit-usage-hourly-empty" class="empty-overlay is-hidden">暂无用量</div>
+              <div id="audit-usage-hourly-empty" class="empty-overlay empty-state empty-state-analytics is-hidden">暂无用量</div>
             </div>
           </article>
         </div>
