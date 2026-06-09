@@ -68,6 +68,7 @@
   --shadow-lg: 0 24px 64px rgba(15, 23, 42, 0.18);
   --shadow-card: 0 1px 1px rgba(15, 23, 42, 0.025);
   --rule: #8896a2;
+  --meter-tick: rgba(15, 23, 42, 0.10);
   --signal: var(--color-primary);
   --app-grain:
     repeating-linear-gradient(0deg, rgba(15, 23, 42, 0.012) 0 1px, transparent 1px 5px),
@@ -143,6 +144,7 @@
   --shadow-lg: 0 24px 64px rgba(0, 0, 0, 0.42);
   --shadow-card: 0 1px 1px rgba(0, 0, 0, 0.18);
   --rule: #596b77;
+  --meter-tick: rgba(231, 237, 243, 0.14);
   --app-grain: radial-gradient(circle, rgba(94, 234, 212, 0.08) 0 0.55px, transparent 0.65px);
   --app-grain-size: 12px 12px;
   --illustration-filter: brightness(1.1) saturate(0.88);
@@ -962,6 +964,7 @@ button {
 }
 
 .model-rank-track {
+  position: relative;
   height: 8px;
   overflow: hidden;
   border-radius: 999px;
@@ -1224,6 +1227,7 @@ tbody tr:hover {
 }
 
 .progress-track {
+  position: relative;
   width: 100%;
   min-width: 160px;
   height: 10px;
@@ -1245,6 +1249,28 @@ tbody tr:hover {
 
 .progress-fill-danger {
   background: var(--danger);
+}
+
+/* P2 — calibrated meter ticks: read bars as precision gauges */
+.model-rank-track::after,
+.progress-track::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background-image: repeating-linear-gradient(
+    90deg,
+    var(--meter-tick) 0 1px,
+    transparent 1px 10%
+  );
+}
+
+/* P2 — accounting alignment: numeric columns align right under tabular figures */
+#audit-usage-model-body td:nth-child(n + 2),
+#audit-usage-recent-body td:nth-child(4),
+#users-table-body td:nth-child(2) {
+  text-align: right;
 }
 
 .quota-open {
@@ -1488,6 +1514,9 @@ tbody tr:hover {
 .mono-cell {
   font-size: 12px;
   word-break: break-all;
+  -webkit-user-select: all;
+  user-select: all;
+  cursor: text;
 }
 
 .filter-grid input:focus {
