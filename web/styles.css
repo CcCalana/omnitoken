@@ -76,7 +76,7 @@
   --app-grain-size: auto;
   --topbar-height: 72px;
   --sidebar-width: 256px;
-  --content-max: 1600px;
+  --content-max: clamp(1280px, 90vw, 2400px);
   --z-topbar: 10;
   --z-toast: 40;
   --z-modal: 50;
@@ -1920,9 +1920,4 @@ tbody tr:hover {
   }
 }
 
-/* Ultra-wide (4K / 1440p+): widen the centered column so sides don't feel empty */
-@media (min-width: 1920px) {
-  :root {
-    --content-max: 1840px;
-  }
-}
+/* Ultra-wide widening now handled fluidly by --content-max: clamp() in :root */
